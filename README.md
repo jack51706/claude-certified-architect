@@ -22,7 +22,8 @@ This repository contains study materials for the **Claude Certified Architect â€
 - **Chinese guide**: [`guide_zh.md`](./guide_zh.md)
 - **Japanese guide**: [`guide_ja.md`](./guide_ja.md)
 - **Urdu guide**: [`guide_ur.md`](./guide_ur.md)
-- **Arabic guide**: [`guide_ur.md`](./guide_ar.MD)
+- **Arabic guide**: [`guide_ar.MD`](./guide_ar.MD)
+- **Hebrew guide**: [`guide_he.md`](./guide_he.md)
 
 ## PDF Version
 
