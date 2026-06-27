@@ -2051,6 +2051,18 @@ Anthropic 把兩種「代理式」系統清楚劃開:
 
 ---
 
+**範例(Python):**
+
+```python
+response = client.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=16000,
+    thinking={"type": "adaptive", "display": "summarized"},
+    output_config={"effort": "high"},   # low | medium | high | xhigh | max
+    messages=[{"role": "user", "content": "..."}],
+)
+```
+
 # 第 18 章:Prompt Caching(提示快取)
 
 > *參考 —— 考試只要求「知道它存在」;這裡給你實用知識。* 文件:[Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)。
@@ -2066,6 +2078,22 @@ Anthropic 把兩種「代理式」系統清楚劃開:
 
 ---
 
+**範例(Python):**
+
+```python
+response = client.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=1024,
+    system=[{
+        "type": "text",
+        "text": LARGE_STABLE_CONTEXT,
+        "cache_control": {"type": "ephemeral"},   # 快取到這裡為止的前綴
+    }],
+    messages=[{"role": "user", "content": question}],   # 易變部分放最後
+)
+print(response.usage.cache_read_input_tokens)  # > 0 表示命中快取
+```
+
 # 第 19 章:結構化輸出與 Strict Tool Use
 
 > *參考 —— 超出考綱(考試涵蓋 `tool_use` JSON 結構描述;這是正式功能)。* 文件:[Structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)。
@@ -2080,6 +2108,24 @@ Anthropic 把兩種「代理式」系統清楚劃開:
 **結構描述限制:** 不支援遞迴結構描述、數值(`minimum`/`maximum`)或字串長度限制,且 `additionalProperties` 必須為 `false`。**與 citations 不相容。** 新結構描述有一次性編譯成本,之後快取 24 小時。
 
 ---
+
+**範例(Python):**
+
+```python
+from pydantic import BaseModel
+
+class Invoice(BaseModel):
+    number: str
+    total: float
+
+msg = client.messages.parse(
+    model="claude-opus-4-8",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "擷取發票欄位:..."}],
+    output_format=Invoice,        # 回應被約束符合此結構描述
+)
+invoice = msg.parsed_output       # 已驗證的 Invoice 實例
+```
 
 # 第 20 章:伺服器端與進階工具
 
@@ -2173,6 +2219,22 @@ Anthropic 把兩種「代理式」系統清楚劃開:
 - **Webhooks** —— 以 HMAC 簽章的狀態變更通知,取代一直掛著串流。
 
 ---
+
+**範例(Python):**
+
+```python
+# 1) 只建立 agent 一次 —— 儲存 agent.id(不要每次執行都呼叫)
+agent = client.beta.agents.create(
+    name="Coding Assistant",
+    model="claude-opus-4-8",
+    tools=[{"type": "agent_toolset_20260401"}],
+)
+# 2) 每次執行:建立一個以 id 引用該 agent 的 session
+session = client.beta.sessions.create(
+    agent={"type": "agent", "id": agent.id, "version": agent.version},
+    environment_id=environment.id,
+)
+```
 
 # 第 25 章:MCP 深入
 

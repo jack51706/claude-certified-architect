@@ -2051,6 +2051,18 @@ Modern Claude models reason before answering. You control *how much* with two di
 
 ---
 
+**Example (Python):**
+
+```python
+response = client.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=16000,
+    thinking={"type": "adaptive", "display": "summarized"},
+    output_config={"effort": "high"},   # low | medium | high | xhigh | max
+    messages=[{"role": "user", "content": "..."}],
+)
+```
+
 # Chapter 18: Prompt Caching
 
 > *Reference — the exam only expects you to "know it exists"; here is the working knowledge.* Docs: [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
@@ -2066,6 +2078,22 @@ Caching reuses a stable prompt prefix across requests to cut cost (~90%) and lat
 
 ---
 
+**Example (Python):**
+
+```python
+response = client.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=1024,
+    system=[{
+        "type": "text",
+        "text": LARGE_STABLE_CONTEXT,
+        "cache_control": {"type": "ephemeral"},   # cache the prefix up to here
+    }],
+    messages=[{"role": "user", "content": question}],   # volatile part goes last
+)
+print(response.usage.cache_read_input_tokens)  # > 0 means a cache hit
+```
+
 # Chapter 19: Structured Outputs & Strict Tool Use
 
 > *Reference — beyond the exam scope (the exam covers `tool_use` JSON schemas; this is the formal feature).* Docs: [Structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).
@@ -2080,6 +2108,24 @@ Two features guarantee machine-readable output:
 **Schema limits:** no recursive schemas, no numeric (`minimum`/`maximum`) or string-length constraints, and `additionalProperties` must be `false`. **Incompatible with citations.** A new schema has a one-time compile cost, then caches for 24h.
 
 ---
+
+**Example (Python):**
+
+```python
+from pydantic import BaseModel
+
+class Invoice(BaseModel):
+    number: str
+    total: float
+
+msg = client.messages.parse(
+    model="claude-opus-4-8",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Extract the invoice fields: ..."}],
+    output_format=Invoice,        # response is constrained to this schema
+)
+invoice = msg.parsed_output       # a validated Invoice instance
+```
 
 # Chapter 20: Server-Side & Advanced Tools
 
@@ -2173,6 +2219,22 @@ The **Claude Agent SDK** (Python `claude-agent-sdk`, TypeScript `@anthropic-ai/c
 - **Webhooks** — HMAC-signed state-change notifications instead of holding a stream open.
 
 ---
+
+**Example (Python):**
+
+```python
+# 1) Create the agent ONCE — store agent.id (do NOT call this per run)
+agent = client.beta.agents.create(
+    name="Coding Assistant",
+    model="claude-opus-4-8",
+    tools=[{"type": "agent_toolset_20260401"}],
+)
+# 2) Every run: a session that references the agent by id
+session = client.beta.sessions.create(
+    agent={"type": "agent", "id": agent.id, "version": agent.version},
+    environment_id=environment.id,
+)
+```
 
 # Chapter 25: MCP In Depth
 
