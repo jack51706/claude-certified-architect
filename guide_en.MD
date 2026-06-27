@@ -72,8 +72,8 @@ The system extracts information from unstructured documents, validates output wi
 ### Scenario 7: Conversational AI Architecture Patterns
 You design multi-turn conversational systems covering context window management, instruction persistence across turns, memory strategies, tool design for safe execution, and handling ambiguous or conflicting user inputs.
 
-### Scenario 8: Agentic AI Tools *(content missing — help us fill it in!)*
-This scenario has been reported by exam candidates but is not yet covered in this guide. If you have encountered questions from this scenario on the real exam, please share them in [GitHub Issues](https://github.com/paullarionov/claude-certified-architect/issues) so we can add full coverage. Your contribution will help everyone preparing for the exam.
+### Scenario 8: Agentic AI Tools
+You design and govern the tools an autonomous agent relies on to act in the real world. The work spans tool design (when to expose a dedicated tool versus a general `bash` capability), writing tool descriptions and JSON schemas that disambiguate similar actions, controlling execution with `tool_choice` and parallel tool calls, and adding safety controls (idempotency, confirmation, and permission gating) for destructive or irreversible operations. You drive the agent loop via `stop_reason`, propagate tool errors with enough structure for the model to recover, and keep accumulated tool results from overwhelming the context window. The goal is an agent that selects the right tool, fails safely, and stays reliable across long multi-step tasks.
 
 ---
 
@@ -137,7 +137,7 @@ The Claude API follows a request–response model. Each request to the Claude Me
 ```
 
 **Key fields:**
-- `model` — model selection (`claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5`)
+- `model` — model selection (`claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5`)
 - `max_tokens` — maximum number of tokens in the response
 - `system` — the system prompt (defines model behavior)
 - `messages` — conversation history (**you must send the full history** to maintain coherence)
@@ -163,6 +163,8 @@ The Claude API response includes `stop_reason`, which indicates why the model st
 | `"tool_use"` | The model wants to call a tool | Execute the tool and return the result |
 | `"max_tokens"` | Token limit reached | The response is truncated; you may need to increase the limit |
 | `"stop_sequence"` | A stop sequence was encountered | Handle based on your application logic |
+| `"pause_turn"` | A long-running turn was paused (e.g. during server-side tool use) and can be resumed | Send the response back so the model continues where it left off |
+| `"refusal"` | The model declined to continue for safety reasons (Claude 4+) | Stop the loop and handle gracefully—do not blindly retry the same request |
 
 For agentic systems, `"tool_use"` and `"end_turn"` are the most important—they control the agent loop.
 
@@ -2119,7 +2121,7 @@ When Edit fails due to a non-unique text match:
 
 # Practice Test
 
-> 60 questions across 4 scenarios. Format and difficulty match the real exam.
+> 100 questions across 8 scenarios. Format and difficulty match the real exam.
 > 
 > Alternatively, you can practice these questions in an exam-like HTML file: [Practical Test (EN)](practical_test_en.html)
 
@@ -3040,6 +3042,10 @@ When Edit fails due to a non-unique text match:
 
 ---
 
+## Scenario: Conversational AI Architecture Patterns
+
+---
+
 ## Question 61 (Scenario: Conversational AI Architecture Patterns)
 
 **Situation:** Your `remove_team_member` tool uses a `dry_run: boolean` parameter for previewing impacts before execution. Production monitoring shows the agent bypasses the preview step by calling with `dry_run=false` directly. You need to ensure every removal is preceded by a preview that the user explicitly confirms.
@@ -3277,6 +3283,378 @@ When Edit fails due to a non-unique text match:
 - D) Limit the assistant to one clarifying question per turn.
 
 **Why A:** Proceeding with reasonable stated assumptions eliminates the back-and-forth entirely while keeping the user informed and in control. Predefined silent interpretations (C) leave users confused when the response doesn't match their intent. A single-question limit (D) still requires turns of back-and-forth. A smaller classification model (B) adds latency and infrastructure complexity without solving the core UX problem.
+
+---
+
+## Scenario: Developer Productivity Tools
+
+---
+
+## Question 77 (Scenario: Developer Productivity Tools)
+
+**Situation:** An engineer asks the agent to find every place a function `calculate_tax` is defined and called across a 2,000-file repository. The agent has Read, Write, Edit, Bash, Grep, and Glob available.
+
+**Which approach is most effective?**
+
+- A) Read every file in the repository sequentially and scan the contents for the function name.
+- B) Use Grep to search file contents for `calculate_tax`, narrowing file types with Glob if needed. **[CORRECT]**
+- C) Use Bash to run `find . | xargs cat` and look for the function in the combined output.
+- D) Ask the user to paste the relevant files into the conversation.
+
+**Why B:** Grep is purpose-built for content search across many files and returns just the matching lines with locations, keeping the context window small. Reading every file (A) wastes context and is slow; piping everything through Bash `cat` (C) dumps unstructured output and loses file/line attribution; asking the user to paste files (D) defeats the point of an automated tool with repository access.
+
+---
+
+## Question 78 (Scenario: Developer Productivity Tools)
+
+**Situation:** To map an unfamiliar codebase, the agent runs a broad discovery pass that lists hundreds of modules with descriptions. The raw output is enormous and starts crowding out the main conversation before the engineer's actual task begins.
+
+**What is the best way to handle the discovery output?**
+
+- A) Delegate discovery to an Explore subagent (or a `context: fork` skill) that returns a concise summary to the main session. **[CORRECT]**
+- B) Increase `max_tokens` so the full discovery output fits.
+- C) Truncate the discovery output to the first 50 modules and proceed.
+- D) Restart the session after discovery so the context is fresh.
+
+**Why A:** A subagent isolates the verbose discovery in a separate context and returns only a distilled summary, preserving the main context window for the real work. `max_tokens` (B) governs output length, not context pressure. Truncating (C) silently drops modules that may matter. Restarting (D) throws away the discovery you just paid for.
+
+---
+
+## Question 79 (Scenario: Developer Productivity Tools)
+
+**Situation:** Generated boilerplate keeps diverging from the team's conventions (import ordering, error-handling style, test layout). Different engineers get different output for the same request.
+
+**What is the most durable fix?**
+
+- A) Add the conventions to a CLAUDE.md so they load automatically for every request in the project. **[CORRECT]**
+- B) Ask each engineer to restate the conventions in their prompt each time.
+- C) Lower the temperature so output is more consistent.
+- D) Run a formatter after generation to reshape the code.
+
+**Why A:** CLAUDE.md is the project's persistent memory—conventions placed there apply to every session and every engineer automatically, fixing the root cause. Restating conventions per prompt (B) is error-prone and unscalable. Temperature (C) affects variability, not adherence to unstated rules. A formatter (D) catches formatting but not error-handling style or structural conventions.
+
+---
+
+## Question 80 (Scenario: Developer Productivity Tools)
+
+**Situation:** An engineer requests a refactor that will touch ~15 files and involves a non-trivial design decision (how to split a module). They want to review the approach before any code changes.
+
+**Which Claude Code capability fits best?**
+
+- A) Use planning mode to produce and confirm an approach before making edits. **[CORRECT]**
+- B) Start editing immediately and let the engineer review the diff afterward.
+- C) Use a single Bash command to apply all changes at once.
+- D) Generate the whole refactor in one message without tool calls.
+
+**Why A:** Planning mode separates design from execution, letting the engineer approve the approach for an ambiguous, multi-file change before any file is touched—exactly when up-front alignment pays off. Editing first (B) risks large rework if the approach is wrong. A bulk Bash apply (C) skips review entirely. One-shot generation (D) gives no checkpoint and no tool-verified edits.
+
+---
+
+## Question 81 (Scenario: Developer Productivity Tools)
+
+**Situation:** The agent tries to Edit a file but the operation is rejected because the file changed since it was last read in this session.
+
+**What is the correct response?**
+
+- A) Re-read the file to get current contents, then reapply the edit against the new state. **[CORRECT]**
+- B) Force the edit by switching to a Bash `sed` command.
+- C) Retry the identical Edit until it succeeds.
+- D) Overwrite the whole file with Write using the agent's last known version.
+
+**Why A:** The staleness guard fires because the on-disk content no longer matches what the agent last saw; re-reading restores an accurate basis for the edit. Forcing it through Bash `sed` (B) bypasses the safety check and can corrupt concurrent changes. Retrying the identical Edit (C) keeps failing for the same reason. Overwriting with a stale version via Write (D) discards whatever changed the file.
+
+---
+
+## Question 82 (Scenario: Developer Productivity Tools)
+
+**Situation:** The team wants the agent to look up and update tickets in an internal issue tracker that exposes a REST API. Engineers should not paste ticket data by hand, and API credentials must not be embedded in prompts.
+
+**What is the best integration approach?**
+
+- A) Expose the tracker through an MCP server so the agent gets structured tools with credentials handled outside the conversation. **[CORRECT]**
+- B) Have engineers copy ticket JSON into the chat whenever it's needed.
+- C) Put the API key in CLAUDE.md so the agent can `curl` the API via Bash.
+- D) Hardcode ticket contents into a skill file.
+
+**Why A:** An MCP server is the standard way to give an agent typed tools backed by a backend service, with authentication managed by the server rather than the prompt. Manual pasting (B) is unscalable and goes stale. Putting the key in CLAUDE.md (C) leaks a secret into a committed file. Hardcoding tickets in a skill (D) can't reflect live data.
+
+---
+
+## Question 83 (Scenario: Developer Productivity Tools)
+
+**Situation:** Every release, an engineer walks the agent through the same six steps (bump version, update changelog, run tests, tag, build notes, open PR). They want to invoke it as one repeatable action.
+
+**What should they create?**
+
+- A) A custom slash command (or skill) in `.claude/` that encodes the six-step workflow. **[CORRECT]**
+- B) A longer CLAUDE.md describing the steps in prose.
+- C) A saved chat transcript they re-read each release.
+- D) A Bash script that bypasses the agent entirely.
+
+**Why A:** A custom command/skill captures a repeatable, parameterizable workflow that the engineer invokes by name—purpose-built for exactly this. Describing it in CLAUDE.md (B) provides background context but isn't an invokable action. Re-reading a transcript (C) is manual and brittle. A pure Bash script (D) loses the agent's judgment for steps like changelog and PR text.
+
+---
+
+## Question 84 (Scenario: Developer Productivity Tools)
+
+**Situation:** The team wants a set of strict API-design rules to apply only when the agent works on files under `src/api/`, without polluting every other file's context.
+
+**Which mechanism fits?**
+
+- A) Add a rule file in `.claude/rules/` with a `paths` glob scoping it to `src/api/**`. **[CORRECT]**
+- B) Put the rules in the top-level CLAUDE.md so they always load.
+- C) Paste the rules into every prompt that touches the API.
+- D) Create a separate repository for API code.
+
+**Why A:** Path-scoped rule files load conditionally based on which files are in play, so the API rules apply under `src/api/` and nowhere else—keeping other contexts clean. Top-level CLAUDE.md (B) loads everywhere, the opposite of what's wanted. Per-prompt pasting (C) is manual and inconsistent. Splitting the repo (D) is a heavy structural change to solve a context-scoping problem.
+
+---
+
+## Scenario: Structured Data Extraction
+
+---
+
+## Question 85 (Scenario: Structured Data Extraction)
+
+**Situation:** A pipeline extracts fields from invoices, and downstream code needs reliably parseable, well-typed output. Free-text responses occasionally break the parser.
+
+**Which approach gives the most reliable structured output?**
+
+- A) Define the fields as a JSON schema and have the model return them via `tool_use`. **[CORRECT]**
+- B) Ask the model to "respond in JSON" in the system prompt and parse the text.
+- C) Parse the model's prose answer with regular expressions.
+- D) Lower `max_tokens` so the model stays terse.
+
+**Why A:** Driving extraction through a `tool_use` JSON schema constrains the output's shape and types, so downstream parsing is dependable. A prose "respond in JSON" instruction (B) is not enforced and drifts. Regex over prose (C) is brittle and breaks on any phrasing change. `max_tokens` (D) controls length, not structure.
+
+---
+
+## Question 86 (Scenario: Structured Data Extraction)
+
+**Situation:** Some invoices have no purchase-order number. The current schema marks `po_number` as required, so the model fabricates plausible-looking values to satisfy it.
+
+**What is the correct schema design?**
+
+- A) Make `po_number` optional/nullable so the model can return null when it's absent. **[CORRECT]**
+- B) Keep it required and accept the occasional invented value.
+- C) Remove `po_number` from the schema entirely.
+- D) Add an instruction saying "never guess" while keeping the field required.
+
+**Why A:** Marking the field nullable/optional gives the model a correct way to represent "not present," removing the pressure to fabricate. Keeping it required (B) guarantees hallucinated values. Removing the field (C) discards data when it does exist. A "never guess" instruction while the field is still required (D) conflicts with the schema and is unreliable—the structure should make the right answer expressible.
+
+---
+
+## Question 87 (Scenario: Structured Data Extraction)
+
+**Situation:** A `document_type` field usually falls into a known set (invoice, receipt, statement), but occasionally a document matches none of them.
+
+**How should the schema handle this best?**
+
+- A) Use an enum of known types plus an "other" value paired with a free-text detail field. **[CORRECT]**
+- B) Use a free-text string with no constraints.
+- C) Use an enum of only the three known types and force a choice.
+- D) Add a new enum value every time an unexpected type appears.
+
+**Why A:** An enum captures the common cases for clean downstream handling, while "other" + a detail field gives a correct, inspectable home for the long tail. A pure free-text string (B) loses the consistency an enum provides. A closed three-value enum (C) forces miscategorization of genuine outliers. Continuously expanding the enum (D) is reactive and unmaintainable.
+
+---
+
+## Question 88 (Scenario: Structured Data Extraction)
+
+**Situation:** Extracted output is schema-valid, but line-item amounts sometimes don't sum to the stated invoice total—an error the JSON schema cannot catch.
+
+**What is the most effective safeguard?**
+
+- A) Add semantic validation (e.g., Pydantic checks) and feed failures back to the model in a retry loop. **[CORRECT]**
+- B) Tighten the JSON schema with more field types.
+- C) Lower the temperature to reduce arithmetic mistakes.
+- D) Accept the output since it is schema-valid.
+
+**Why A:** Schema validation checks shape and types, not cross-field business rules; a semantic validator catches the sum mismatch, and a retry-with-feedback loop lets the model correct itself. More field types (B) still can't express "items must sum to total." Temperature (C) doesn't guarantee arithmetic consistency. Accepting schema-valid-but-wrong data (D) ships the error.
+
+---
+
+## Question 89 (Scenario: Structured Data Extraction)
+
+**Situation:** You must extract fields from 50,000 archived documents. The job is a one-time backfill with no latency requirement, and cost matters.
+
+**Which mechanism fits best?**
+
+- A) Submit the work through the Message Batches API. **[CORRECT]**
+- B) Send 50,000 individual synchronous requests as fast as possible.
+- C) Concatenate all documents into one request.
+- D) Process them interactively, one at a time, by hand.
+
+**Why A:** The Message Batches API is built for large, non-latency-sensitive volume and runs at roughly half the cost—ideal for a one-time backfill. Firing 50,000 synchronous requests (B) is costlier and pressures rate limits. Concatenating everything (C) blows past the context window and entangles documents. Manual processing (D) doesn't scale.
+
+---
+
+## Question 90 (Scenario: Structured Data Extraction)
+
+**Situation:** Downstream code requires that the model's tool input conform *exactly* to the schema—no missing required keys, no extra properties—every time.
+
+**Which option provides the strongest guarantee?**
+
+- A) Enable strict mode on the tool so inputs are validated against the schema at generation time. **[CORRECT]**
+- B) Add "follow the schema exactly" to the system prompt.
+- C) Validate after the fact and discard non-conforming results.
+- D) Provide a few-shot example of a correct payload.
+
+**Why A:** Strict tool use enforces the schema as the model generates the tool input, guaranteeing conformant payloads. A prompt instruction (B) is advisory, not guaranteed. Post-hoc discard (C) wastes calls and still needs a fallback. A few-shot example (D) nudges format but provides no guarantee.
+
+---
+
+## Question 91 (Scenario: Structured Data Extraction)
+
+**Situation:** A scanned contract is too degraded to determine the effective date with confidence, yet the schema lists `effective_date` as required.
+
+**What is the most responsible behavior?**
+
+- A) Return null (or a flag) for the field with low confidence so it can be routed for human review. **[CORRECT]**
+- B) Output the most plausible date to satisfy the required field.
+- C) Skip the document silently.
+- D) Halt the entire batch until a human intervenes.
+
+**Why A:** Surfacing "unknown" with low confidence lets a human resolve the genuinely ambiguous case without corrupting the dataset (which is also why the field should be nullable). Emitting a plausible guess (B) injects silent errors. Skipping silently (C) loses the record with no trace. Halting the whole batch (D) blocks thousands of good extractions for one bad scan.
+
+---
+
+## Question 92 (Scenario: Structured Data Extraction)
+
+**Situation:** Before trusting the pipeline, you need to know how accurate extraction is per field and set confidence thresholds for auto-accept vs. human review.
+
+**Which approach gives a trustworthy measure?**
+
+- A) Score per-field confidence and calibrate it against a labeled set, sampling documents in a stratified way across types. **[CORRECT]**
+- B) Use one overall confidence score for the whole document.
+- C) Trust the model's self-reported confidence without checking it.
+- D) Spot-check a handful of easy documents.
+
+**Why A:** Field-level scoring calibrated on labeled data shows where the pipeline is reliable, and stratified sampling ensures every document type is represented—so thresholds reflect real accuracy. A single document-level score (B) hides which fields fail. Uncalibrated self-reported confidence (C) may not match reality. Spot-checking easy cases (D) yields a biased, optimistic estimate.
+
+---
+
+## Scenario: Agentic AI Tools
+
+---
+
+## Question 93 (Scenario: Agentic AI Tools)
+
+**Situation:** An agent must be able to issue refunds. Refunds are irreversible and must be gated by a confirmation/permission step before they execute.
+
+**How should this capability be exposed?**
+
+- A) As a dedicated `process_refund` tool the harness can gate, validate, and require confirmation for. **[CORRECT]**
+- B) As a general `bash` capability the model composes (e.g., a `curl` to the refund endpoint).
+- C) By instructing the model in the system prompt to always ask before refunding.
+- D) By trusting the model to refund only when appropriate.
+
+**Why A:** A dedicated tool gives the harness a typed, interceptable hook where it can enforce confirmation and permissions before a destructive, irreversible action—control the prompt alone cannot guarantee. A generic `bash` capability (B) is an opaque command string the harness can't reliably gate. A system-prompt instruction (C) and pure trust (D) are not enforcement; the model can still act without the gate.
+
+---
+
+## Question 94 (Scenario: Agentic AI Tools)
+
+**Situation:** An agent frequently calls `get_customer` when it should call `lookup_order`. The two tools have terse, similar descriptions.
+
+**What should you try first?**
+
+- A) Rewrite the tool descriptions so each clearly states when to use it and how it differs from the other. **[CORRECT]**
+- B) Add a routing classifier model in front of the agent.
+- C) Remove one of the tools.
+- D) Force `tool_choice` to `lookup_order` for all requests.
+
+**Why A:** The model selects tools largely from their descriptions, so disambiguating the descriptions targets the root cause at the lowest cost. A separate classifier (B) adds latency and infrastructure for a problem solvable in text. Removing a tool (C) loses needed capability. Forcing `lookup_order` everywhere (D) breaks the legitimate cases that need `get_customer`.
+
+---
+
+## Question 95 (Scenario: Agentic AI Tools)
+
+**Situation:** You are writing the loop that decides when an agent's turn is complete after tool calls.
+
+**What is the correct termination signal?**
+
+- A) Continue while `stop_reason` is `tool_use`, and stop when it is `end_turn`. **[CORRECT]**
+- B) Stop after a fixed number of iterations regardless of state.
+- C) Parse the assistant's text for phrases like "I'm done."
+- D) Stop as soon as any tool returns a result.
+
+**Why A:** `stop_reason` is the API's explicit, reliable signal: `tool_use` means run the tool and continue; `end_turn` means the model is finished. A fixed iteration cap (B) either cuts off legitimate work or loops needlessly. Parsing text for "done" (C) is fragile and easily wrong. Stopping after the first tool result (D) ends multi-step tasks prematurely.
+
+---
+
+## Question 96 (Scenario: Agentic AI Tools)
+
+**Situation:** To answer a request, the agent needs three independent lookups (customer, order, inventory) that don't depend on one another's results.
+
+**What is the most efficient pattern?**
+
+- A) Issue the three tool calls in parallel in one turn and return all three results together in the next user message. **[CORRECT]**
+- B) Call them strictly one at a time across three turns.
+- C) Combine all three into a single overloaded tool.
+- D) Ask the user to choose which lookup matters most.
+
+**Why A:** Independent calls can run in parallel within one assistant turn, and returning all `tool_result` blocks together in a single user message is the supported pattern—minimizing round-trips. Sequential calls (B) waste turns for work with no dependencies. One overloaded tool (C) muddies responsibilities and schemas. Asking the user to pick (D) discards needed information.
+
+---
+
+## Question 97 (Scenario: Agentic AI Tools)
+
+**Situation:** A `get_account` tool returns 40+ fields, but the agent only ever needs five. Over a long session, the unused fields pile up and crowd the context window.
+
+**What is the best fix?**
+
+- A) Change the tool to return only the fields the agent needs. **[CORRECT]**
+- B) Increase the context window by switching to a larger model.
+- C) Tell the model to ignore the extra fields.
+- D) Summarize the whole conversation more often.
+
+**Why A:** Trimming the tool's output at the source removes the wasted tokens on every call—fixing the root cause. A bigger context window (B) just delays the same accumulation at higher cost. Telling the model to ignore fields (C) still pays to carry them in context. More frequent summarization (D) treats the symptom and risks dropping detail.
+
+---
+
+## Question 98 (Scenario: Agentic AI Tools)
+
+**Situation:** A tool wraps a flaky external API. Sometimes it times out (worth a retry); sometimes it returns a permanent "not found" (not worth retrying). Right now every failure looks identical to the model.
+
+**How should tool errors be propagated?**
+
+- A) Return structured errors with a category and a retryable flag so the model retries transient failures and escalates permanent ones. **[CORRECT]**
+- B) Return a generic "error" string for every failure.
+- C) Silently return empty results on any failure.
+- D) Discard the tool call and end the turn.
+
+**Why A:** Distinguishing transient from permanent failures—via a category and a retryable flag—lets the model make the right recovery decision per case. A generic error (B) erases that distinction. Silent empties (C) hide failures and mislead the model into thinking the call succeeded. Ending the turn (D) abandons recoverable work.
+
+---
+
+## Question 99 (Scenario: Agentic AI Tools)
+
+**Situation:** For a specific workflow step, the agent must call the `validate_address` tool before proceeding—skipping it is not acceptable.
+
+**Which mechanism enforces this?**
+
+- A) Set `tool_choice` to force the `validate_address` tool for that request. **[CORRECT]**
+- B) Add "always validate the address" to the system prompt and hope it complies.
+- C) Lower the temperature so the model is more obedient.
+- D) Remove every other tool for the whole session.
+
+**Why A:** `tool_choice` can require a specific tool, guaranteeing the call happens for that step. A prompt instruction (B) is not a guarantee. Temperature (C) doesn't control tool selection. Removing all other tools for the entire session (D) is a blunt, over-broad change that breaks every other step.
+
+---
+
+## Question 100 (Scenario: Agentic AI Tools)
+
+**Situation:** A support agent reaches a case with no matching policy and has already failed to make progress after several attempts.
+
+**What is the correct behavior?**
+
+- A) Invoke `escalate_to_human` with the gathered context so a person can take over. **[CORRECT]**
+- B) Keep retrying the same tools until something works.
+- C) Make a best-guess decision and act on it.
+- D) End the conversation without resolution or handoff.
+
+**Why A:** Escalation with accumulated context is the designed path when the agent faces a policy gap or can't make progress—handing a person the work already done. Endless retries (B) waste resources and frustrate the user. Acting on a guess (C) risks a wrong, possibly irreversible decision. Ending with no handoff (D) abandons the user.
 
 ---
 

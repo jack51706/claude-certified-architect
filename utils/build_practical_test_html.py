@@ -19,9 +19,12 @@ LANG_TITLES = {
 
 def get_questions(lang):
     result = subprocess.run(
-        ["python3", "extract_question.py", lang, "all"],
-        capture_output=True, text=True, cwd=ROOT_DIR
+        [sys.executable, os.path.join(ROOT_DIR, "extract_question.py"), lang, "all"],
+        capture_output=True, text=True, encoding="utf-8", cwd=ROOT_DIR
     )
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr)
+        raise SystemExit(f"extract_question.py failed for lang '{lang}'")
     return json.loads(result.stdout)
 
 BUILD_LANGS = sys.argv[1:] if len(sys.argv) > 1 else list(LANG_TITLES.keys())
