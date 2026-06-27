@@ -3,6 +3,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import svelte from '@astrojs/svelte';
 import mdx from '@astrojs/mdx';
+import mermaid from 'astro-mermaid';
 
 // Deploy-time overrides (set by the GitHub Pages workflow). Local dev uses '/'.
 const SITE = process.env.SITE_URL || 'https://example.github.io';
@@ -12,6 +13,10 @@ export default defineConfig({
   site: SITE,
   base: BASE,
   integrations: [
+    // astro-mermaid must come BEFORE starlight so it transforms mermaid code
+    // fences into client-rendered SVG before Starlight/Expressive Code treat
+    // them as syntax-highlighted code blocks.
+    mermaid({ theme: 'default', autoTheme: true }),
     starlight({
       title: 'Claude Architect Academy',
       defaultLocale: 'root',
