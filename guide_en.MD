@@ -4147,3 +4147,225 @@ The following adjacent topics will **NOT** be on the exam:
 7. **Understand escalation and human-in-the-loop** — when to escalate (policy gaps, explicit user request, inability to make progress) and confidence-based routing workflows.
 
 8. **Take a practice exam** before the real one. It uses the same scenarios and format.
+
+
+# Appendix: The Complete Claude Application Map (2026)
+
+> A panoramic reference to everything Claude can do and how it is used across the internet, current as of 2026. This appendix is **beyond the exam scope** — it exists to give you a complete mental model of the Claude platform that the certification sits inside. Pricing and model IDs change; always confirm against the official docs linked at the end.
+
+---
+
+## 1. The Claude Model Family
+
+All current models share a 1M-token context window except Haiku. Prices are USD per **million tokens (MTok)**, standard tier; batch is 50% off and prompt-cache reads are ~0.1×.
+
+| Model | Model ID | Context | Max output | Input $/MTok | Output $/MTok | Positioning |
+|---|---|---|---|---|---|---|
+| Claude Fable 5 | `claude-fable-5` | 1M | 128K | $10 | $50 | Most capable widely-released model; hardest reasoning + long-horizon agentic work. Thinking always on; safety classifiers may refuse. |
+| Claude Mythos 5 | `claude-mythos-5` | 1M | 128K | $10 | $50 | Same as Fable 5; available **only** via Project Glasswing (security/defensive research program). |
+| Claude Opus 4.8 | `claude-opus-4-8` | 1M | 128K | $5 | $25 | Flagship Opus — default for most demanding work; state-of-the-art autonomous agents, knowledge work, memory. |
+| Claude Opus 4.7 | `claude-opus-4-7` | 1M | 128K | $5 | $25 | Previous-gen Opus; strong agentic + vision + memory. |
+| Claude Opus 4.6 | `claude-opus-4-6` | 1M | 128K | $5 | $25 | Older Opus; adaptive thinking, 128K output. |
+| Claude Sonnet 4.6 | `claude-sonnet-4-6` | 1M | 128K | $3 | $15 | Best speed/intelligence balance for high-volume production. |
+| Claude Haiku 4.5 | `claude-haiku-4-5` | 200K | 64K | $1 | $5 | Fastest, cheapest; simple/latency-sensitive tasks and cheap subagents. |
+
+- **Use exact IDs, never date-suffixed variants** (e.g. `claude-opus-4-8`, not `claude-opus-4-8-20xxxxxx`). Source: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview), [Pricing](https://platform.claude.com/docs/en/pricing).
+- **Live discovery:** the Models API returns context window (`max_input_tokens`), output cap (`max_tokens`), and a `capabilities` tree per model — `GET /v1/models/{id}`.
+- **Thinking & effort differ by tier:** Fable 5 / Opus 4.8 / 4.7 reject `budget_tokens` — use `thinking: {type:"adaptive"}` + `output_config.effort` (`low`→`max`, plus `xhigh` on 4.7/4.8). Legacy models still use `budget_tokens`.
+
+---
+
+## 2. Ways to Use Claude
+
+### 2a. The Claude apps (web · desktop · mobile)
+
+The consumer/prosumer product at [claude.ai](https://claude.ai) (plus native macOS/Windows desktop and iOS/Android apps). Key features:
+
+| Feature | What it does |
+|---|---|
+| **Projects** | Persistent workspaces with shared knowledge, custom instructions, and chat history scoped to a body of work. |
+| **Artifacts** | Live side-panel for generated content (code, docs, diagrams, **runnable mini-apps/React**) that can be iterated on and shared/published. |
+| **Files** | Upload PDFs, spreadsheets, images, code; Claude reads and analyzes them in-conversation. |
+| **Memory** | Claude remembers context and preferences across conversations (per-project memory). |
+| **Web Search** | Live web results with citations, surfaced inline in answers. |
+| **Connectors** | MCP-based integrations to external apps/data (Google Drive, GitHub, Notion, Box, Slack, and the broader [Connectors directory](https://claude.com/connectors)). |
+| **Skills** | On-demand task expertise (e.g. xlsx/pptx/docx/pdf authoring) loaded when relevant. |
+| **Code execution / Analysis** | Sandboxed Python for data analysis, chart generation, file creation. |
+
+Editions: Free, Pro, Max, **Team**, and **Enterprise** (SSO, audit, expanded context, admin controls). Vertical offerings: **[Claude for Education](https://www.anthropic.com/news/introducing-claude-for-education)** (Socratic "Learning mode", Canvas LMS), **[Claude for Life Sciences](https://www.anthropic.com/news/claude-for-life-sciences)** (Benchling/PubMed/10x connectors).
+
+### 2b. Claude in the browser
+
+The **Claude extension for Chrome** lets Claude see and act inside the browser tab — read pages, fill forms, click, and complete multi-step web tasks as an agent (a research-preview "agentic browsing" capability, rolling out to higher tiers). It is the consumer-facing relative of the API's **computer use** tool. See [anthropic.com/claude-in-chrome](https://www.anthropic.com/news/claude-for-chrome).
+
+### 2c. Claude Code
+
+Anthropic's agentic coding tool — runs in the terminal, IDEs, and the cloud; natively powered by Claude. [Repo](https://github.com/anthropics/claude-code) · [Docs](https://code.claude.com/docs).
+
+**Surfaces**
+- **Terminal CLI** (`claude`) — the primary surface.
+- **IDE extensions** — VS Code, JetBrains; plus third-party hosting via ACP (Zed, JetBrains) and Agent HQ (VS Code).
+- **Cloud / async agents** and the **GitHub action** for CI and background tasks.
+- **Web/mobile** session surfaces for kicking off and reviewing runs.
+
+**Key feature groups**
+| Group | Highlights |
+|---|---|
+| **Project memory** | `CLAUDE.md` hierarchy, `@path` imports, `.claude/rules/`. |
+| **Extensibility** | Custom **slash commands**, **Skills** (`.claude/skills/`), **subagents**, **hooks** (PreToolUse/PostToolUse, etc.), **plugins**. |
+| **Tools** | Built-ins: Read, Write, Edit, Bash, Grep, Glob, WebFetch/WebSearch; plus **MCP servers** and **connectors**. |
+| **Workflow** | Planning mode, `/compact`, `/memory`, `/goal`, session fork/resume, permission gating, todo tracking. |
+| **Config** | `settings.json` (permissions, env, hooks), effort/model selection, MCP config. |
+
+### 2d. Developer Platform / API
+
+Everything runs through one endpoint: **`POST /v1/messages`**. Tools and output constraints are features of this one endpoint, not separate APIs. [Platform docs](https://platform.claude.com/docs) · [Console](https://console.anthropic.com).
+
+- **SDKs:** Python, TypeScript, Java, Go, Ruby, C#, PHP (+ `ant` CLI). Supporting endpoints: **Batches**, **Files**, **Token Counting**, **Models**, **Skills**.
+- **Surfaces by tier:** single LLM call → workflow (API + tool use) → custom agent (your loop) → **Managed Agents** (Anthropic runs the loop + hosts the sandbox). See §4.
+
+### 2e. Cloud providers (parity notes)
+
+| Provider | Model IDs | Notes |
+|---|---|---|
+| **[Claude Platform on AWS](https://docs.aws.amazon.com/claude-platform/latest/userguide/welcome.html)** | bare (`claude-opus-4-8`) | Anthropic-operated; **same-day first-party parity**, AWS IAM + Marketplace billing, SigV4. |
+| **[Amazon Bedrock](https://aws.amazon.com/bedrock/anthropic/)** | `anthropic.`-prefixed | AWS-operated; feature subset; FedRAMP High / DoD IL4-5. No batches, web fetch, code execution, Managed Agents, Files API. |
+| **[Google Vertex AI](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude)** | bare ID (`@`-versioned snapshots) | GCP IAM/billing. Web search basic-only; no web fetch/code execution/batches/Files/Managed Agents. |
+| **[Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/how-to/use-foundry-models-claude)** | bare | Most features in **beta**; usable as Foundry Agent Service reasoning core with MCP. |
+
+> **Parity rule of thumb:** First-party API and Claude Platform on AWS are full-surface. Bedrock/Vertex are model-inference + tool-use (build agents with your own loop). Foundry mirrors much of the surface in beta. The single source of truth is the [platform availability table](https://platform.claude.com/docs).
+
+---
+
+## 3. Core Capabilities
+
+| Capability | Summary | Docs |
+|---|---|---|
+| **Long context (1M)** | Up to 1M input tokens (200K on Haiku) at standard pricing — whole codebases, long document sets, multi-agent transcripts. | [context-windows](https://platform.claude.com/docs/en/build-with-claude/context-windows) |
+| **Vision & PDF** | Images (base64/URL/file) and PDFs (32MB/≤600 pages) natively; high-resolution vision (to 2576px long edge) on Opus 4.7+. | [vision](https://platform.claude.com/docs/en/build-with-claude/vision) · [pdf](https://platform.claude.com/docs/en/build-with-claude/pdf-support) |
+| **Adaptive thinking + effort** | `thinking:{type:"adaptive"}` lets Claude decide depth and interleave thinking with tool calls; `output_config.effort` (`low`→`max`, `xhigh`) trades quality vs cost. | [adaptive-thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) · [effort](https://platform.claude.com/docs/en/build-with-claude/effort) |
+| **Tool use** | User-defined tools (JSON schema), `tool_choice`, parallel calls, strict mode, the SDK **tool runner**, and programmatic tool calling (Claude calls tools from inside code execution). | [tool-use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview) |
+| **Server tools** | Anthropic-hosted, no client loop: **web search** / **web fetch** (`_20260209`, with dynamic filtering), **code execution**, **tool search** (BM25/regex), **advisor**. | [code-execution](https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool) |
+| **Structured outputs** | `output_config.format` (JSON schema) and `strict:true` tools guarantee parseable output; `messages.parse()` validates automatically. | [structured-outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs) |
+| **Prompt caching** | Prefix-match cache; reads ~0.1×, writes 1.25× (5m) / 2× (1h). Auto or manual breakpoints (max 4). Pre-warm with `max_tokens:0`. | [prompt-caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) |
+| **Batches** | Async at **50% cost**; up to 100K requests/batch; results within ~1h (max 24h). Key by `custom_id` (unordered). | [batch-processing](https://platform.claude.com/docs/en/build-with-claude/batch-processing) |
+| **Citations** | Per-document `citations:{enabled:true}` yields cited spans with char/page locations (incompatible with structured outputs). | [citations](https://platform.claude.com/docs/en/build-with-claude/citations) |
+| **Skills** | Folder-based (`SKILL.md`) task expertise with progressive disclosure; pre-built (xlsx/docx/pptx/pdf) + custom via Skills API. | [skills](https://platform.claude.com/docs/en/agents-and-tools/skills) |
+| **Context management** | **Compaction** (summarize near limit) and **context editing** (clear stale tool results/thinking) for long runs. | [compaction](https://platform.claude.com/docs/en/build-with-claude/compaction) |
+| **Memory tool** | `memory_20250818` — Claude reads/writes a `/memories` directory persisting across sessions (you own the backend). | [memory-tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool) |
+
+---
+
+## 4. Building Agents
+
+Three ways to build, in increasing hand-off to Anthropic:
+
+### Custom agents (Claude API + tool use)
+You host the compute and run the loop (or use the SDK **tool runner**). Maximum flexibility; right when you need your own runtime, approval gates, or custom logging. See [agent-design](https://platform.claude.com/docs/en/agents-and-tools).
+
+### Managed Agents (Anthropic runs the loop + hosts the sandbox)
+Server-managed stateful agents. **Mandatory flow: Agent (once) → Session (every run).** [Managed Agents docs](https://platform.claude.com/docs/en/managed-agents/overview).
+
+| Concept | Role |
+|---|---|
+| **Agent** (`/v1/agents`) | Persisted, **versioned** config: model, system prompt, tools, MCP servers, skills. Create once, reference by ID. |
+| **Session** (`/v1/sessions`) | A stateful run referencing an agent + environment; produces an SSE **event stream**. |
+| **Environment** (`/v1/environments`) | Template for the **container** (cloud or self-hosted, networking policy). |
+| **Container** | Isolated workspace where tools execute (bash, file ops, code). The loop runs on Anthropic's orchestration layer. |
+
+Extras: **vaults** (MCP/secret credentials, substituted at egress), **memory stores** (cross-session persistence), **outcomes** (rubric-graded iterate→grade loop), **multiagent** coordinator/threads, **scheduled deployments** (cron), **webhooks**.
+
+### Agent SDK
+The **[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview)** (Python + TypeScript; formerly the Claude Code SDK) exposes the same agent loop, tool execution, context management, subagents, hooks, and Skills system that power Claude Code — for building your own autonomous Claude agents.
+
+### MCP — the Model Context Protocol
+Open standard for connecting models to tools/data. [modelcontextprotocol.io](https://modelcontextprotocol.io).
+
+| Form | What it is |
+|---|---|
+| **Connectors** | Vetted, OAuth-based MCP integrations in the Claude apps ([directory](https://claude.com/connectors)). |
+| **MCP servers** | Programs exposing tools/resources/prompts (local stdio or remote Streamable-HTTP). |
+| **MCP connector (API)** | `mcp_servers` + `mcp_toolset` let the Messages API call a remote server directly (beta). |
+| **Tunnels / remote** | Hosted remote servers (e.g. `mcp.stripe.com`, `mcp.linear.app`) reachable over HTTP with OAuth. |
+
+---
+
+## 5. The Claude Ecosystem Across the Internet
+
+### 5a. Third-party coding tools
+
+| Tool | Category | Claude usage |
+|---|---|---|
+| [Cursor](https://docs.cursor.com/models) | AI code editor | Sonnet/Opus selectable for agent chat, edits, completion. |
+| [Windsurf](https://windsurf.com/changelog) | Agentic IDE | Cascade agent runs Sonnet/Opus (BYO key). |
+| [GitHub Copilot](https://docs.github.com/copilot) | IDE assistant | Claude Sonnet/Opus in the model picker. |
+| [VS Code (Agent HQ)](https://code.visualstudio.com/docs/copilot/agents/third-party-agents) | Editor | Hosts the official Claude Agent SDK harness. |
+| [Zed](https://zed.dev/blog/claude-code-via-acp) · [JetBrains](https://blog.jetbrains.com/ai/2025/09/introducing-claude-agent-in-jetbrains-ides/) | Editors/IDEs | Native Claude + Claude Code via Agent Client Protocol (ACP). |
+| [Cline](https://docs.cline.bot) · [Roo Code](https://github.com/RooCodeInc/Roo-Code) · [Kilo Code](https://kilo.ai/docs/ai-providers/anthropic) | OSS VS Code agents | Autonomous multi-file editing on your Anthropic key. |
+| [Sourcegraph Cody](https://sourcegraph.com/changelog/claude-4-models-available-in-cody) · [Continue](https://docs.continue.dev) · [Tabnine](https://www.tabnine.com/blog/claude-3-7-is-now-available-in-tabnine/) · [Augment](https://www.augmentcode.com/changelog/claude-sonnet-4-5-is-now-available-as-the-default-model-in-augment-code) | Codebase-aware assistants | Claude as selectable/default LLM. |
+| [Aider](https://aider.chat/docs/llms/anthropic.html) · [Warp](https://docs.warp.dev/agent-platform/cli-agents/claude-code) | Terminal | CLI pair-programming / hosts Claude Code. |
+| [Replit](https://claude.com/customers/replit) · [Bolt.new](https://bolt.new/blog/we-ve-partnered-with-anthropic-to-bring-claude-sonnet-4-to-all-bolt-users) · [Devin](https://claude.com/customers/cognition) | App builders / autonomous SWE | Full-app generation and long-horizon PRs on Claude. |
+
+### 5b. Other apps using Claude
+
+- **Productivity:** [Notion](https://claude.com/customers/notion), [Slack](https://slack.com/marketplace/A08SF47R6P4-claude), [Raycast](https://www.raycast.com/core-features/ai/models), [Asana](https://claude.com/customers/asana), [Box](https://www.techbuzz.ai/articles/anthropic-brings-interactive-workplace-apps-to-claude).
+- **Search / answer engines:** [Perplexity](https://www.perplexity.ai/help-center/en/articles/10354919), [Quora Poe](https://poe.com/anthropic), [DuckDuckGo Duck.ai](https://duckduckgo.com/duckduckgo-help-pages/duckai/chat-models).
+- **Browsers:** [Brave Leo](https://support.brave.app/hc/en-us/articles/26727364100493), Perplexity Comet.
+- **Design / content:** [Canva](https://www.canva.com/newsroom/news/canva-claude-design/).
+- **Customer support:** [Intercom Fin](https://www.intercom.com/blog/fin-2-powered-by-anthropic-claude-llm/), [Zendesk](https://support.zendesk.com/hc/en-us/articles/10630133525018).
+- **Data / voice:** [Snowflake Cortex](https://www.snowflake.com/en/news/press-releases/snowflake-and-anthropic-announce-200-million-partnership-to-bring-agentic-ai-to-global-enterprises/), [Amazon Alexa+](https://www.anthropic.com/news/claude-and-alexa-plus).
+
+### 5c. The MCP server ecosystem
+
+- **Registries/directories:** [Official MCP Registry](https://registry.modelcontextprotocol.io/), [reference servers monorepo](https://github.com/modelcontextprotocol/servers), [GitHub MCP Registry](https://github.com/mcp), [Anthropic Connectors](https://claude.com/connectors), community [awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers).
+- **Reference servers** (active): Filesystem, Git, Fetch, Memory, Sequential Thinking, Time, Everything.
+- **Official third-party:** [GitHub](https://github.com/github/github-mcp-server), [Stripe](https://github.com/stripe/agent-toolkit), [Cloudflare](https://github.com/cloudflare/mcp-server-cloudflare), [Sentry](https://github.com/getsentry/sentry-mcp), [Playwright (Microsoft)](https://github.com/microsoft/playwright-mcp), [Notion](https://github.com/makenotion/notion-mcp-server), [Atlassian](https://github.com/atlassian/atlassian-mcp-server), [Linear](https://linear.app/docs/mcp), [Postgres MCP Pro](https://github.com/crystaldba/postgres-mcp).
+- **Archived references** (superseded): Slack, Google Drive, PostgreSQL (read-only), Puppeteer (→ Playwright), GitLab, SQLite.
+
+### 5d. Agent frameworks
+
+| Framework | Language | Claude integration |
+|---|---|---|
+| [LangChain](https://docs.langchain.com/oss/python/integrations/chat/anthropic) | Py/TS | `ChatAnthropic` — tools, streaming, adaptive thinking, caching, built-in tools. |
+| [LlamaIndex](https://docs.llamaindex.ai/en/stable/examples/llm/anthropic/) | Py | RAG/agents, structured output, citations, token counting. |
+| [CrewAI](https://github.com/crewAIInc/crewAI) · [AutoGen](https://microsoft.github.io/autogen/stable//reference/python/autogen_ext.models.anthropic.html) · [AG2](https://docs.ag2.ai/latest/docs/user-guide/models/anthropic/) | Py | Multi-agent orchestration on Claude. |
+| [Pydantic AI](https://ai.pydantic.dev/models/anthropic/) | Py | Typed agents; built-in web search, thinking, MCP. |
+| [Vercel AI SDK](https://www.npmjs.com/package/@ai-sdk/anthropic) · [Mastra](https://mastra.ai/models/providers/anthropic) | TS | Unified interface + Agent abstraction; Mastra wraps the Agent SDK. |
+| [Strands](https://aws.amazon.com/blogs/opensource/introducing-strands-agents-an-open-source-ai-agents-sdk/) · [Google ADK](https://google.github.io/adk-docs/agents/models/anthropic/) | Py/TS/Java/Go | Model-driven SDKs with Claude (direct + Bedrock/Vertex). |
+| **[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview)** | Py/TS | Official — the Claude Code engine as a library. |
+
+### 5e. Industry use cases
+
+**Software engineering:** [Cursor](https://www.anthropic.com/news/claude-4), [Sourcegraph](https://claude.com/customers/sourcegraph), [Replit](https://www.anthropic.com/news/claude-4) — agentic coding on Claude.
+
+**Cybersecurity** (its own subsection given the security-architect audience):
+
+| Org | Use |
+|---|---|
+| [eSentire](https://aws.amazon.com/solutions/case-studies/esentire-anthropic/) | SOC threat investigation on Claude (Bedrock) — ~95% senior-analyst alignment across 1,000 investigations; days→minutes. |
+| [Anthropic Threat Intel](https://www.anthropic.com/news/disrupting-AI-espionage) | Detected/disrupted the first reported AI-orchestrated cyber-espionage campaign (GTG-1002). |
+| [Project Glasswing](https://www.anthropic.com/news/claude-code-security) (CrowdStrike, AWS, Google, Microsoft, NVIDIA) | Defensive AI scanner reasoning over code to find and patch vulnerabilities; hardens critical codebases. |
+| HackerOne | Hai agents on Sonnet 4.5 — vuln-intake time −44%, accuracy +25%. |
+| [Snyk](https://snyk.io/articles/anthropic-launches-claude-code-security/) | Claude in its AI Security Platform across code, deps, containers, AI artifacts. |
+
+> **Note:** Claude's safety classifiers (notably on Fable 5) target offensive cyber and bio content and may **refuse** requests. Legitimate defensive security work can trip false positives — architects should plan refusal handling (server-side `fallbacks` / fallback credit to Opus 4.8) and run security tooling on Opus-tier models.
+
+**Other verticals:** Legal — [Harvey](https://claude.com/customers/harvey), [Robin AI](https://www.anthropic.com/news/claude-4). Healthcare/Life-sciences — [Commure](https://www.anthropic.com/news/healthcare-life-sciences), [Banner Health](https://www.anthropic.com/news/healthcare-life-sciences), [Sanofi](https://www.anthropic.com/news/claude-for-life-sciences). Finance — [NBIM](https://claude.com/customers/nbim), [Bridgewater](https://www.anthropic.com/news/claude-4). Customer service — [Intercom](https://claude.com/customers/intercom). Education — [Claude for Education](https://www.anthropic.com/news/introducing-claude-for-education). Content — [Canva](https://claude.com/customers/canva).
+
+---
+
+## 6. Official Documentation & Where to Go Deeper
+
+| Topic | Link |
+|---|---|
+| Platform docs (API, build-with-claude, agents-and-tools) | https://platform.claude.com/docs |
+| Models overview & pricing | https://platform.claude.com/docs/en/about-claude/models/overview · https://platform.claude.com/docs/en/pricing |
+| Claude Code | https://code.claude.com/docs · https://github.com/anthropics/claude-code |
+| Claude Agent SDK | https://code.claude.com/docs/en/agent-sdk/overview |
+| Managed Agents | https://platform.claude.com/docs/en/managed-agents/overview |
+| Model Context Protocol | https://modelcontextprotocol.io · https://registry.modelcontextprotocol.io |
+| Connectors directory | https://claude.com/connectors |
+| Console (keys, usage, workspaces) | https://console.anthropic.com |
+| Customer stories | https://claude.com/customers |
+| News & research | https://www.anthropic.com/news |
+| Status | https://status.anthropic.com |

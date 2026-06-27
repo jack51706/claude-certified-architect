@@ -6,11 +6,11 @@ hero:
   tagline: Master Claude Code, the Agent SDK, MCP, and the Claude API — then pass the certification.
   actions:
     - text: Start studying
-      link: /guides/introduction/
+      link: guides/introduction/
       icon: right-arrow
       variant: primary
     - text: Practice questions
-      link: /practice/
+      link: practice/
       icon: open-book
 ---
 

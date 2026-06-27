@@ -6,11 +6,11 @@ hero:
   tagline: 精通 Claude Code、Agent SDK、MCP 與 Claude API,然後考取認證。
   actions:
     - text: 開始學習
-      link: /zh-tw/guides/introduction/
+      link: guides/introduction/
       icon: right-arrow
       variant: primary
     - text: 練習題庫
-      link: /zh-tw/practice/
+      link: practice/
       icon: open-book
 ---
 
