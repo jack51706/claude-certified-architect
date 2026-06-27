@@ -1,0 +1,11 @@
+---
+title: 字卡
+description: 針對重要術語的間隔複習字卡 —— 中英雙語,儲存在這個瀏覽器。
+---
+
+import Flashcards from '@/components/Flashcards.svelte';
+import terms from '@/data/glossary.json';
+
+點一下卡片翻面,再依你的熟悉度評分。覺得難的卡片會更快再出現,容易的則隔較久再複習。你的排程會存在這個瀏覽器。
+
+<Flashcards cards={terms} lang="zh-tw" client:load />

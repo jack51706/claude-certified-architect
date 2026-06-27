@@ -1,0 +1,11 @@
+---
+title: Question bank
+description: 100 interactive practice questions across all 8 exam scenarios — bilingual, with explanations.
+---
+
+import Quiz from '@/components/Quiz.svelte';
+import questions from '@/data/questions.json';
+
+Answer at your own pace. Every question shows both **English and 中文**, gives instant feedback with an explanation, and saves your progress in this browser. Filter by scenario, or flip on **Only incorrect** to review just the ones you missed.
+
+<Quiz questions={questions} lang="en" client:load />

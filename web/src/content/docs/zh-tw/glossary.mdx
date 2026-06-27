@@ -1,0 +1,9 @@
+---
+title: 術語表 (EN↔中)
+description: 重要考試術語與雙語定義 —— 可搜尋並依主題篩選。
+---
+
+import Glossary from '@/components/Glossary.svelte';
+import terms from '@/data/glossary.json';
+
+<Glossary terms={terms} lang="zh-tw" client:load />

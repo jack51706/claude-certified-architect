@@ -1,0 +1,9 @@
+---
+title: 模擬考
+description: 比照正式考試的計時計分模擬考 —— 8 取 4 情境,換算 100–1000 分,及格 720。
+---
+
+import Exam from '@/components/Exam.svelte';
+import questions from '@/data/questions.json';
+
+<Exam questions={questions} lang="zh-tw" client:load />

@@ -1,0 +1,9 @@
+---
+title: 進度
+description: 你各情境的練習正確率與待加強重點 —— 儲存在這個瀏覽器。
+---
+
+import Dashboard from '@/components/Dashboard.svelte';
+import questions from '@/data/questions.json';
+
+<Dashboard questions={questions} lang="zh-tw" client:load />

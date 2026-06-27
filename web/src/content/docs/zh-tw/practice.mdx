@@ -1,0 +1,11 @@
+---
+title: 題庫
+description: 涵蓋全部 8 大考試情境的 100 題互動練習 —— 中英雙語並附解析。
+---
+
+import Quiz from '@/components/Quiz.svelte';
+import questions from '@/data/questions.json';
+
+依自己的步調作答。每題都同時顯示 **English 與中文**、即時回饋並附解析,並把進度存在這個瀏覽器。可依情境篩選,或開啟 **只看答錯** 來複習漏掉的題目。
+
+<Quiz questions={questions} lang="zh-tw" client:load />

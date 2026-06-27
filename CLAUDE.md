@@ -71,3 +71,13 @@ Quiz languages are whatever keys exist in `LANG_TITLES` inside `utils/build_prac
 - **Commits:** conventional-ish — `feat:` / `feature:` / `chore:` / `docs:`. Translations land as PRs (e.g. "add Turkish (tr) study guide translation").
 - **Adding a language:** create `guide_<lang>.md`, add it to both lists in `README.md` (Study Guide + PDF Version); the PDF is generated automatically on merge. For an interactive quiz, also add the language to `LANG_TITLES` and ensure `extract_question.py` recognizes that language's localized question markers.
 - Keep translations structurally faithful to `guide_en.MD` (same chapters, scenarios, and question numbering).
+
+## Interactive learning site (`web/`)
+
+An Astro Starlight + Svelte study site (bilingual en + zh-tw): study guide with search/nav, interactive question bank, timed mock exam, flashcards (SRS), glossary, and a progress dashboard.
+
+- **The guides remain the single source of truth.** `web/scripts/sync.mjs` runs before every `astro dev`/`build` and regenerates: (a) per-chapter Starlight pages from `guide_en.MD` / `guide_zh-tw.md` (paired by section order; question-bank sections excluded), and (b) a merged bilingual `web/src/data/questions.json` from the Practice Test questions. Both are git-ignored — **edit the root guides, not the generated pages.**
+- Interactive features are Svelte islands in `web/src/components/` sharing `web/src/lib/store.js` (localStorage progress/exam/SRS) and `web/src/lib/ui.js` (bilingual labels). Flashcards + glossary are driven by the authored `web/src/data/glossary.json` (committed).
+- Commands (run in `web/`): `npm install`, `npm run dev`, `npm run build` (output `web/dist`).
+- Deploy: `.github/workflows/deploy-site.yml` builds and publishes to GitHub Pages on push to `main`; base path is derived from the repo name (works on any fork). Repo **Settings → Pages → source: GitHub Actions** is required once.
+- Adding/translating study content or questions = edit the root `guide_*.md`; the site picks it up on the next build. New glossary/flashcard terms = edit `web/src/data/glossary.json`.

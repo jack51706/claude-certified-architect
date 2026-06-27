@@ -1,0 +1,9 @@
+---
+title: Progress
+description: Your practice accuracy by scenario, with focus areas — saved in this browser.
+---
+
+import Dashboard from '@/components/Dashboard.svelte';
+import questions from '@/data/questions.json';
+
+<Dashboard questions={questions} lang="en" client:load />

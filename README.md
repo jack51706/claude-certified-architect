@@ -14,6 +14,16 @@ This repository contains study materials for the **Claude Certified Architect �
 - Free for the first 5,000 partner company employees. General availability will be $99.
 - To request access to the official course/exam portal, use this link: https://anthropic.skilljar.com/claude-certified-architect-foundations-access-request
 
+## Interactive Learning Site
+
+A bilingual (English + 繁體中文) interactive study site lives in [`web/`](./web/): the full guide with search and a language switcher, a 100-question practice bank, a timed mock exam (scaled 100–1000, pass 720), spaced-repetition flashcards, an EN↔中 glossary, and a progress dashboard.
+
+```bash
+cd web && npm install && npm run dev   # http://localhost:4321
+```
+
+It is generated from the Markdown guides below (the single source of truth) and deploys to GitHub Pages via GitHub Actions. Details in [`web/README.md`](./web/README.md).
+
 ## Study Guide
 
 - **English guide**: [`guide_en.md`](./guide_en.MD)

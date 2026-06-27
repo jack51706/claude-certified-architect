@@ -1,0 +1,11 @@
+---
+title: Flashcards
+description: Spaced-repetition flashcards over the key terms — bilingual, saved in this browser.
+---
+
+import Flashcards from '@/components/Flashcards.svelte';
+import terms from '@/data/glossary.json';
+
+Tap a card to flip, then rate how well you knew it. Cards you find hard come back sooner; easy ones come back later. Your schedule is saved in this browser.
+
+<Flashcards cards={terms} lang="en" client:load />

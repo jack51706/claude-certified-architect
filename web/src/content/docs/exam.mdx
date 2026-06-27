@@ -1,0 +1,9 @@
+---
+title: Mock exam
+description: A timed, scored mock exam that mirrors the real one — 4 of 8 scenarios, scaled 100–1000, pass 720.
+---
+
+import Exam from '@/components/Exam.svelte';
+import questions from '@/data/questions.json';
+
+<Exam questions={questions} lang="en" client:load />

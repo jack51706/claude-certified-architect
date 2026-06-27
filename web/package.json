@@ -1,0 +1,21 @@
+{
+  "name": "claude-architect-academy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "node scripts/sync.mjs",
+    "dev": "npm run sync && astro dev",
+    "build": "npm run sync && astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/mdx": "^7.0.0",
+    "@astrojs/starlight": "^0.41.1",
+    "@astrojs/svelte": "^9.0.0",
+    "astro": "^7.0.3",
+    "sharp": "^0.35.2",
+    "svelte": "^5.56.4"
+  }
+}

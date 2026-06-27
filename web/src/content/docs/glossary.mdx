@@ -1,0 +1,9 @@
+---
+title: Glossary (EN↔中)
+description: Key exam terms with bilingual definitions — searchable and filterable by topic.
+---
+
+import Glossary from '@/components/Glossary.svelte';
+import terms from '@/data/glossary.json';
+
+<Glossary terms={terms} lang="en" client:load />
