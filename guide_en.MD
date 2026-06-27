@@ -2293,7 +2293,7 @@ Current models (mid-2026):
 |---|---|---|---|---|---|
 | **Claude Fable 5** | `claude-fable-5` | 1M | 128K | $10 / $50 | The hardest reasoning & long-horizon agentic work (flagship) |
 | **Claude Opus 4.8** | `claude-opus-4-8` | 1M | 128K | $5 / $25 | Default for complex/agentic tasks |
-| **Claude Sonnet 4.6** | `claude-sonnet-4-6` | 1M | 64K | $3 / $15 | Best speed/intelligence balance; high-volume |
+| **Claude Sonnet 4.6** | `claude-sonnet-4-6` | 1M | 128K | $3 / $15 | Best speed/intelligence balance; high-volume |
 | **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | Fast, cheap, simple/latency-critical tasks |
 
 - **Choosing:** start at **Opus 4.8** for complex work; **Sonnet 4.6** for the volume/cost sweet spot; **Haiku 4.5** for speed/cost; **Fable 5** only when you need the absolute ceiling (premium price).
