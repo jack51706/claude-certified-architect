@@ -309,16 +309,37 @@ Claude API 的回應包含 `stop_reason`,用以表示模型為何停止生成:
 
 > 文件:[Agent SDK](https://platform.claude.com/docs/en/agent-sdk/overview) | [Hooks](https://platform.claude.com/docs/en/agent-sdk/hooks) | [Subagents](https://platform.claude.com/docs/en/agent-sdk/subagents) | [Sessions](https://platform.claude.com/docs/en/agent-sdk/sessions)
 
+Claude Agent SDK 把單次模型呼叫,變成能規劃、呼叫工具、委派子代理並強制執行護欄的**自主系統**。本章是 **Domain 1 — 代理架構與編排(佔考試 27%)** 的骨幹,也是權重最高的領域。讀完你應能掌握四個構件,並把它們組裝成可上線的代理:
+
+- **代理迴圈**(§3.1)— 代理如何決定下一步。
+- **中心輻射式編排**(§3.3)— 協調者委派給隔離的子代理。
+- **明確的上下文傳遞**(§3.4)— 為何不主動告知,子代理就什麼都看不到。
+- **確定性 Hooks**(§3.5)— 以 100% 可靠度強制執行業務規則。
+
+§3.6 接著從頭到尾建構一個完整的客服退款代理,§3.7 則濃縮考試重點。
+
 ## 3.1 什麼是代理迴圈
 
 代理迴圈是自主執行任務的核心模式。模型不只是回答問題,而是執行一連串動作:
+
+```mermaid
+flowchart TD
+    A[帶著工具向 Claude 發送請求<br/>tools + 完整歷史] --> B[Claude 回應]
+    B --> C{stop_reason?}
+    C -->|tool_use| D[執行被請求的工具]
+    D --> E[將 tool_result<br/>附加到訊息歷史]
+    E --> A
+    C -->|end_turn| F[任務完成 —<br/>將結果回傳給使用者]
+```
+
+在程式碼中,這個迴圈其實只是一個依 `stop_reason` 分支的 `while`:
 
 ```
 1. 帶著工具向 Claude 發送請求
 2. 接收回應
 3. 檢查 stop_reason:
-   - "tool_use" -> 執行工具,將結果附加到歷史紀錄,回到步驟 1
-   - "end_turn" -> 任務完成,將結果顯示給使用者
+   - "tool_use"  -> 執行工具,將結果附加到歷史紀錄,回到步驟 1
+   - "end_turn"  -> 任務完成,將結果顯示給使用者
 4. 重複直到完成
 ```
 
@@ -355,11 +376,16 @@ agent = AgentDefinition(
 
 多代理架構通常建構為中心輻射式拓撲:
 
-```
-         Coordinator
-        /     |      \
-   Subagent1  Subagent2  Subagent3
-    (search)   (analysis)   (synthesis)
+```mermaid
+flowchart TD
+    U[使用者請求] --> C[協調者]
+    C -->|Task: 搜尋| S1[子代理 1<br/>搜尋]
+    C -->|Task: 分析| S2[子代理 2<br/>分析]
+    C -->|Task: 綜整| S3[子代理 3<br/>綜整]
+    S1 -. 僅回傳結果 .-> C
+    S2 -. 僅回傳結果 .-> C
+    S3 -. 僅回傳結果 .-> C
+    C --> R[彙整並驗證後的結果]
 ```
 
 **協調者負責:**
@@ -444,6 +470,124 @@ def enforce_refund_limit(tool_call):
 | 範例 | 阻擋退款 > $500 | 「在升級前先嘗試解決」 |
 
 **規則:** 當失敗會造成財務、法律或安全後果時——使用 Hooks,而非提示。
+
+## 3.6 端到端案例研究:客服退款代理
+
+上述元件唯有組合在一起才有意義。以下是一個完整、真實的代理,把整章串成一個系統——正是考試的 **Customer Support Agent(客服代理)** 情境要你能推理的設計。
+
+### 需求
+
+- 以自然語言處理客戶的退款/退貨請求。
+- 查詢客戶與其訂單(唯讀工具)。
+- 依公司政策檢核退款。
+- **硬性規則:** 任何**超過 $500 的退款都必須由真人核准**——沒有例外,不交由模型裁量。
+- 訂單資料來自多個工具、日期格式不一致;在模型推理前先正規化。
+
+### 架構
+
+```mermaid
+flowchart TD
+    User([客戶]) --> Coord[協調者代理]
+    Coord -->|Task| Lookup[子代理:訂單查詢<br/>get_customer, lookup_order]
+    Coord -->|Task| Policy[子代理:政策搜尋<br/>search_policy]
+    Lookup --> Post{{PostToolUse hook<br/>正規化日期}}
+    Post --> Coord
+    Policy --> Coord
+    Coord --> Refund[process_refund]
+    Refund --> Pre{{PreToolUse hook<br/>金額超過 $500?}}
+    Pre -->|是| Esc[escalate_to_human]
+    Pre -->|否| Exec[執行退款]
+    Esc --> Human([真人核准者])
+```
+
+協調者掌管編排;子代理做範圍狹窄、最小權限的工作;**由 Hooks(而非提示文字)強制執行金額規則與日期正規化**,因為兩者都必須是確定性的。
+
+### 實作
+
+定義協調者與一個最小權限子代理:
+
+```python
+coordinator = AgentDefinition(
+    name="support_coordinator",
+    description="Resolves refund and return requests; escalates when required.",
+    system_prompt=(
+        "You help customers with refunds. Look up the order, check policy, "
+        "then call process_refund. Never promise an outcome you have not executed."
+    ),
+    allowed_tools=["Task", "process_refund", "escalate_to_human"],
+)
+
+order_lookup = AgentDefinition(
+    name="order_lookup",
+    description="Reads customer and order records. Read-only.",
+    system_prompt="Return the customer's order details as structured data.",
+    allowed_tools=["get_customer", "lookup_order"],   # 最小權限:沒有退款能力
+)
+```
+
+用 `PreToolUse` hook 確定性地強制執行 $500 規則——這正是考試要你答對的關鍵:
+
+```python
+@hook("PreToolUse")
+def enforce_refund_limit(tool_call):
+    if tool_call.name == "process_refund" and tool_call.args["amount"] > 500:
+        # 模型無法繞過這條規則;它是程式碼,不是建議。
+        return redirect(to="escalate_to_human", reason="refund_over_limit")
+    return allow(tool_call)
+```
+
+用 `PostToolUse` hook 正規化每個工具回傳的日期,讓模型永遠不會看到三種日期格式:
+
+```python
+@hook("PostToolUse")
+def normalize_dates(tool_result):
+    tool_result["order_date"] = to_iso8601(tool_result.get("order_date"))
+    return tool_result
+```
+
+### 執行軌跡
+
+```mermaid
+sequenceDiagram
+    actor Cust as 客戶
+    participant Co as 協調者
+    participant L as 查詢子代理
+    participant Pre as PreToolUse hook
+    participant Hu as 真人核准者
+    Cust->>Co: 「退我訂單 #1234 的款」
+    Co->>L: Task(上下文:訂單 #1234 + 客戶 id)
+    L-->>Co: 訂單總額 $720,在退貨期限內
+    Co->>Pre: process_refund(amount=720)
+    Pre->>Pre: 720 大於 500,阻擋並改道
+    Pre->>Hu: escalate_to_human(case #1234)
+    Hu-->>Cust: 「專員將核准您 $720 的退款。」
+```
+
+注意協調者*原本打算*直接退款;而 **hook 確定性地否決了它**。若只用提示指令(「超過 $500 的退款要升級」),模型大約 90% 的時候會遵守——對金錢來說還不夠。
+
+### 驗證
+
+- **確定性測試:** 連續送出 100 筆 $501 的退款,斷言出現 100 次升級。只靠提示的設計會漏;hook 設計必須 100%。
+- **上下文隔離測試:** 確認查詢子代理是在它的 Task 提示中收到訂單 id——把它拿掉,子代理就應該失敗,證明上下文不會自動共享。
+- **最小權限測試:** 斷言 `order_lookup` 子代理無法呼叫 `process_refund`。
+
+### 常見陷阱
+
+- 把 $500 規則放進系統提示而非 hook(機率性,沒有保證)。
+- 忘了把訂單 id 傳進子代理的提示(隔離的上下文——見 §3.3)。
+- 把「退款已處理」這類助理文字當成完成訊號,而不是 `stop_reason == "end_turn"`(§3.1)。
+
+## 3.7 考試重點 — 關鍵整理
+
+| 概念 | 考試考什麼 |
+|---|---|
+| 代理迴圈 | 唯一可靠的停止訊號是 `stop_reason == "end_turn"`——絕非解析文字或迭代上限(§3.1)。 |
+| 中心輻射式 | 協調者負責分解、委派、彙整;子代理是隔離的(§3.3)。 |
+| 明確上下文 | 子代理什麼都不會繼承——所有上下文都要在 `Task` 提示中傳遞(§3.4)。 |
+| Hooks 與提示 | 確定性的業務/財務/合規規則 → hooks;軟性偏好 → 提示(§3.5)。 |
+| 最小權限 | 每個代理的 `allowed_tools` 都是它所需的最小集合(§3.2)。 |
+
+> **對應 Domain 1(27%)。** 如果你能建構並捍衛上面的退款代理——迴圈、委派、上下文、hooks、最小權限——你就掌握了權重最高考試領域的核心。
 
 # 第 4 章:模型上下文協定(MCP)
 

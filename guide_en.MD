@@ -309,16 +309,37 @@ Using `tool_use` with JSON schemas is the **most reliable** way to obtain struct
 
 > Documentation: [Agent SDK](https://platform.claude.com/docs/en/agent-sdk/overview) | [Hooks](https://platform.claude.com/docs/en/agent-sdk/hooks) | [Subagents](https://platform.claude.com/docs/en/agent-sdk/subagents) | [Sessions](https://platform.claude.com/docs/en/agent-sdk/sessions)
 
+The Claude Agent SDK turns a single model call into an **autonomous system** that can plan, call tools, delegate to subagents, and enforce guardrails. This chapter is the backbone of **Domain 1 — Agent Architecture and Orchestration (27% of the exam)**, the most heavily weighted domain. By the end you should be able to reason about four building blocks and assemble them into a production agent:
+
+- **The agentic loop** (§3.1) — how an agent decides what to do next.
+- **Hub-and-spoke orchestration** (§3.3) — a coordinator delegating to isolated subagents.
+- **Explicit context passing** (§3.4) — why subagents are blind unless you tell them everything.
+- **Deterministic hooks** (§3.5) — enforcing business rules with 100% reliability.
+
+§3.6 then builds a complete customer-support refund agent end-to-end, and §3.7 distills what the exam tests.
+
 ## 3.1 What is an Agentic Loop
 
 The agentic loop is the core pattern for autonomous task execution. The model doesn't just answer—it performs a sequence of actions:
+
+```mermaid
+flowchart TD
+    A[Send request to Claude<br/>tools + full history] --> B[Claude responds]
+    B --> C{stop_reason?}
+    C -->|tool_use| D[Execute the requested tool]
+    D --> E[Append tool_result<br/>to the message history]
+    E --> A
+    C -->|end_turn| F[Task complete —<br/>return result to the user]
+```
+
+In code the loop is just a `while` that branches on `stop_reason`:
 
 ```
 1. Send a request to Claude with tools
 2. Receive a response
 3. Check stop_reason:
-   - "tool_use" -> execute the tool, append the result to history, go back to step 1
-   - "end_turn" -> the task is complete, show the result to the user
+   - "tool_use"  -> execute the tool, append the result to history, go to step 1
+   - "end_turn"  -> the task is complete, show the result to the user
 4. Repeat until completion
 ```
 
@@ -355,11 +376,16 @@ agent = AgentDefinition(
 
 A multi-agent architecture is typically built as a hub-and-spoke topology:
 
-```
-         Coordinator
-        /     |      \
-   Subagent1  Subagent2  Subagent3
-    (search)   (analysis)   (synthesis)
+```mermaid
+flowchart TD
+    U[User request] --> C[Coordinator]
+    C -->|Task: search| S1[Subagent 1<br/>search]
+    C -->|Task: analyze| S2[Subagent 2<br/>analysis]
+    C -->|Task: synthesize| S3[Subagent 3<br/>synthesis]
+    S1 -. result only .-> C
+    S2 -. result only .-> C
+    S3 -. result only .-> C
+    C --> R[Aggregated and validated result]
 ```
 
 **The coordinator is responsible for:**
@@ -444,6 +470,124 @@ def enforce_refund_limit(tool_call):
 | Example | Block refunds > $500 | “Try to solve before escalating” |
 
 **Rule:** when failure has financial, legal, or safety consequences—use hooks, not prompts.
+
+## 3.6 End-to-End Case Study: A Customer-Support Refund Agent
+
+The pieces above only matter when they fit together. Here is a complete, realistic agent that ties the chapter into one system — the kind of design the exam's **Customer Support Agent** scenario asks you to reason about.
+
+### Requirements
+
+- Handle customer refund/return requests in natural language.
+- Look up the customer and their order (read-only tools).
+- Check the refund against company policy.
+- **Hard rule:** any refund **over $500 must be approved by a human** — no exceptions, no model discretion.
+- Order data arrives from several tools with inconsistent date formats; normalize them before the model reasons about them.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    User([Customer]) --> Coord[Coordinator Agent]
+    Coord -->|Task| Lookup[Subagent: order lookup<br/>get_customer, lookup_order]
+    Coord -->|Task| Policy[Subagent: policy search<br/>search_policy]
+    Lookup --> Post{{PostToolUse hook<br/>normalize dates}}
+    Post --> Coord
+    Policy --> Coord
+    Coord --> Refund[process_refund]
+    Refund --> Pre{{PreToolUse hook<br/>amount over $500?}}
+    Pre -->|yes| Esc[escalate_to_human]
+    Pre -->|no| Exec[Execute refund]
+    Esc --> Human([Human approver])
+```
+
+The coordinator owns orchestration; subagents do narrow, least-privilege work; **hooks — not prompt text — enforce the money rule and the date normalization**, because both must be deterministic.
+
+### Implementation
+
+Define the coordinator and a least-privilege subagent:
+
+```python
+coordinator = AgentDefinition(
+    name="support_coordinator",
+    description="Resolves refund and return requests; escalates when required.",
+    system_prompt=(
+        "You help customers with refunds. Look up the order, check policy, "
+        "then call process_refund. Never promise an outcome you have not executed."
+    ),
+    allowed_tools=["Task", "process_refund", "escalate_to_human"],
+)
+
+order_lookup = AgentDefinition(
+    name="order_lookup",
+    description="Reads customer and order records. Read-only.",
+    system_prompt="Return the customer's order details as structured data.",
+    allowed_tools=["get_customer", "lookup_order"],   # least privilege: no refund power
+)
+```
+
+Enforce the $500 rule deterministically with a `PreToolUse` hook — this is the line the exam wants you to get right:
+
+```python
+@hook("PreToolUse")
+def enforce_refund_limit(tool_call):
+    if tool_call.name == "process_refund" and tool_call.args["amount"] > 500:
+        # The model cannot bypass this; it is code, not a suggestion.
+        return redirect(to="escalate_to_human", reason="refund_over_limit")
+    return allow(tool_call)
+```
+
+Normalize dates from every tool with a `PostToolUse` hook, so the model never sees three date formats:
+
+```python
+@hook("PostToolUse")
+def normalize_dates(tool_result):
+    tool_result["order_date"] = to_iso8601(tool_result.get("order_date"))
+    return tool_result
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Cust as Customer
+    participant Co as Coordinator
+    participant L as Lookup subagent
+    participant Pre as PreToolUse hook
+    participant Hu as Human approver
+    Cust->>Co: "Refund my order #1234"
+    Co->>L: Task(context: order #1234 + customer id)
+    L-->>Co: order total $720, within return window
+    Co->>Pre: process_refund(amount=720)
+    Pre->>Pre: 720 > 500, block and redirect
+    Pre->>Hu: escalate_to_human(case #1234)
+    Hu-->>Cust: "A specialist will approve your $720 refund."
+```
+
+Notice the coordinator *intended* to refund directly; the **hook overrode it deterministically**. With only a prompt instruction ("escalate refunds over $500"), the model would comply ~90% of the time — not good enough for money.
+
+### Validation
+
+- **Determinism test:** fire 100 refunds of $501 and assert 100 escalations. A prompt-only design will leak; the hook design must be 100%.
+- **Context-isolation test:** confirm the lookup subagent receives the order id *in its Task prompt* — remove it and the subagent should fail, proving context isn't shared automatically.
+- **Least-privilege test:** assert the `order_lookup` subagent cannot call `process_refund`.
+
+### Common pitfalls
+
+- Putting the $500 rule in the system prompt instead of a hook (probabilistic, not guaranteed).
+- Forgetting to pass the order id into the subagent's prompt (isolated context — see §3.3).
+- Treating assistant text like "Refund processed" as the completion signal instead of `stop_reason == "end_turn"` (§3.1).
+
+## 3.7 Exam Focus — Key Takeaways
+
+| Concept | What the exam tests |
+|---|---|
+| Agentic loop | The only reliable stop signal is `stop_reason == "end_turn"` — never parsed text or an iteration cap (§3.1). |
+| Hub-and-spoke | Coordinator decomposes, delegates, and aggregates; subagents are isolated (§3.3). |
+| Explicit context | Subagents inherit nothing — all context must be passed in the `Task` prompt (§3.4). |
+| Hooks vs prompts | Deterministic business/financial/compliance rules → hooks; soft preferences → prompts (§3.5). |
+| Least privilege | Each agent's `allowed_tools` is the minimum it needs (§3.2). |
+
+> **Maps to Domain 1 (27%).** If you can build and defend the refund agent above — loop, delegation, context, hooks, least privilege — you have the core of the most heavily weighted exam domain.
 
 # Chapter 4: Model Context Protocol (MCP)
 
