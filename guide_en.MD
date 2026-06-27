@@ -1410,6 +1410,24 @@ The coordinator loads a manifest on resume:
 
 ---
 
+## Context Engineering (Modern Framing)
+
+> Background: this is the current Anthropic framing for the techniques in this chapter. The exam tests the underlying ideas; this vocabulary helps you connect them. Source: [Anthropic — Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).
+
+**Context engineering** is the discipline of curating and maintaining the *optimal set of tokens* during inference — the whole information environment (system prompt, tools, external data, message history), not just the prompt. It is broader than prompt engineering: prompt engineering crafts the instructions; context engineering manages everything that lands in the window, dynamically, as the agent runs over many turns.
+
+**Context is a finite resource.** As the token count grows, recall degrades — a phenomenon called **context rot** (attention must relate every token pair, an n² cost that stretches thin over long inputs). The goal is the *smallest set of high-signal tokens* that still does the job — not "stuff everything in."
+
+**Core techniques:**
+- **Just-in-time retrieval** — keep lightweight identifiers (file paths, URLs, IDs) and load the actual content at runtime via tools, instead of pre-loading everything (a generalization of the scratchpad idea above).
+- **Compaction** — when nearing the limit, summarize the history, preserving key decisions and discarding redundant tool output, then continue from the summary. The `/compact` command and the Agent SDK do this automatically.
+- **Structured note-taking (memory)** — persist findings to external memory outside the window and retrieve them when needed, giving long-horizon coherence across context resets.
+- **Sub-agent architectures** — hand focused work to subagents with clean context windows; they return condensed summaries to the coordinator, separating detailed work from high-level synthesis. (This is why delegating discovery to a subagent beats stuffing it into the main context.)
+
+These are the same mitigations this chapter covers (lost-in-the-middle, progressive summarization, scratchpad files, subagent isolation) — *context engineering* is the umbrella term for doing them deliberately.
+
+---
+
 # Chapter 12: Preserving Provenance
 
 ## 12.1 The Attribution Loss Problem
@@ -1934,6 +1952,292 @@ When Edit fails due to a non-unique text match:
 - Preserve conflicting values with annotations and pass them to the coordinator for reconciliation
 - Include publication dates for correct temporal interpretation
 - Render content by type: financial data as tables, news as prose, technical findings as structured lists
+
+---
+
+# PART III: Modern Agent Engineering (Beyond the Foundations Exam)
+
+> **Scope note:** This part covers current Anthropic engineering practice (2026) for building robust agents — **Workflows vs Agents, the agent harness, and loop engineering**. These topics go **beyond the official Foundations exam syllabus**; they are here for deeper Claude mastery, not because they are guaranteed to be tested. Each chapter cites Anthropic's primary sources.
+
+---
+
+# Chapter 14: Workflows vs Agents
+
+> *Advanced — beyond the official exam scope.* Source: [Anthropic — Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents).
+
+Anthropic draws a sharp line between two kinds of "agentic" system:
+
+- **Workflow** — "systems where LLMs and tools are orchestrated through **predefined code paths**." *You* control the flow.
+- **Agent** — "systems where LLMs **dynamically direct their own processes** and tool usage, maintaining control over how they accomplish tasks." *The model* controls the flow.
+
+**Start simple.** Use the simplest pattern that passes your evals — often a single well-tooled LLM call, or a workflow. Reserve agents for **open-ended problems where you can't predict the number of steps or hardcode the path, but can still verify progress.** Agents trade predictability for flexibility: more latency, more tokens, and the risk that an early mistake compounds.
+
+## The five workflow patterns
+
+1. **Prompt chaining** — break a task into sequential steps; each call processes the previous output, with programmatic checks between steps.
+2. **Routing** — classify the input and send it to a specialized handler (separation of concerns).
+3. **Parallelization** — run subtasks at once, by **sectioning** (independent pieces) or **voting** (same task several times, then aggregate).
+4. **Orchestrator–workers** — a central LLM breaks the task down and delegates to worker LLMs, then synthesizes their results (the coordinator/subagent pattern from Domain 1).
+5. **Evaluator–optimizer** — one LLM generates, another evaluates and gives feedback, in an iterative refine loop (see Chapter 16).
+
+## Should you build an agent?
+
+Check all four before reaching for an agent: **complexity** (multi-step, hard to fully specify), **value** (worth the cost and latency), **viability** (Claude is capable at this task), and **cost of error** (mistakes are catchable and recoverable — tests, review, rollback). If any answer is "no," stay at a simpler tier.
+
+## Invest in the agent–computer interface (ACI)
+
+Spend "just as much effort in creating good agent-computer interfaces (ACI)" as you would on a human UI: clear tool documentation, example usage, edge cases, unambiguous parameters, and testing. On modern Claude, **tool descriptions and schemas matter more than clever prompting** — this is where reliability is won.
+
+---
+
+# Chapter 15: The Agent Harness
+
+> *Advanced — beyond the official exam scope.* Source: [Anthropic — Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents).
+
+The model emits tool calls; the **harness** is the infrastructure around it that turns a model into an *agent*. It executes tools, manages the context lifecycle across sessions and context windows, persists state so the agent knows prior progress, enforces permissions and guardrails, provides observability, and runs verification. For **long-running** agents, the harness — not the prompt — is where reliability lives.
+
+## Design principles for long-running harnesses
+
+- **Differentiated initialization** — use a *different prompt for the first context window* that lays down scaffolding (feature list, repo, progress docs) later sessions can read.
+- **Structured state management** — keep machine-readable artifacts (e.g. a feature list in JSON, a progress file) so a fresh context window can quickly understand the state of work.
+- **Incremental decomposition** — have the agent do **one feature at a time** rather than trying to one-shot the whole thing and running out of context mid-task.
+- **Environmental cleanup** — require the agent to commit progress to git with descriptive messages and leave a clean state a human could pick up.
+- **Explicit verification** — mandate end-to-end tests before a feature is declared done; don't trust the model's "it works" without evidence.
+- **Session startup routines** — begin each session by reading the progress file, reviewing git history, and running basic checks before new work.
+
+This is the production-grade version of the exam's tool-design, reliability, and context-management themes.
+
+---
+
+# Chapter 16: Loop Engineering
+
+> *Advanced — beyond the official exam scope.* Sources: [The New Stack — Loop engineering](https://thenewstack.io/loop-engineering/); Anthropic — Building Effective Agents (evaluator–optimizer) and Effective harnesses.
+
+As agents grew more capable, the highest-leverage design shifted from *writing the perfect one-shot prompt* to **designing the loop the agent runs in** — "ditched prompting, now writes loops." The loop (model → tool calls → feedback → repeat) is the unit you engineer.
+
+## Generator–evaluator (GAN-style) loops
+
+The most consequential choice in a loop: **split the agent that produces the work from the agent that checks it.** A model grading its **own** output is too generous — it rationalizes its own mistakes. A **separate evaluator** with different instructions and a clean context catches the failures the generator reasoned itself into. This is the **evaluator–optimizer** pattern (Chapter 14) applied as the core loop, and it maps onto the normal software lifecycle — code review and QA play the evaluator role.
+
+## Making loops work
+
+- Give the evaluator **explicit, checkable "done" criteria** — vague criteria produce noisy loops.
+- Keep the evaluator's context **fresh and independent** of the generator's reasoning.
+- Pair it with the **harness** (Chapter 15): the verification step is what lets the loop run autonomously without drifting or declaring premature success.
+- Know when to stop: loop until the evaluator passes, a budget is hit, or you escalate to a human (Domain 5).
+
+---
+
+# PART IV: Complete Claude Platform Reference (Beyond the Foundations Exam)
+
+> **Scope note:** PART IV is a reference to the **full current Claude platform** (2026) for comprehensive mastery — the API, tools, SDKs, Managed Agents, MCP, and modern Claude Code. Most of it is **beyond the official Foundations syllabus** (some is even on the exam's explicit out-of-scope list); it is here so you can *learn all of Claude*, not only pass the exam. Each chapter cites official docs. Current models referenced: flagship **Claude Fable 5** (`claude-fable-5`); default Opus **Claude Opus 4.8** (`claude-opus-4-8`); plus **Sonnet 4.6** and **Haiku 4.5**.
+
+---
+
+# Chapter 17: Thinking, Effort & Reasoning Control
+
+> *Reference — beyond the exam scope.* Docs: [Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) · [Effort](https://platform.claude.com/docs/en/build-with-claude/effort).
+
+Modern Claude models reason before answering. You control *how much* with two dials:
+
+- **Adaptive thinking** — `thinking: {type: "adaptive"}`. The model decides when and how much to think, and interleaves thinking between tool calls automatically. This is the current approach on Claude 4.6+.
+- **Effort** — `output_config: {effort: "low" | "medium" | "high" | "xhigh" | "max"}`. Controls reasoning depth *and* overall token spend. Default is `high` on Opus 4.8; **`xhigh`** is the sweet spot for coding/agentic work; `low` for cheap or latency-sensitive tasks.
+
+**The old way is gone.** Fixed `thinking: {type: "enabled", budget_tokens: N}` is **deprecated and returns a 400 on Opus 4.7/4.8 and Fable 5** — use adaptive thinking + effort instead. (Older models still use `budget_tokens`, which must be `< max_tokens`.)
+
+**Seeing the reasoning.** On Opus 4.7/4.8 and Fable 5, `thinking.display` defaults to `"omitted"` (thinking blocks come back empty). Set `thinking: {type: "adaptive", display: "summarized"}` to stream a readable summary.
+
+**Task budgets (advanced).** `output_config: {task_budget: {type: "tokens", total: N}}` gives the model a token ceiling for a *whole agentic loop* — it sees a countdown and paces itself to finish gracefully (distinct from `max_tokens`, an enforced per-response cap the model doesn't see). Beta `task-budgets-2026-03-13`; Fable 5 / Opus 4.8 / 4.7.
+
+---
+
+# Chapter 18: Prompt Caching
+
+> *Reference — the exam only expects you to "know it exists"; here is the working knowledge.* Docs: [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+
+Caching reuses a stable prompt prefix across requests to cut cost (~90%) and latency.
+
+**The one rule everything follows from:** caching is a **prefix match** — any byte change *anywhere* in the prefix invalidates everything after it. Render order is **`tools` → `system` → `messages`**, so put stable content first and volatile content (timestamps, per-request IDs, the varying question) last.
+
+- Mark a breakpoint with `cache_control: {type: "ephemeral"}` on the last stable block (5-minute TTL; `{..., ttl: "1h"}` for one hour). Max **4** breakpoints per request.
+- **Economics:** cache reads ≈ 0.1× input price; writes ≈ 1.25× (5m) or 2× (1h). Break-even is ~2 requests at the 5-minute TTL.
+- **Verify** with `usage.cache_read_input_tokens` — if it is 0 across identical-prefix requests, a **silent invalidator** is at work: `datetime.now()`/UUIDs in the system prompt, unsorted `json.dumps()`, or a changing tool set.
+- **Don't** change tools or switch models mid-conversation — both invalidate the whole cache.
+
+---
+
+# Chapter 19: Structured Outputs & Strict Tool Use
+
+> *Reference — beyond the exam scope (the exam covers `tool_use` JSON schemas; this is the formal feature).* Docs: [Structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).
+
+Two features guarantee machine-readable output:
+
+- **Structured outputs** — `output_config: {format: {type: "json_schema", schema: {...}}}` constrains the *response* to your schema (constrained decoding), so the text block is always schema-valid JSON. Prefer `client.messages.parse()` (validates and returns typed objects). The old top-level `output_format` parameter is **deprecated** — use `output_config.format`.
+- **Strict tool use** — `strict: true` on a tool definition guarantees `tool_use.input` validates *exactly* against the schema (needs `additionalProperties: false` + `required`). This is the enforced version of Chapter 2's `tool_use` schemas.
+
+**When to use which:** strict tool use when the model should *call a function*; structured outputs when the model's *final answer* must be JSON. They compose.
+
+**Schema limits:** no recursive schemas, no numeric (`minimum`/`maximum`) or string-length constraints, and `additionalProperties` must be `false`. **Incompatible with citations.** A new schema has a one-time compile cost, then caches for 24h.
+
+---
+
+# Chapter 20: Server-Side & Advanced Tools
+
+> *Reference — beyond the exam scope.* Docs: [Tool use overview](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview).
+
+Beyond your own custom tools, Claude offers built-in and advanced tool patterns:
+
+**Tool-use patterns**
+- **Parallel tool use** (default) — one assistant turn can emit several `tool_use` blocks; execute them concurrently and return **all** `tool_result`s in a **single** user message (splitting them trains the model to stop parallelizing).
+- **Tool runner** (SDK helper) — drives the call → execute → loop automatically (Python `@beta_tool` + `tool_runner`, TS `betaZodTool` + `toolRunner`), so you don't hand-write the agent loop.
+- **Programmatic tool calling (PTC)** — Claude calls your tools from *inside* code execution; intermediate results stay in the running script (out of the context window) and only the final output returns. Large token savings on long tool chains.
+
+**Server-side tools** (run on Anthropic's infrastructure — just declare them in `tools`):
+- **Web search** (`web_search_20260209`) — live search with citations and dynamic filtering.
+- **Web fetch** (`web_fetch_20260209`) — fetch/parse a specific URL already present in the conversation.
+- **Code execution** (`code_execution`) — sandboxed Python/bash container (data-science libs preinstalled; containers reusable ~30 days). Free when paired with web tools.
+- **Tool search** (`tool_search_tool_regex` / `_bm25`) — discover tools on demand from a large library; mark the rest `defer_loading: true`. Schemas are *appended*, preserving the cache.
+
+**Client-side / Anthropic-defined tools** (you execute):
+- **Bash** (`bash_20250124`) and **text editor** (`text_editor_20250728`) — schema-less; reference implementations provided; sandbox them.
+- **Memory tool** (`memory_20250818`) — Claude reads/writes a `/memories` directory for cross-session state; you implement the backend.
+- **Computer use** — screenshots + mouse/keyboard control of a GUI (beta).
+- **Advisor** (`advisor_20260301`, beta) — pairs a cheaper executor model with a smarter advisor consulted mid-generation (advisor model must be ≥ executor).
+
+---
+
+# Chapter 21: Long-Context Techniques (Compaction, Context Editing, Memory)
+
+> *Reference — beyond the exam scope.* Docs: [Compaction](https://platform.claude.com/docs/en/build-with-claude/compaction) · [Context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing).
+
+For agents that run long enough to strain the context window, three distinct API mechanisms (don't confuse them):
+
+- **Compaction** — *summarizes* older history server-side when nearing the limit, then continues from the summary. Beta `compact-2026-01-12` (`context_management.edits: [{type: "compact_20260112"}]`). **Critical:** append the whole `response.content` (including the compaction block) back on the next request, or you lose the compacted state.
+- **Context editing** — *clears* (not summarizes) stale content: `clear_tool_uses_20250919` drops old tool results, `clear_thinking_20251015` drops thinking blocks. Beta `context-management-2025-06-27`. Use when old tool output is dead weight.
+- **Memory (cross-session)** — the memory tool (Chapter 20) or Managed Agents **memory stores** persist information *outside* the window, surviving context resets and whole sessions.
+
+**Choosing:** context editing prunes within a session; compaction summarizes when you're near the limit; memory persists across sessions. Long-running agents often use all three (plus prompt caching, Chapter 18).
+
+---
+
+# Chapter 22: Documents & Multimodal Input
+
+> *Reference — the exam lists Vision and token counting as out-of-scope; this is for real-world work.* Docs: [Files API](https://platform.claude.com/docs/en/build-with-claude/files) · [PDF support](https://platform.claude.com/docs/en/build-with-claude/pdf-support).
+
+- **Files API** (beta `files-api-2025-04-14`) — upload a file once, then reference it by `file_id` across many requests instead of re-sending bytes. (Not on Bedrock/Vertex.)
+- **Vision** — `{"type": "image", "source": {...}}` content blocks (base64, URL, or `file_id`); JPEG/PNG/GIF/WebP. Opus 4.7+ supports high-resolution images (up to 2576px long edge) with pixel-accurate coordinates — useful for computer use and document understanding.
+- **PDF input** — `{"type": "document", ...}` blocks process PDFs natively (text *and* visual layout); base64 (no beta) or via the Files API; up to ~600 pages / 32MB.
+- **Citations** — `citations: {enabled: true}` on a document makes responses carry `cited_text` plus char/page locations for verifiable, grounded answers. (Incompatible with structured outputs.)
+- **Token counting** — the `count_tokens` endpoint gives exact, model-specific counts *before* you send. Never estimate Claude tokens with `tiktoken` (it is OpenAI's tokenizer and is wrong for Claude).
+
+---
+
+# Chapter 23: The Claude Agent SDK
+
+> *Reference — beyond the exam scope.* Docs: [Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview).
+
+The **Claude Agent SDK** (Python `claude-agent-sdk`, TypeScript `@anthropic-ai/claude-agent-sdk`) is **Claude Code as a library** — the same built-in tools, agent loop, and context management, callable from your own code. (It was formerly the "Claude Code SDK"; `claude -p` is its CLI form.)
+
+- **Agent loop** — gather context → take action (tools) → verify → repeat until done. The SDK runs the loop *in your process*; you don't hand-write it.
+- **Built-in tools** — Read/Write/Edit/Bash/Grep/Glob and more, ready to use.
+- **Subagents** — `AgentDefinition`s for isolated/parallel/specialized work that protects the main context.
+- **Hooks** — lifecycle callbacks (PreToolUse, PostToolUse, session start/end, compaction) to log, block, modify, or gate actions.
+- **Sessions** — persistent state; resume with full context or fork to explore alternatives.
+- **MCP & permissions** — declare MCP servers; per-tool allow/deny/ask with custom callbacks (human-in-the-loop).
+
+**Three surfaces, one mental model:** **Client SDK** (`anthropic`) = raw Messages API, you write the loop. **Agent SDK** = the loop + tools run in *your* process. **Managed Agents** (Chapter 24) = Anthropic hosts the loop *and* a sandbox. Pick by who runs the loop and who provides the compute.
+
+---
+
+# Chapter 24: Managed Agents
+
+> *Reference — beyond the exam scope.* Docs: [Managed Agents overview](https://platform.claude.com/docs/en/managed-agents/overview). Beta header `managed-agents-2026-04-01`.
+
+**Managed Agents** is Anthropic-hosted: Anthropic runs the agent loop **and** provisions a per-session container where the agent's tools (bash, file ops, code) execute. You supply config and drive an event stream.
+
+**Object model (memorize this):**
+- **Agent** (`/v1/agents`) — a *persisted, versioned* config: `model`, `system`, `tools`, `mcp_servers`, `skills`. **Create once, reference by ID.**
+- **Session** (`/v1/sessions`) — one run that references an agent by ID + an environment. **Every run.**
+- **Environment** (`/v1/environments`) — a reusable container template.
+
+> ⚠️ **The #1 rule:** `model`/`system`/`tools` live on the **agent**, never the session; the session only takes a pointer (`agent: {id, version}`). Create the agent once in setup and reuse the ID — calling `agents.create()` per run is the classic anti-pattern.
+
+**Key capabilities:**
+- **Events & streaming** — an SSE stream (`agent.message`, `agent.thinking`, `agent.tool_use`, `session.status_*`); open the stream *before* sending, and reconnect-with-dedupe (SSE has no replay).
+- **Multi-agent** — `multiagent: {type: "coordinator", agents: [...]}`; a coordinator delegates to subagent *threads* that share the container.
+- **Outcomes** — send a `user.define_outcome` event with a rubric; a separate grader runs an iterate → grade → revise loop until it passes.
+- **Memory stores** — workspace-scoped persistent docs mounted into the container, surviving sessions (versioned, redactable).
+- **Vaults** — credential store (MCP OAuth with auto-refresh, static bearer, env-var secrets); secrets are injected at egress and never visible in the sandbox.
+- **Scheduled deployments** — cron-fire sessions automatically (this is what powers the cloud "routines").
+- **Self-hosted sandboxes** — `config: {type: "self_hosted"}` runs tool execution in *your* infra via an outbound-polling worker; Anthropic still runs the loop.
+- **Webhooks** — HMAC-signed state-change notifications instead of holding a stream open.
+
+---
+
+# Chapter 25: MCP In Depth
+
+> *Reference — extends Chapter 4.* Docs: [Model Context Protocol](https://modelcontextprotocol.io/) · [MCP connector](https://platform.claude.com/docs/en/agents-and-tools/mcp-connector).
+
+- **Primitives** (recap) — **Tools** (model-invoked actions), **Resources** (read-only context data), **Prompts** (reusable templates). MCP is an open JSON-RPC 2.0 standard — "USB-C for AI."
+- **Transports** — **stdio** (local subprocess) and **Streamable HTTP** (POST + SSE) are the two standards; the old SSE-only transport is deprecated.
+- **Authorization** — OAuth 2.0 for HTTP servers; environment-based credentials for stdio.
+- **MCP connector (Messages API)** — let Claude call a *remote* MCP server directly, server-side, with no local client: pass `mcp_servers: [{type:"url", name, url}]` **and** a matching `tools: [{type:"mcp_toolset", mcp_server_name}]` entry. Beta `mcp-client-2025-11-20`. (Both halves are required — `mcp_servers` alone is rejected.)
+- **Credentials in Managed Agents** — MCP auth is supplied via **vaults** (Chapter 24), not in the agent's `mcp_servers` block; Anthropic matches credentials to servers by URL and auto-refreshes OAuth.
+- **Claude Code** — `claude mcp add/list/remove`, `.mcp.json` (project) vs `~/.claude.json` (user), `/mcp` for in-session OAuth, and **MCP tool search** to lazily load tools and save context.
+
+---
+
+# Chapter 26: Modern Claude Code (2026)
+
+> *Reference — beyond the exam scope.* Docs: [Claude Code docs](https://code.claude.com/docs/en/overview) · [What's new](https://code.claude.com/docs/en/whats-new).
+
+Claude Code is now **multi-surface** (terminal, VS Code, JetBrains, desktop app, web/iOS, Slack, Chrome) sharing one engine, so CLAUDE.md, settings, skills, and MCP carry across all of them. Notable 2026 capabilities a guide usually misses:
+
+- **Dynamic workflows + `ultracode`** — Claude writes a JavaScript script that orchestrates **dozens–hundreds** of subagents in the background (caps: 16 concurrent / 1,000 total); `/effort ultracode` enables auto-orchestration. *Who holds the plan:* subagents/skills → Claude turn-by-turn; **agent teams** → a lead via a shared task list; **workflows** → a script (only the final answer hits context).
+- **Fork subagents / `context: fork`** — inherit the parent conversation instead of starting fresh; `isolation: worktree` runs a subagent's edits in a throwaway git worktree.
+- **Checkpoints / `/rewind`** — auto-checkpoint before each edit; restore code/conversation/both. **Limitation:** it does **not** track bash-modified or external/concurrent file changes — not a Git replacement.
+- **Auto memory** — Claude writes its own machine-local learnings to a `MEMORY.md`, reloaded each session (distinct from hand-written CLAUDE.md).
+- **Headless for CI** — `-p`/`--print`, `--output-format json`, **`--json-schema`** (schema-conforming `structured_output`), and **`--bare`** (skip auto-discovery for deterministic runs; slated to become the `-p` default).
+- **Permission modes** — `default`/`acceptEdits`/`plan`/`bypassPermissions`, plus newer **`auto`** (server-side safety classifier) and **`dontAsk`** (read-only/pre-approved only).
+- **MCP tool search & managed MCP** — lazily load MCP tools to save context; org-wide `managed-mcp.json`; `claude mcp login` from the shell.
+- **Output styles, effort levels, plugins, expanded hooks** — `/output-style` personas; `/effort` (incl. `xhigh`/`ultracode`); plugin marketplaces bundling skills/agents/hooks/MCP; many new hook events (e.g. `SubagentStart`, `PreCompact`, `SessionEnd`).
+- **Scheduling & remote** — cloud **routines** (cron), **channels** (push external events into a session), and **remote control** from another device.
+
+---
+
+# Chapter 27: Evals for Agents
+
+> *Reference — beyond the exam scope, but essential in practice.* Docs: [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents).
+
+You can't improve (or safely ship) what you don't measure. Evals are the test suite for agents.
+
+- **Three grader types** — **code** (deterministic checks: did the file compile? does the JSON validate?), **model-based** ("LLM-as-judge" for open-ended quality against a rubric), and **human** (the gold standard for ambiguous cases; use it to calibrate the others).
+- **Grade outcomes *and* trajectories** — not just "was the final answer right," but "did it take a sensible path" (which tools, in what order, how many turns). A right answer via a broken path will break on the next task.
+- **Handle non-determinism** — agents vary run to run; use **pass@k** (does it succeed within k attempts?) and run multiple trials rather than judging a single run.
+- **Realistic tasks** — evaluate on representative, end-to-end tasks (ideally from production traffic), not toy prompts.
+- **Why it pays off** — a solid eval set lets you upgrade models in days, catch regressions before they reach users, and tune `effort`/prompts/tools with evidence instead of vibes. Without evals, bugs surface in production.
+
+This is the measurement layer behind the generator–evaluator loop (Chapter 16) and the verification step in a harness (Chapter 15).
+
+---
+
+# Chapter 28: Model Lineup & Selection (2026)
+
+> *Reference — the exam treats model comparison as out-of-scope; this is for real builds.* Docs: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview) · query live via the [Models API](https://platform.claude.com/docs/en/api/models).
+
+Current models (mid-2026):
+
+| Model | API ID | Context | Max output | Input / Output ($/MTok) | Use for |
+|---|---|---|---|---|---|
+| **Claude Fable 5** | `claude-fable-5` | 1M | 128K | $10 / $50 | The hardest reasoning & long-horizon agentic work (flagship) |
+| **Claude Opus 4.8** | `claude-opus-4-8` | 1M | 128K | $5 / $25 | Default for complex/agentic tasks |
+| **Claude Sonnet 4.6** | `claude-sonnet-4-6` | 1M | 64K | $3 / $15 | Best speed/intelligence balance; high-volume |
+| **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | Fast, cheap, simple/latency-critical tasks |
+
+- **Choosing:** start at **Opus 4.8** for complex work; **Sonnet 4.6** for the volume/cost sweet spot; **Haiku 4.5** for speed/cost; **Fable 5** only when you need the absolute ceiling (premium price).
+- **Model IDs are pinned snapshots.** From the 4.6 generation on, IDs are dateless but still pinned (e.g. `claude-opus-4-8`); older ones resolve via dated aliases.
+- **Legacy (still active):** Opus 4.7/4.6, Sonnet 4.5, Opus 4.5. **Deprecated:** Opus 4.1 (retires 2026-08-05). Migrate off retiring models.
+- **Don't hardcode assumptions** — query the **Models API** (`max_input_tokens`, `max_tokens`, `capabilities`) at runtime to discover context windows and feature support, since the lineup changes.
 
 ---
 

@@ -1410,6 +1410,24 @@ Main agent: keeps one line in context instead of 15 files
 
 ---
 
+## 上下文工程(現代框架)
+
+> 背景:這是 Anthropic 對本章技術的現代說法。考試考的是底層概念;這套詞彙幫你把它們串起來。來源:[Anthropic — Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)。
+
+**上下文工程(context engineering)** 是在推論期間策劃並維護「最佳 token 集合」的學問 —— 涵蓋整個資訊環境(系統提示、工具、外部資料、訊息歷史),而不只是提示。它比提示工程更廣:提示工程打磨的是指令;上下文工程管理的是「在代理跨多輪執行時,動態落入視窗裡的一切」。
+
+**上下文是有限資源。** 隨著 token 增加,模型的回想能力會下降 —— 這現象稱為 **context rot(上下文腐化)**(注意力必須計算每一對 token 的關係,n² 成本在長輸入下被攤薄)。目標是「**仍能完成任務的最小高訊號 token 集合**」,而不是「把全部塞進去」。
+
+**核心技巧:**
+- **即時擷取(just-in-time retrieval)** —— 保留輕量識別碼(檔案路徑、URL、ID),在執行期才用工具載入實際內容,而非事先全載(就是上面暫存檔概念的推廣)。
+- **壓縮(compaction)** —— 接近上限時摘要歷史,保留關鍵決策、捨棄冗餘工具輸出,再從摘要繼續。`/compact` 命令與 Agent SDK 會自動做這件事。
+- **結構化筆記(記憶)** —— 把發現存到視窗外的外部記憶,需要時再取回,讓上下文重置後仍維持長程連貫。
+- **子代理架構** —— 把聚焦的工作交給擁有乾淨上下文的子代理;它們回傳精簡摘要給協調者,把細節工作與高層綜整分開。(這就是為什麼把探索委派給子代理,勝過硬塞進主上下文。)
+
+這些正是本章涵蓋的同一批對策(中段遺失、漸進式摘要、暫存檔、子代理隔離)—— **上下文工程** 就是「刻意去做這些事」的統稱。
+
+---
+
 # 第 12 章:保留出處來源
 
 ## 12.1 出處遺失問題
@@ -1934,6 +1952,292 @@ Main agent: keeps one line in context instead of 15 files
 - 保留衝突的值並加上註記,再傳遞給協調者進行調和
 - 納入發布日期以利正確的時間解讀
 - 依類型呈現內容:財務資料以表格呈現、新聞以散文呈現、技術發現以結構化清單呈現
+
+---
+
+# 第三部分:現代 Agent 工程(超出基礎考綱)
+
+> **範圍說明:** 本部分涵蓋 Anthropic 2026 年建構穩健代理的現代工程實務 —— **Workflows vs Agents、agent harness、loop engineering**。這些主題**超出官方 Foundations 考綱**;放在這裡是為了更完整地掌握 Claude,而非保證會考。每章都附 Anthropic 原始出處。
+
+---
+
+# 第 14 章:Workflows vs Agents(工作流 vs 代理)
+
+> *進階 —— 超出官方考綱。* 來源:[Anthropic — Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents)。
+
+Anthropic 把兩種「代理式」系統清楚劃開:
+
+- **Workflow(工作流)** —— 「以**預先定義的程式碼路徑**來編排 LLM 與工具的系統。」流程由**你**控制。
+- **Agent(代理)** —— 「LLM **自行動態主導其流程**與工具使用、掌控如何完成任務的系統。」流程由**模型**控制。
+
+**從簡單開始。** 用能通過你評測的最簡單做法 —— 通常是單次、工具配置良好的 LLM 呼叫,或一個 workflow。只有在**無法預測步驟數、無法寫死路徑、但仍能驗證進度的開放式問題**才動用 agent。Agent 以可預測性換取彈性:更高延遲、更多 token,以及早期錯誤滾雪球的風險。
+
+## 五種 workflow 模式
+
+1. **Prompt chaining(提示串接)** —— 把任務拆成連續步驟;每次呼叫處理上一步輸出,步驟間有程式化檢查。
+2. **Routing(路由)** —— 將輸入分類後送往專門處理器(關注點分離)。
+3. **Parallelization(平行化)** —— 同時跑子任務,可用 **sectioning**(獨立切塊)或 **voting**(同任務跑多次再彙整)。
+4. **Orchestrator–workers(協調者—工人)** —— 中央 LLM 拆解任務、委派給工人 LLM,再綜整其結果(就是 Domain 1 的協調者/子代理模式)。
+5. **Evaluator–optimizer(評估者—優化者)** —— 一個 LLM 生成、另一個評估並給回饋,反覆精修(見第 16 章)。
+
+## 你該建 agent 嗎?
+
+動用 agent 前先確認四點全部成立:**複雜度**(多步驟、難以完整規格化)、**價值**(值得這個成本與延遲)、**可行性**(Claude 勝任此任務)、**錯誤代價**(錯誤可被捕捉與復原 —— 測試、審查、回滾)。任一答案是「否」,就停在更簡單的層級。
+
+## 投資於 agent–computer interface(ACI)
+
+為「打造良好的 agent-computer interface(ACI)」投入「與人機介面同等的心力」:清楚的工具文件、用法範例、邊界案例、明確的參數,以及測試。在現代 Claude 上,**工具描述與結構描述比花俏的提示更重要** —— 可靠性是在這裡贏得的。
+
+---
+
+# 第 15 章:Agent Harness(代理執行框架)
+
+> *進階 —— 超出官方考綱。* 來源:[Anthropic — Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)。
+
+模型發出工具呼叫;**harness** 則是包在它外面、把模型變成**代理**的基礎架構。它執行工具、管理跨工作階段與上下文視窗的上下文生命週期、保存狀態讓代理知道先前進度、執行權限與護欄、提供可觀測性,並進行驗證。對**長時間執行**的代理而言,可靠性住在 harness 裡,而不是提示裡。
+
+## 長時間 harness 的設計原則
+
+- **差異化初始化** —— 為**第一個上下文視窗用不同的提示**,鋪好後續工作階段可讀的鷹架(功能清單、儲存庫、進度文件)。
+- **結構化狀態管理** —— 保留機器可讀的產物(例如 JSON 功能清單、進度檔),讓全新的上下文視窗能迅速掌握工作狀態。
+- **漸進式拆解** —— 讓代理**一次只做一個功能**,而非想一次做完整個東西、結果做到一半就用光上下文。
+- **環境清理** —— 要求代理用具描述性的訊息把進度提交到 git,留下人能直接接手的乾淨狀態。
+- **明確驗證** —— 在宣布功能完成前強制端到端測試;沒有證據就別相信模型說的「能跑」。
+- **工作階段啟動程序** —— 每個工作階段先讀進度檔、檢視 git 歷史、跑基本檢查,再開始新工作。
+
+這就是考綱中工具設計、可靠性與上下文管理主題的「正式環境加強版」。
+
+---
+
+# 第 16 章:Loop Engineering(迴圈工程)
+
+> *進階 —— 超出官方考綱。* 來源:[The New Stack — Loop engineering](https://thenewstack.io/loop-engineering/);Anthropic — Building Effective Agents(evaluator–optimizer)與 Effective harnesses。
+
+當代理越來越強,最高槓桿的設計從「**寫出完美的一次性提示**」轉移到「**設計代理所處的迴圈**」——「不再寫提示,改寫迴圈」。迴圈(模型 → 工具呼叫 → 回饋 → 重複)就是你要工程化的單位。
+
+## Generator–evaluator(GAN 式)迴圈
+
+迴圈裡最關鍵的選擇:**把產出工作的代理,與檢查工作的代理分開。** 模型評自己的輸出太寬鬆 —— 它會為自己的錯誤找理由。一個帶不同指令、上下文乾淨的**獨立評估者**,能抓出產生者自我說服而忽略的失誤。這就是把 **evaluator–optimizer** 模式(第 14 章)當成核心迴圈來用,而它正好對應一般軟體生命週期 —— 程式碼審查與 QA 扮演評估者的角色。
+
+## 讓迴圈有效運作
+
+- 給評估者**明確、可檢核的「完成」標準** —— 模糊的標準會產生雜訊迴圈。
+- 讓評估者的上下文**保持新鮮、獨立**於產生者的推理。
+- 與 **harness**(第 15 章)搭配:驗證這一步,正是讓迴圈能自主運作而不漂移、不過早宣告成功的關鍵。
+- 知道何時停止:迴圈直到評估者通過、用盡預算,或升級給人(Domain 5)。
+
+---
+
+# 第四部分:Claude 平台完整參考(超出基礎考綱)
+
+> **範圍說明:** 第四部分是 **2026 年 Claude 平台完整功能** 的參考 —— API、工具、SDK、Managed Agents、MCP 與現代 Claude Code,供你**完整掌握 Claude**,而非只為通過考試。其中**大多超出官方 Foundations 考綱**(部分甚至在考試明列的範圍外清單上)。每章都附官方文件。引用的現役模型:旗艦 **Claude Fable 5**(`claude-fable-5`);預設 Opus **Claude Opus 4.8**(`claude-opus-4-8`);以及 **Sonnet 4.6**、**Haiku 4.5**。
+
+---
+
+# 第 17 章:思考、Effort 與推理控制
+
+> *參考 —— 超出考綱。* 文件:[Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) · [Effort](https://platform.claude.com/docs/en/build-with-claude/effort)。
+
+現代 Claude 模型會先思考再作答。你用兩個旋鈕控制「思考多少」:
+
+- **自適應思考(adaptive thinking)** —— `thinking: {type: "adaptive"}`。模型自行決定何時、思考多少,並自動在工具呼叫之間穿插思考。這是 Claude 4.6+ 的現行做法。
+- **Effort** —— `output_config: {effort: "low" | "medium" | "high" | "xhigh" | "max"}`。控制推理深度**與**整體 token 花費。Opus 4.8 預設 `high`;**`xhigh`** 是程式/代理工作的甜蜜點;`low` 用於便宜或延遲敏感的任務。
+
+**舊做法已淘汰。** 固定的 `thinking: {type: "enabled", budget_tokens: N}` **在 Opus 4.7/4.8 與 Fable 5 上已棄用並回傳 400** —— 改用自適應思考 + effort。(更舊的模型仍用 `budget_tokens`,且須 `< max_tokens`。)
+
+**看見推理。** 在 Opus 4.7/4.8 與 Fable 5 上,`thinking.display` 預設為 `"omitted"`(思考區塊回傳為空)。設 `thinking: {type: "adaptive", display: "summarized"}` 可串流可讀的摘要。
+
+**Task budgets(進階)。** `output_config: {task_budget: {type: "tokens", total: N}}` 給模型一個「整個代理迴圈」的 token 上限 —— 它會看到倒數並自我調配以優雅收尾(有別於 `max_tokens` 這個模型看不到、強制的單次回應上限)。Beta `task-budgets-2026-03-13`;Fable 5 / Opus 4.8 / 4.7。
+
+---
+
+# 第 18 章:Prompt Caching(提示快取)
+
+> *參考 —— 考試只要求「知道它存在」;這裡給你實用知識。* 文件:[Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)。
+
+快取會跨請求重用穩定的提示前綴,以降低成本(約 90%)與延遲。
+
+**一切的根本規則:** 快取是**前綴比對** —— 前綴中**任何位置**有一個位元組改變,其後全部失效。算繪順序是 **`tools` → `system` → `messages`**,因此把穩定內容放前面、把易變內容(時間戳、每請求 ID、會變的問題)放最後。
+
+- 在最後一個穩定區塊上以 `cache_control: {type: "ephemeral"}` 標記中斷點(5 分鐘 TTL;`{..., ttl: "1h"}` 為一小時)。每請求最多 **4** 個中斷點。
+- **成本:** 快取讀取約 0.1× 輸入價;寫入約 1.25×(5m)或 2×(1h)。在 5 分鐘 TTL 下約 2 次請求即回本。
+- **驗證:** 看 `usage.cache_read_input_tokens` —— 若在相同前綴的多次請求間為 0,代表有**無聲失效**:系統提示裡的 `datetime.now()`/UUID、未排序的 `json.dumps()`,或會變動的工具集。
+- **不要**在對話中途換工具或換模型 —— 兩者都會讓整個快取失效。
+
+---
+
+# 第 19 章:結構化輸出與 Strict Tool Use
+
+> *參考 —— 超出考綱(考試涵蓋 `tool_use` JSON 結構描述;這是正式功能)。* 文件:[Structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)。
+
+兩個功能可保證機器可讀的輸出:
+
+- **結構化輸出** —— `output_config: {format: {type: "json_schema", schema: {...}}}` 會約束**回應**符合你的結構描述(constrained decoding),使文字區塊永遠是符合結構描述的 JSON。優先用 `client.messages.parse()`(自動驗證並回傳型別化物件)。舊的頂層 `output_format` 參數**已棄用** —— 改用 `output_config.format`。
+- **Strict tool use** —— 在工具定義上設 `strict: true`,保證 `tool_use.input` **完全**符合結構描述(需 `additionalProperties: false` + `required`)。這是第 2 章 `tool_use` 結構描述的強制版。
+
+**何時用哪個:** 模型該**呼叫函式**時用 strict tool use;模型的**最終答案**須為 JSON 時用結構化輸出。兩者可並用。
+
+**結構描述限制:** 不支援遞迴結構描述、數值(`minimum`/`maximum`)或字串長度限制,且 `additionalProperties` 必須為 `false`。**與 citations 不相容。** 新結構描述有一次性編譯成本,之後快取 24 小時。
+
+---
+
+# 第 20 章:伺服器端與進階工具
+
+> *參考 —— 超出考綱。* 文件:[Tool use overview](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview)。
+
+除了你自訂的工具,Claude 還提供內建與進階的工具模式:
+
+**工具使用模式**
+- **平行工具呼叫**(預設)—— 單一助理回合可發出多個 `tool_use` 區塊;並行執行後,把**所有** `tool_result` 放進**單一**使用者訊息回傳(拆開會訓練模型不再平行化)。
+- **Tool runner**(SDK 輔助)—— 自動驅動「呼叫 → 執行 → 迴圈」(Python `@beta_tool` + `tool_runner`,TS `betaZodTool` + `toolRunner`),不必手寫代理迴圈。
+- **Programmatic tool calling(PTC)** —— Claude 從 **code execution 內部**呼叫你的工具;中間結果留在執行中的腳本裡(不進上下文視窗),只有最終輸出回傳。對長工具鏈可大幅省 token。
+
+**伺服器端工具**(在 Anthropic 基礎設施執行 —— 只要在 `tools` 宣告):
+- **Web search**(`web_search_20260209`)—— 即時搜尋,附引用與動態過濾。
+- **Web fetch**(`web_fetch_20260209`)—— 擷取/解析對話中已出現的特定 URL。
+- **Code execution**(`code_execution`)—— 沙箱 Python/bash 容器(預裝資料科學套件;容器可重用約 30 天)。與 web 工具併用時免費。
+- **Tool search**(`tool_search_tool_regex` / `_bm25`)—— 從大型工具庫按需探索工具;其餘標 `defer_loading: true`。結構描述以**附加**方式載入,可保留快取。
+
+**用戶端 / Anthropic 定義工具**(由你執行):
+- **Bash**(`bash_20250124`)與 **text editor**(`text_editor_20250728`)—— 無結構描述;有參考實作;請沙箱化。
+- **Memory tool**(`memory_20250818`)—— Claude 讀寫 `/memories` 目錄做跨工作階段狀態;後端由你實作。
+- **Computer use** —— 螢幕截圖 + 滑鼠/鍵盤操控 GUI(beta)。
+- **Advisor**(`advisor_20260301`,beta)—— 把較便宜的執行模型與較聰明的顧問模型配對,在生成中諮詢(顧問模型須 ≥ 執行模型)。
+
+---
+
+# 第 21 章:長上下文技術(Compaction、Context Editing、記憶)
+
+> *參考 —— 超出考綱。* 文件:[Compaction](https://platform.claude.com/docs/en/build-with-claude/compaction) · [Context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing)。
+
+對於跑得夠久、會壓迫上下文視窗的代理,有三種不同的 API 機制(別搞混):
+
+- **Compaction(壓縮)** —— 接近上限時在伺服器端**摘要**較早的歷史,再從摘要繼續。Beta `compact-2026-01-12`(`context_management.edits: [{type: "compact_20260112"}]`)。**關鍵:** 下次請求要把整個 `response.content`(含 compaction 區塊)接回去,否則會遺失壓縮狀態。
+- **Context editing(上下文編輯)** —— **清除**(非摘要)過時內容:`clear_tool_uses_20250919` 丟掉舊工具結果,`clear_thinking_20251015` 丟掉思考區塊。Beta `context-management-2025-06-27`。當舊工具輸出已成負擔時使用。
+- **記憶(跨工作階段)** —— memory tool(第 20 章)或 Managed Agents 的 **memory stores** 把資訊存在視窗**之外**,跨上下文重置與整個工作階段都能留存。
+
+**如何選:** context editing 在單一工作階段內修剪;compaction 在接近上限時摘要;記憶則跨工作階段留存。長時間代理常三者並用(再加上 prompt caching,第 18 章)。
+
+---
+
+# 第 22 章:文件與多模態輸入
+
+> *參考 —— 考試把 Vision 與 token counting 列為範圍外;這是給實務用。* 文件:[Files API](https://platform.claude.com/docs/en/build-with-claude/files) · [PDF support](https://platform.claude.com/docs/en/build-with-claude/pdf-support)。
+
+- **Files API**(beta `files-api-2025-04-14`)—— 檔案上傳一次,之後跨多個請求以 `file_id` 引用,不必重送位元組。(Bedrock/Vertex 不支援。)
+- **Vision(視覺)** —— `{"type": "image", "source": {...}}` 內容區塊(base64、URL 或 `file_id`);JPEG/PNG/GIF/WebP。Opus 4.7+ 支援高解析度影像(長邊最高 2576px)且座標與像素 1:1,對 computer use 與文件理解很有用。
+- **PDF 輸入** —— `{"type": "document", ...}` 區塊原生處理 PDF(文字**與**視覺版面);base64(免 beta)或透過 Files API;最多約 600 頁 / 32MB。
+- **Citations(引用)** —— 在文件上設 `citations: {enabled: true}`,回應會帶 `cited_text` 與字元/頁碼位置,提供可驗證、有根據的答案。(與結構化輸出不相容。)
+- **Token counting** —— `count_tokens` 端點在送出**前**給你精確、模型專屬的計數。切勿用 `tiktoken` 估算 Claude 的 token(那是 OpenAI 的 tokenizer,對 Claude 不準)。
+
+---
+
+# 第 23 章:Claude Agent SDK
+
+> *參考 —— 超出考綱。* 文件:[Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview)。
+
+**Claude Agent SDK**(Python `claude-agent-sdk`、TypeScript `@anthropic-ai/claude-agent-sdk`)就是**把 Claude Code 當函式庫** —— 同一套內建工具、代理迴圈與上下文管理,可從你自己的程式碼呼叫。(前身為「Claude Code SDK」;`claude -p` 是它的 CLI 形式。)
+
+- **代理迴圈** —— 蒐集脈絡 → 採取行動(工具)→ 驗證 → 重複,直到完成。SDK 在**你的行程內**跑這個迴圈,你不必手寫。
+- **內建工具** —— Read/Write/Edit/Bash/Grep/Glob 等,開箱即用。
+- **子代理** —— 用 `AgentDefinition` 做隔離/平行/專門工作,保護主上下文。
+- **Hooks** —— 生命週期回呼(PreToolUse、PostToolUse、工作階段起訖、compaction),可記錄、封鎖、修改或把關動作。
+- **Sessions** —— 持久狀態;以完整脈絡恢復,或分叉以探索替代方案。
+- **MCP 與權限** —— 宣告 MCP 伺服器;以自訂回呼做每工具 allow/deny/ask(人在迴路)。
+
+**三種介面,一套心智模型:** **Client SDK**(`anthropic`)= 原始 Messages API,迴圈你自己寫。**Agent SDK** = 迴圈 + 工具在**你的**行程內跑。**Managed Agents**(第 24 章)= Anthropic 託管迴圈**與**沙箱。依「誰跑迴圈、誰提供算力」來選。
+
+---
+
+# 第 24 章:Managed Agents(託管代理)
+
+> *參考 —— 超出考綱。* 文件:[Managed Agents overview](https://platform.claude.com/docs/en/managed-agents/overview)。Beta 標頭 `managed-agents-2026-04-01`。
+
+**Managed Agents** 由 Anthropic 託管:Anthropic 跑代理迴圈,**並**為每個工作階段配置一個容器,讓代理的工具(bash、檔案操作、程式執行)在其中執行。你提供設定並驅動事件串流。
+
+**物件模型(請記牢):**
+- **Agent**(`/v1/agents`)—— *持久、有版本* 的設定:`model`、`system`、`tools`、`mcp_servers`、`skills`。**建立一次,以 ID 引用。**
+- **Session**(`/v1/sessions`)—— 一次執行,以 ID 引用某 agent + 一個環境。**每次執行都建。**
+- **Environment**(`/v1/environments`)—— 可重用的容器範本。
+
+> ⚠️ **第一守則:** `model`/`system`/`tools` 放在 **agent** 上,絕不放在 session;session 只拿指標(`agent: {id, version}`)。在初始化時建立 agent 一次並重用其 ID —— 每次執行都 `agents.create()` 是典型反模式。
+
+**主要能力:**
+- **Events 與串流** —— SSE 串流(`agent.message`、`agent.thinking`、`agent.tool_use`、`session.status_*`);**先開串流再送訊息**,並以去重方式重連(SSE 無重播)。
+- **多代理** —— `multiagent: {type: "coordinator", agents: [...]}`;協調者委派給共用容器的子代理*執行緒(threads)*。
+- **Outcomes** —— 送 `user.define_outcome` 事件附評分標準;獨立評分者跑「迭代 → 評分 → 修訂」直到通過。
+- **Memory stores** —— 工作區範圍的持久文件,掛載進容器、跨工作階段留存(有版本、可遮蔽)。
+- **Vaults** —— 憑證庫(MCP OAuth 自動更新、靜態 bearer、環境變數祕密);祕密在 egress 注入,沙箱內永遠看不到。
+- **Scheduled deployments** —— 以 cron 自動觸發工作階段(這就是雲端「routines」的底層)。
+- **Self-hosted sandboxes** —— `config: {type: "self_hosted"}` 讓工具在**你的**基礎設施執行(用一個對外輪詢的 worker);迴圈仍由 Anthropic 跑。
+- **Webhooks** —— 以 HMAC 簽章的狀態變更通知,取代一直掛著串流。
+
+---
+
+# 第 25 章:MCP 深入
+
+> *參考 —— 延伸第 4 章。* 文件:[Model Context Protocol](https://modelcontextprotocol.io/) · [MCP connector](https://platform.claude.com/docs/en/agents-and-tools/mcp-connector)。
+
+- **基本元件**(複習)—— **Tools**(模型叫用的動作)、**Resources**(唯讀脈絡資料)、**Prompts**(可重用範本)。MCP 是開放的 JSON-RPC 2.0 標準 ——「AI 的 USB-C」。
+- **傳輸** —— **stdio**(本機子行程)與 **Streamable HTTP**(POST + SSE)是兩種標準;舊的純 SSE 傳輸已棄用。
+- **授權** —— HTTP 伺服器用 OAuth 2.0;stdio 用環境變數憑證。
+- **MCP connector(Messages API)** —— 讓 Claude 直接在伺服器端呼叫**遠端** MCP 伺服器、不需本機用戶端:傳 `mcp_servers: [{type:"url", name, url}]` **並**附對應的 `tools: [{type:"mcp_toolset", mcp_server_name}]`。Beta `mcp-client-2025-11-20`。(兩半都要 —— 只給 `mcp_servers` 會被拒。)
+- **Managed Agents 的憑證** —— MCP 驗證透過 **vaults**(第 24 章)提供,不放在 agent 的 `mcp_servers` 區塊;Anthropic 以 URL 比對憑證並自動更新 OAuth。
+- **Claude Code** —— `claude mcp add/list/remove`、`.mcp.json`(專案)vs `~/.claude.json`(使用者)、`/mcp` 做工作階段內 OAuth,以及 **MCP tool search** 延遲載入工具以節省上下文。
+
+---
+
+# 第 26 章:現代 Claude Code(2026)
+
+> *參考 —— 超出考綱。* 文件:[Claude Code docs](https://code.claude.com/docs/en/overview) · [What's new](https://code.claude.com/docs/en/whats-new)。
+
+Claude Code 現在是**多介面**(終端機、VS Code、JetBrains、桌面 app、web/iOS、Slack、Chrome),共用同一引擎,因此 CLAUDE.md、設定、skills 與 MCP 跨介面通用。一般指南常漏掉的 2026 重要能力:
+
+- **動態 workflows + `ultracode`** —— Claude 自己寫一支 JavaScript 腳本,在背景編排**數十至數百**個子代理(上限:同時 16 / 總計 1,000);`/effort ultracode` 啟用自動編排。*誰握有計畫:* 子代理/skills → Claude 逐回合;**agent teams** → 主導者透過共享任務清單;**workflows** → 腳本(只有最終答案進上下文)。
+- **Fork 子代理 / `context: fork`** —— 繼承父對話而非從頭開始;`isolation: worktree` 讓子代理的編輯在用後即丟的 git worktree 裡進行。
+- **Checkpoints / `/rewind`** —— 每次編輯前自動建檢查點;可還原程式碼/對話/兩者。**限制:** 它**不**追蹤 bash 改動或外部/並行的檔案變更 —— 不是 Git 的替代品。
+- **Auto memory** —— Claude 把自己的機器本地學習寫進 `MEMORY.md`,每次工作階段重新載入(有別於手寫的 CLAUDE.md)。
+- **CI 用無頭模式** —— `-p`/`--print`、`--output-format json`、**`--json-schema`**(符合結構描述的 `structured_output`),以及 **`--bare`**(略過自動探索以求確定性;預計將成為 `-p` 預設)。
+- **權限模式** —— `default`/`acceptEdits`/`plan`/`bypassPermissions`,外加較新的 **`auto`**(伺服器端安全分類器)與 **`dontAsk`**(僅唯讀/預先核准)。
+- **MCP tool search 與 managed MCP** —— 延遲載入 MCP 工具以省上下文;組織級 `managed-mcp.json`;可從 shell `claude mcp login`。
+- **Output styles、effort 等級、plugins、擴充的 hooks** —— `/output-style` 人格;`/effort`(含 `xhigh`/`ultracode`);plugin marketplace 打包 skills/agents/hooks/MCP;許多新 hook 事件(如 `SubagentStart`、`PreCompact`、`SessionEnd`)。
+- **排程與遠端** —— 雲端 **routines**(cron)、**channels**(把外部事件推進工作階段)、以及從其他裝置的**遠端控制**。
+
+---
+
+# 第 27 章:Agent 的 Evals(評測)
+
+> *參考 —— 超出考綱,但實務上不可或缺。* 文件:[Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)。
+
+無法量測就無法改進(也無法安全上線)。Evals 就是代理的測試套件。
+
+- **三種評分者** —— **程式碼**(確定性檢查:有沒有編譯過?JSON 驗證過嗎?)、**模型**(「LLM 當裁判」依評分標準評開放式品質)、**人**(模糊案例的黃金標準;用來校準前兩者)。
+- **同時評「結果」與「軌跡」** —— 不只「最終答案對不對」,還要「路徑合不合理」(用了哪些工具、順序、幾個回合)。靠壞路徑得到的對答案,下一個任務就會壞。
+- **處理不確定性** —— 代理每次跑都會變;用 **pass@k**(k 次內成功嗎?)並跑多次,而非只看單次。
+- **真實任務** —— 用有代表性、端到端的任務評測(最好取自正式流量),而非玩具提示。
+- **為何值得** —— 紮實的 eval 集讓你能在數天內升級模型、在問題進到使用者前抓到回歸,並以證據(而非感覺)調 `effort`/提示/工具。沒有 evals,bug 會在正式環境才浮現。
+
+這是 generator–evaluator 迴圈(第 16 章)與 harness 驗證步驟(第 15 章)背後的量測層。
+
+---
+
+# 第 28 章:模型陣容與選擇(2026)
+
+> *參考 —— 考試把模型比較列為範圍外;這是給實際開發用。* 文件:[Models overview](https://platform.claude.com/docs/en/about-claude/models/overview) · 以 [Models API](https://platform.claude.com/docs/en/api/models) 即時查詢。
+
+現役模型(2026 年中):
+
+| 模型 | API ID | 上下文 | 最大輸出 | 輸入 / 輸出 ($/MTok) | 適用 |
+|---|---|---|---|---|---|
+| **Claude Fable 5** | `claude-fable-5` | 1M | 128K | $10 / $50 | 最難的推理與長程代理工作(旗艦) |
+| **Claude Opus 4.8** | `claude-opus-4-8` | 1M | 128K | $5 / $25 | 複雜/代理任務的預設 |
+| **Claude Sonnet 4.6** | `claude-sonnet-4-6` | 1M | 64K | $3 / $15 | 速度/智慧最佳平衡;大量使用 |
+| **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | 快速、便宜、簡單/延遲關鍵任務 |
+
+- **如何選:** 複雜工作從 **Opus 4.8** 起步;**Sonnet 4.6** 是量/成本甜蜜點;**Haiku 4.5** 求速度/成本;**Fable 5** 只在需要絕對天花板時用(高價)。
+- **模型 ID 是釘選快照。** 自 4.6 世代起,ID 無日期但仍是釘選(如 `claude-opus-4-8`);更舊的以日期別名解析。
+- **舊版(仍可用):** Opus 4.7/4.6、Sonnet 4.5、Opus 4.5。**已棄用:** Opus 4.1(2026-08-05 退役)。務必及早遷離將退役的模型。
+- **別寫死假設** —— 用 **Models API**(`max_input_tokens`、`max_tokens`、`capabilities`)在執行期查詢上下文視窗與功能支援,因為陣容會變。
 
 ---
 
