@@ -1586,33 +1586,62 @@ Notice Claude *intended* to roll back directly; the **server's guard denied it d
 
 # Chapter 5: Claude Code — Configuration and Workflows
 
-> Documentation: [Claude Code](https://code.claude.com/docs/en/overview) | [Memory / CLAUDE.md](https://code.claude.com/docs/en/memory) | [Skills](https://code.claude.com/docs/en/skills) | [MCP](https://code.claude.com/docs/en/mcp) | [Hooks](https://code.claude.com/docs/en/hooks) | [Sub-agents](https://code.claude.com/docs/en/sub-agents) | [GitHub Actions](https://code.claude.com/docs/en/github-actions) | [Headless](https://code.claude.com/docs/en/headless)
+> Documentation: [Claude Code](https://code.claude.com/docs/en/overview) | [Memory / CLAUDE.md](https://code.claude.com/docs/en/memory) | [Skills](https://code.claude.com/docs/en/skills) | [MCP](https://code.claude.com/docs/en/mcp) | [Hooks](https://code.claude.com/docs/en/hooks) | [Sub-agents](https://code.claude.com/docs/en/sub-agents) | [Settings](https://code.claude.com/docs/en/settings) | [GitHub Actions](https://code.claude.com/docs/en/github-actions) | [Headless](https://code.claude.com/docs/en/headless)
+
+Chapters 3 and 4 built agents *programmatically* — the loop, subagents, hooks, and MCP as code you write. **Claude Code is the same machinery delivered as a tool you configure**, not a library you call. The skill the exam tests here is **configuration**: putting the right instruction in the right file, scoping rules so they load only when relevant, gating dangerous tools deterministically, and wiring Claude Code into a team's CI. This chapter is the backbone of **Domain 3 — Claude Code Configuration and Workflows (20% of the exam)** — the second-largest domain after agent orchestration.
+
+By the end you should be able to reason about six pillars and assemble them into a team-ready setup:
+
+- **The CLAUDE.md hierarchy** (§5.1–5.3) — where instructions live, how `@path` imports modularize them, and how `.claude/rules/` loads conventions *conditionally*.
+- **Reusable workflows** (§5.4–5.5) — custom slash commands and Skills, including `context: fork` isolation and `allowed-tools` restriction.
+- **Settings, permissions, and hooks** (§5.6) — `settings.json` precedence, per-tool allow/ask/deny, and lifecycle hooks for deterministic enforcement.
+- **Planning vs direct execution** (§5.7) — when to investigate-then-approve and when to just do it.
+- **Context and session management** (§5.8, §5.10) — `/compact`, `/memory`, `--resume`, and `fork_session`.
+- **CI/CD integration** (§5.9) — headless `-p`, structured JSON output, and review-session isolation.
+
+§5.11 then assembles a complete **team-onboarding configuration** end-to-end — hierarchy, rules, a skill, an MCP server, a permission hook, and CI — and §5.12 distills what the exam tests.
 
 ## 5.1 The CLAUDE.md Hierarchy
 
-CLAUDE.md is the instruction file(s) for Claude Code. There is a three-level hierarchy:
+CLAUDE.md is the instruction file(s) Claude Code loads automatically at startup and injects as context for every turn. There is a three-level hierarchy, and **all applicable levels are merged**, not overridden:
 
 ```
 1. User-level: ~/.claude/CLAUDE.md
-   - Applies only to that user
+   - Applies only to that user, on that machine
    - NOT shared via VCS
-   - Personal preferences and working style
+   - Personal preferences and working style (e.g., "explain in Chinese")
 
 2. Project-level: .claude/CLAUDE.md or a root CLAUDE.md
    - Applies to all project contributors
-   - Managed via VCS
+   - Managed via VCS (committed, reviewed, shared)
    - Coding standards, testing standards, architectural decisions
 
 3. Directory-level: CLAUDE.md in subdirectories
-   - Applies when working with files in that directory
+   - Applies when working with files in that directory (loaded on demand)
    - Conventions specific to that part of the codebase
 ```
 
-**Common mistake:** a new team member does not receive project instructions because they were placed in `~/.claude/CLAUDE.md` (user-level) instead of `.claude/CLAUDE.md` (project-level).
+**Why a hierarchy at all.** The three levels separate three audiences with three lifecycles: *you* (personal, never shared), *the team* (versioned, reviewed like code), and *a subtree* (local conventions that would be noise everywhere else). Putting an instruction at the wrong level is the single most common Claude Code misconfiguration the exam probes.
+
+```mermaid
+flowchart TD
+    Start[Claude Code starts a turn] --> U[Load user CLAUDE.md<br/>personal preferences]
+    U --> P[Load project CLAUDE.md<br/>team standards]
+    P --> Q{Editing a file in<br/>a subdirectory?}
+    Q -->|yes| D[Also load that<br/>directory CLAUDE.md]
+    Q -->|no| Skip[Skip directory level]
+    D --> Merge[Merge all levels<br/>into the context]
+    Skip --> Merge
+    Merge --> Run[Claude acts with<br/>combined instructions]
+```
+
+**Common mistake (exam-favorite):** a new team member does not receive the project's standards because someone placed them in `~/.claude/CLAUDE.md` (user-level, never committed) instead of `.claude/CLAUDE.md` (project-level, in VCS). The diagnostic question to memorize: *"would a fresh `git clone` on a teammate's laptop see this instruction?"* If it must, it belongs at the **project** level. If it's a personal habit that shouldn't be imposed on others, it belongs at the **user** level.
+
+**Exam angle:** distinguish *who* each level serves. Personal style → user. Team contract → project (committed). Subtree-only convention that would be noise elsewhere → directory.
 
 ## 5.2 `@path` Syntax (File Imports)
 
-CLAUDE.md can reference external files using `@path`, making configuration modular:
+A large CLAUDE.md becomes hard to review and duplicates content across packages. CLAUDE.md can reference external files using `@path`, making configuration modular:
 
 ```markdown
 # Project CLAUDE.md
@@ -1623,12 +1652,16 @@ Project overview is in @README.md and dependencies are in @package.json
 ```
 
 **Rules for `@path`:**
-- Use `@` immediately before the file path (no space)
-- Relative and absolute paths are supported
-- Relative paths are resolved relative to the file that contains the import
-- Maximum import nesting depth is 5
+- Use `@` immediately before the file path (no space).
+- Relative and absolute paths are supported.
+- Relative paths are resolved relative to the file that contains the import.
+- Maximum import nesting depth is 5 (an imported file may itself import, up to five levels).
 
-This avoids duplication and lets each package include only relevant standards.
+**Why this matters.** Imports give you one canonical source per standard. A monorepo can keep `standards/testing.md` once and have each package's CLAUDE.md pull in only the standards it actually needs — the `web/` package imports the React rules, the `api/` package imports the service rules, neither carries the other's noise. It also lets you reuse existing project files as context (`@README.md`, `@package.json`) instead of paraphrasing them into CLAUDE.md, where the paraphrase drifts out of date.
+
+**Pitfalls:** a space after `@` breaks the import (it becomes literal text); a relative path is resolved from the *importing file's* directory, not the repo root, so moving a CLAUDE.md can silently break its imports; and the depth-5 limit means deeply chained imports can be cut off without an obvious error.
+
+**Exam angle:** when a question asks how to avoid duplicating the same testing standard across ten packages, the answer is `@path` imports to a single shared file — not copy-paste, and not one giant root CLAUDE.md.
 
 ## 5.3 The `.claude/rules/` Directory
 
@@ -1664,19 +1697,25 @@ Do not mock the database—use a test database.
 ```
 
 **How it works:**
-- A rule is loaded **only** when Claude Code edits a file matching the `paths` pattern
-- This saves context and tokens—irrelevant rules are not loaded
-- Glob patterns let you apply conventions by file type regardless of location (ideal for tests scattered across the codebase)
+- A rule is loaded **only** when Claude Code touches a file matching the `paths` glob.
+- This saves context and tokens — irrelevant rules are never loaded, so the model's window stays focused on what it's editing.
+- Glob patterns let you apply conventions by *file type* regardless of *location* (ideal for tests scattered across the codebase).
+
+**Why conditional loading beats one big file.** Every line of CLAUDE.md is paid for on *every* turn, whether or not it's relevant. A 600-line monolith spends context describing Terraform conventions while you're editing CSS. Path-scoped rules invert this: the Terraform rule is invisible until you open a `.tf` file, then it appears exactly when it can help. This is the same "load only what's relevant" principle behind MCP resources (Chapter 4) and tool-search — context is a budget, and rules let you spend it on demand.
 
 **When to use `.claude/rules/` with `paths` vs directory-level CLAUDE.md:**
-- `.claude/rules/` with `paths` — when conventions apply to files spread across many directories (tests, migrations)
-- Directory-level CLAUDE.md — when conventions are tied to a specific directory and are not needed elsewhere
+- `.claude/rules/` with `paths` — when conventions apply to files **spread across many directories** (tests, migrations, `*.tf`). A glob like `**/*.test.ts` catches them all regardless of where they live.
+- Directory-level CLAUDE.md — when conventions are **tied to one specific directory** and not needed elsewhere.
+
+**Pitfall:** writing a directory-level CLAUDE.md for tests when test files live in dozens of folders — you'd have to copy it into each. The glob rule is the maintainable choice. Conversely, a glob rule for something that only ever applies to one folder is over-engineering; a directory CLAUDE.md is simpler.
+
+**Exam angle:** "conventions span many directories by file type" → path-scoped rule with a glob. "Convention belongs to one folder" → directory CLAUDE.md.
 
 ## 5.4 Custom Slash Commands and Skills
 
-> **Note:** in the current Claude Code version, custom commands (`.claude/commands/`) are unified with skills (`.claude/skills/`). Both formats create `/name` commands. The exam guide references `.claude/commands/`—that format is still supported.
+> **Note:** in the current Claude Code version, custom commands (`.claude/commands/`) are unified with skills (`.claude/skills/`). Both formats create `/name` commands. The exam guide references `.claude/commands/` — that format is still supported.
 
-Slash commands are reusable prompt templates invoked via `/name`:
+Slash commands are **reusable prompt templates** invoked via `/name`. Instead of re-typing "review this diff for security issues, check the OWASP top 10, and report inline," you save it once and invoke `/review`.
 
 **`.claude/commands/` format (legacy, supported):**
 
@@ -1695,16 +1734,20 @@ Slash commands are reusable prompt templates invoked via `/name`:
 ```
 
 **Project commands** (`.claude/commands/` or `.claude/skills/`):
-- Stored in VCS and available to everyone when cloning the repo
-- Ensure consistent workflows across the team
+- Stored in VCS and available to everyone when they clone the repo.
+- Ensure **consistent workflows** across the team — every developer's `/review` does the same thing.
 
 **User commands** (`~/.claude/commands/` or `~/.claude/skills/`):
-- Personal commands not shared via VCS
-- For individual workflows
+- Personal commands not shared via VCS.
+- For individual workflows you don't want to impose on teammates.
+
+**Why this is a configuration concern, not just convenience.** A slash command turns an *ad-hoc instruction* into a *versioned artifact*. Once `/review` lives in the repo, the review prompt is reviewed like any other code, improves over time, and can't drift between engineers. That is exactly the team-consistency property the exam rewards.
+
+**Exam angle:** "everyone on the team should run the same review/test workflow" → project command in `.claude/` (committed). "My personal shortcut" → user command in `~/.claude/`.
 
 ## 5.5 Skills — `.claude/skills/`
 
-Skills are advanced commands configured via SKILL.md frontmatter:
+Skills are advanced commands configured via SKILL.md frontmatter — the upgrade path from a plain prompt template to a *governed* one:
 
 ```yaml
 ---
@@ -1721,61 +1764,157 @@ Output a report on dependencies and architectural patterns.
 
 | Parameter | Description |
 |---|---|
-| `context: fork` | Runs the skill in an isolated subagent. Verbose output does not pollute the main session |
-| `allowed-tools` | Restricts which tools are available (security—e.g., the skill cannot delete files if not allowed) |
-| `argument-hint` | Hint that asks for an argument when invoked without parameters |
+| `context: fork` | Runs the skill in an **isolated subagent**. Its verbose output does not pollute the main session — only the final result returns (the same isolation as the Agent SDK's `Task`, §3.4). |
+| `allowed-tools` | Restricts which tools are available. Security boundary: a read-only analysis skill given only `["Read","Grep","Glob"]` *cannot* write or delete files even if the prompt is manipulated. |
+| `argument-hint` | Hint shown when the command is invoked without parameters, prompting the user for the required argument. |
+
+**Why `context: fork` is the headline feature.** An analysis skill might read 40 files and print pages of output. In the main session that buries your working context; forked, the noise is contained and you get back a one-paragraph summary. This is the Skill-level equivalent of the Explore subagent (§5.7) — context isolation as a first-class, declarative setting.
+
+**Why `allowed-tools` is a real security control.** It is the least-privilege principle (§3.2) applied to a workflow: the *capabilities* are fixed in the frontmatter, in code, not negotiated in the prompt. A skill that can only read is safe to run on untrusted input because no prompt can grant it write access it was never given.
 
 **When to use a skill vs CLAUDE.md:**
-- **Skill** — on-demand invocation for a specific task (review, analysis, generation)
-- **CLAUDE.md** — always-loaded general standards and conventions
+- **Skill** — *on-demand* invocation for a specific task (review, analysis, generation). You run it when you want it.
+- **CLAUDE.md** — *always-loaded* general standards and conventions. It applies to every turn whether you ask or not.
 
-**Personal skills (`~/.claude/skills/`):**
-- Create personal variants under different names so you don't affect teammates
+**Personal skills (`~/.claude/skills/`):** create personal variants under different names so you don't affect teammates.
 
-## 5.6 Planning Mode vs Direct Execution
+**Pitfall:** putting a heavyweight, occasional task (a full architecture audit) into CLAUDE.md so it's "always available" — that wastes context on every turn. The audit belongs in a `context: fork` skill you invoke when needed.
+
+**Exam angle:** "isolate a verbose skill's output from the main session" → `context: fork`. "Stop a skill from deleting files" → `allowed-tools`. "Run a task only when asked" → skill, not CLAUDE.md.
+
+## 5.6 Settings, Permissions, and Hooks
+
+Instructions tell the model what to *do*; **`settings.json` and permissions control what it is *allowed* to do**, and **hooks make some rules deterministic**. This is where Claude Code stops being a polite assistant and becomes a governed tool — the exam treats it as the safety layer.
+
+**`settings.json` precedence.** Settings come from three files, applied in increasing priority:
+
+```
+1. User settings:    ~/.claude/settings.json        (your machine, all projects)
+2. Project settings: .claude/settings.json          (committed, shared with the team)
+3. Local overrides:  .claude/settings.local.json     (per-developer, git-ignored)
+```
+
+A higher-priority file overrides the same key in a lower one. The pattern to remember: **commit `.claude/settings.json` for the team contract; keep personal tweaks in `.claude/settings.local.json` (git-ignored) so they don't leak into the shared config.**
+
+**Permissions: per-tool allow / ask / deny.** Permissions live in `settings.json` and gate individual tools and even tool arguments:
+
+```json
+{
+  "permissions": {
+    "allow": ["Read", "Grep", "Glob", "Bash(npm test:*)"],
+    "ask":   ["Edit", "Write"],
+    "deny":  ["Bash(rm -rf:*)", "Bash(git push:*)"]
+  }
+}
+```
+
+- **allow** — runs without prompting (safe, frequent operations, e.g. running tests).
+- **ask** — prompts for confirmation before each use (human-in-the-loop for edits).
+- **deny** — blocked outright; the model cannot run it regardless of what it decides.
+
+`deny` wins over `allow`. A `deny` on `git push` means *no* prompt can talk Claude Code into pushing — it's not a strong suggestion, it's a wall.
+
+**Hooks: deterministic lifecycle enforcement.** Hooks are shell commands the harness runs at lifecycle events — `PreToolUse`, `PostToolUse`, session start/end, and compaction. The same hooks you wrote in the Agent SDK (§3.5) exist in Claude Code, configured in `settings.json`. A `PreToolUse` hook can inspect a tool call and **block** it (non-zero exit) before it runs:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/block-secrets.sh" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The script receives the tool call on stdin; if it detects, say, a command that would read `.env` or push to `main`, it exits non-zero and the action is refused — **deterministically, in code, not at the model's discretion.**
+
+**Hooks/permissions vs prompt instructions (the recurring exam theme).**
+
+| Mechanism | Guarantee | Use for |
+|---|---|---|
+| **`deny` permission / `PreToolUse` hook** | **Deterministic (100%)** | "never push to main", "never delete the database", "block secret exfiltration" |
+| **CLAUDE.md instruction** | **Probabilistic (>90%, not 100%)** | "prefer small commits", "explain reasoning", "ask before large refactors" |
+
+**Rule (identical to §3.5):** when a violation has financial, legal, security, or safety consequences, enforce it with a `deny` permission or a hook — *not* a sentence in CLAUDE.md. A model following a prompt is right most of the time; a `deny` rule is right every time.
+
+**Pitfall:** writing "Claude must never run `git push --force`" in CLAUDE.md and believing it's enforced. It isn't — it's a strong nudge. The guarantee lives in `permissions.deny` or a `PreToolUse` hook.
+
+**Exam angle:** any "guarantee this dangerous action can't happen" → permissions/hook (deterministic). Any "encourage this good habit" → CLAUDE.md (probabilistic). Personal vs shared settings → `settings.local.json` (git-ignored) vs committed `settings.json`.
+
+## 5.7 Planning Mode vs Direct Execution
 
 **Planning mode:**
-- The model only investigates and plans; it does not make changes
-- Uses Read, Grep, Glob to explore the codebase
-- Produces an implementation plan that the user approves
-- Safe exploration with no side effects
+- The model only investigates and plans; it does **not** make changes.
+- Uses Read, Grep, Glob to explore the codebase.
+- Produces an implementation plan that the user approves before any edit.
+- Safe exploration with **no side effects**.
 
 **When to use planning mode:**
-- Large changes (dozens of files)
-- Multiple plausible approaches (microservices: how to define boundaries?)
-- Architectural decisions (which framework? what structure?)
-- Unfamiliar codebase (you must understand before changing)
-- Library migrations affecting 45+ files
+- Large changes (dozens of files).
+- Multiple plausible approaches (microservices: how to define boundaries?).
+- Architectural decisions (which framework? what structure?).
+- An unfamiliar codebase (you must understand before changing).
+- Library migrations affecting 45+ files.
 
 **When to use direct execution:**
-- Single-file fixes with a clear stack trace
-- Adding one validation check
-- Well-understood, unambiguous changes
+- Single-file fixes with a clear stack trace.
+- Adding one validation check.
+- Well-understood, unambiguous changes.
 
-**Combined approach:**
-1. Planning mode for investigation and design
-2. User approves the plan
-3. Direct execution to implement the approved plan
+```mermaid
+flowchart TD
+    Task[Incoming task] --> Q1{Many files or<br/>architectural impact?}
+    Q1 -->|yes| Plan[Planning mode<br/>investigate, no edits]
+    Q1 -->|no| Q2{Clear, single-file,<br/>unambiguous fix?}
+    Q2 -->|yes| Direct[Direct execution<br/>make the change now]
+    Q2 -->|no| Plan
+    Plan --> Approve{User approves<br/>the plan?}
+    Approve -->|yes| Direct
+    Approve -->|no| Plan
+    Direct --> Done[Change applied]
+```
+
+**Why the distinction matters.** Direct execution on a sprawling, ambiguous change risks dozens of edits in the wrong direction that are expensive to unwind. Planning mode front-loads the cost into a *cheap, reversible* artifact — a written plan you can correct in one sentence before a single file is touched. Conversely, forcing a plan-and-approve cycle onto a one-line typo fix is pure overhead.
+
+**Combined approach (the exam-preferred answer):**
+1. Planning mode for investigation and design.
+2. User approves the plan.
+3. Direct execution to implement the approved plan.
 
 **Explore subagent** — a specialized subagent for exploring the codebase:
-- Isolates verbose output from the main context
-- Returns only a summary
-- Prevents context-window exhaustion in multi-phase tasks
+- Isolates verbose discovery output from the main context.
+- Returns only a summary.
+- Prevents context-window exhaustion in multi-phase tasks (the same context-isolation idea as `context: fork`, §5.5).
 
-## 5.7 The `/compact` Command
+**Pitfall:** running a 45-file migration in direct execution and discovering halfway that the approach was wrong. Plan first, approve, then execute.
 
-`/compact` is a built-in command for compressing context:
-- Summarizes prior history to free up the context window
-- Used in long investigation sessions when the context fills up with verbose tool output
-- Risk: exact numeric values, dates, and specific details can be lost during summarization
+**Exam angle:** large/ambiguous/architectural → planning mode; small/clear/single-file → direct execution; "explore a big codebase without blowing the context window" → Explore subagent.
 
-## 5.8 The `/memory` Command
+## 5.8 The `/compact` and `/memory` Commands
 
-`/memory` is a built-in command for managing memory between sessions:
-- Opens the `CLAUDE.md` file for editing, allowing you to save notes, preferences, and context
-- Information persists across sessions and is automatically loaded on startup
-- Useful for storing project conventions, user preferences, frequently used commands, and current work context
-- Alternative to re-explaining the same instructions in every session
+These two built-ins manage context *within* and *across* sessions.
+
+**`/compact` — compress the current context.**
+- Summarizes prior history to free up the context window.
+- Used in long investigation sessions when the window fills with verbose tool output.
+- **Risk:** exact numeric values, dates, and specific details can be lost during summarization. If you'll need the precise figure later, record it (in `/memory` or a note) *before* compacting.
+
+**`/memory` — persist context across sessions.**
+- Opens the `CLAUDE.md` file for editing, letting you save notes, preferences, and context.
+- Information persists across sessions and is automatically loaded on startup.
+- Useful for storing project conventions, user preferences, frequently used commands, and current work context.
+- An alternative to re-explaining the same instructions in every session.
+
+**Why both exist.** `/compact` fights the *single-session* limit — the window is finite, and verbose tool output eats it. `/memory` fights the *cross-session* limit — a new session starts blank, so anything worth keeping must be written to CLAUDE.md. One reclaims space now; the other carries knowledge forward.
+
+**Pitfall:** compacting away a value you still need. Compaction is lossy by design — treat anything not in CLAUDE.md or written down as potentially gone after `/compact`.
+
+**Exam angle:** "context window is full mid-investigation" → `/compact` (and beware lost specifics). "Stop re-explaining conventions every session" → `/memory` → CLAUDE.md.
 
 ## 5.9 Claude Code CLI for CI/CD
 
@@ -1785,9 +1924,9 @@ Output a report on dependencies and architectural patterns.
 claude -p "Analyze this pull request for security issues"
 ```
 
-- Non-interactive mode: processes the prompt, prints to stdout, exits
-- Does not wait for user input
-- The only correct way to run Claude in CI/CD pipelines
+- Non-interactive (headless) mode: processes the prompt, prints to stdout, exits.
+- Does **not** wait for user input — so it never hangs a pipeline.
+- The only correct way to run Claude Code in CI/CD.
 
 **Structured output for CI:**
 
@@ -1795,15 +1934,17 @@ claude -p "Analyze this pull request for security issues"
 claude -p "Review this PR" --output-format json --json-schema '{"type":"object",...}'
 ```
 
-- `--output-format json` — output in JSON
-- `--json-schema` — validate output against a schema
-- The result can be parsed to automatically post inline PR comments
+- `--output-format json` — emit JSON instead of prose.
+- `--json-schema` — validate the output against a schema, so downstream steps get a predictable shape.
+- The result can be parsed by the pipeline to automatically post inline PR comments.
 
-**Session context isolation:**
-The same Claude session that generated code is often less effective at reviewing it (the model retains its reasoning context and is less likely to challenge its own decisions). Use an independent instance for review.
+**Why headless mode is non-negotiable in CI.** Interactive Claude Code waits for a human; a CI runner has none, so an interactive invocation blocks until it times out. `-p` runs once and exits with the result on stdout — the contract a build step needs. Pair it with CLAUDE.md committed in the repo so the CI run inherits the team's testing standards and review criteria automatically.
 
-**Preventing duplicate comments:**
-When re-reviewing after new commits, include prior review results in context and instruct Claude to report only new or unresolved issues.
+**Session context isolation (subtle but tested).** The same Claude session that *generated* code is less effective at *reviewing* it — it retains its own reasoning and is less likely to challenge its own decisions. **Use an independent instance for review**, not the one that wrote the code. (This mirrors §5.10: a fresh perspective beats a primed one.)
+
+**Preventing duplicate comments.** When re-reviewing after new commits, include the prior review results in context and instruct Claude to report only **new or unresolved** issues — otherwise every run re-posts the same findings.
+
+**Exam angle:** "run Claude in a pipeline" → `-p` (never interactive). "Machine-parseable result for auto-commenting" → `--output-format json` + `--json-schema`. "Why not reuse the generating session to review?" → it won't challenge its own work; use a fresh instance.
 
 ## 5.10 `fork_session` and Session Management
 
@@ -1813,53 +1954,258 @@ When re-reviewing after new commits, include prior review results in context and
 claude --resume investigation-auth-bug
 ```
 
-- Continues a prior conversation with saved context
-- Useful for long investigations across multiple sessions
-- Risk: if files changed since the prior session, tool results may be stale
+- Continues a prior conversation with its saved context.
+- Useful for long investigations spanning multiple sessions.
+- **Risk:** if files changed since the prior session, cached tool results may be stale — Claude reasons over an outdated snapshot.
 
 **`fork_session`** creates an independent branch from shared context:
 
-```
-Codebase investigation
-         |
-    fork_session
-    /           \
-Approach A:      Approach B:
-Redux            Context API
+```mermaid
+flowchart TD
+    Base[Codebase investigation<br/>shared context] --> Fork[fork_session]
+    Fork --> A[Approach A<br/>Redux]
+    Fork --> B[Approach B<br/>Context API]
+    A --> CompareA[Evaluate trade-offs A]
+    B --> CompareB[Evaluate trade-offs B]
+    CompareA --> Pick[Compare and choose]
+    CompareB --> Pick
 ```
 
-- Both forks inherit context up to the branch point
-- Afterwards, they diverge independently
-- Useful for comparing approaches or testing strategies
+- Both forks inherit context up to the branch point, then diverge independently.
+- Useful for comparing approaches or testing strategies without one polluting the other.
+
+**Why forking beats one linear session for comparisons.** If you explore Redux then Context API in the *same* thread, the Redux discussion biases the Context API analysis — the model has already committed to a frame. Forking gives each approach the *same starting context but a clean slate after it*, so the comparison is fair. It's the session-level version of the "independent reviewer" principle in §5.9.
 
 **When to start a new session instead of resuming:**
-- Tool results are stale (files changed)
-- A lot of time has passed and context has degraded
-- It is better to restart with "Here is a short summary of what we found: ..." than to resume with old tool data
+- Tool results are stale (files changed since last time).
+- A lot of time has passed and the context has degraded.
+- It is often better to restart with "Here is a short summary of what we found: ..." than to resume a session full of outdated tool data.
 
+**Pitfall:** `--resume`-ing a week-old session after a big refactor and trusting its cached file reads. Those reads describe the old code. Prefer a fresh session seeded with a summary.
+
+**Exam angle:** "compare two approaches fairly" → `fork_session`. "continue a long investigation" → `--resume` (watch for staleness). "files changed a lot since" → start fresh with a summary, don't resume.
+
+## 5.11 End-to-End Case Study: Onboarding a Team onto Claude Code
+
+The features above only matter assembled. Here is a complete, realistic Claude Code configuration for a team — the kind of setup the exam's **"configure Claude Code for team development"** scenario asks you to reason about (and Practical Exercise 2 asks you to build).
+
+### Requirements
+
+A 6-developer team wants every member to get **identical, governed** Claude Code behavior the moment they `git clone`:
+
+- **Universal standards** (commit style, language) applied on every turn.
+- **API and test conventions** that load **only** when editing API or test files — no context wasted otherwise.
+- A shared **`/audit` workflow** that analyzes architecture but must run read-only and isolated, so its verbose output doesn't bury the main session.
+- A shared **GitHub MCP server** for PR search — same tooling for everyone, **no committed credentials** (each dev's token is personal).
+- A **hard guarantee**: Claude Code may **never** run `git push --force` or read secret files, regardless of prompt.
+- **CI** that runs Claude Code headless to review PRs and post inline comments.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    Clone[Developer git clones repo] --> Proj[Project .claude committed]
+    Proj --> CM[CLAUDE.md<br/>universal standards]
+    Proj --> Rules[.claude/rules<br/>path-scoped api and test rules]
+    Proj --> Skill[.claude/skills/audit<br/>context fork, read-only tools]
+    Proj --> MCP[.mcp.json<br/>GitHub server, token from env]
+    Proj --> Settings[.claude/settings.json<br/>deny force-push and secrets]
+    Settings --> Hook{{PreToolUse hook<br/>block dangerous Bash}}
+    MCP --> Local[.claude.json user override<br/>personal GitHub token]
+    Proj --> CI[CI runs claude -p<br/>review PR, post comments]
+```
+
+Project `.claude/` is the **team contract** (committed); each developer adds only their **personal token** in a git-ignored override; `settings.json` + the hook make the dangerous-command rule **deterministic**, not a prompt.
+
+### Implementation
+
+**Project standards** — `CLAUDE.md` (always loaded), with a modular import:
+
+```markdown
+# Project CLAUDE.md
+Use Conventional Commits (feat/fix/chore). Keep commits small.
+Detailed test policy: @./standards/testing.md
+```
+
+**Path-scoped conventions** — load only on matching files:
+
+```yaml
+# .claude/rules/api.md
 ---
+paths: ["src/api/**/*"]
+---
+Use async/await with explicit error handling; return the standard response wrapper.
+```
+
+```yaml
+# .claude/rules/tests.md
+---
+paths: ["**/*.test.ts", "**/*.test.tsx"]
+---
+Use describe/it blocks and data factories. Do not mock the database; use a test DB.
+```
+
+**Isolated, read-only audit skill** — verbose output stays out of the main session:
+
+```yaml
+# .claude/skills/audit/SKILL.md
+---
+context: fork
+allowed-tools: ["Read", "Grep", "Glob"]
+argument-hint: "Path to the package to audit"
+---
+Audit the package's dependency graph and architectural patterns. Output a short report.
+```
+
+**Shared MCP server, no committed secret** — token comes from the environment:
+
+```json
+// .mcp.json  (committed)
+{
+  "mcpServers": {
+    "github": {
+      "command": "github-mcp-server",
+      "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" }
+    }
+  }
+}
+```
+
+Each developer sets `GITHUB_TOKEN` in their own environment (or a personal `~/.claude.json` override) — the repo stays credential-free.
+
+**Deterministic guardrail** — `settings.json` denies the dangerous commands outright, and a `PreToolUse` hook adds a programmatic check:
+
+```json
+// .claude/settings.json  (committed)
+{
+  "permissions": {
+    "allow": ["Read", "Grep", "Glob", "Bash(npm test:*)"],
+    "ask":   ["Edit", "Write"],
+    "deny":  ["Bash(git push --force:*)", "Read(.env)", "Read(**/secrets/**)"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": ".claude/hooks/guard.sh" }] }
+    ]
+  }
+}
+```
+
+**CI review (headless)** — runs a *fresh* instance, not the one that wrote the code:
+
+```bash
+claude -p "Review this PR. Report only new or unresolved issues." \
+  --output-format json --json-schema "$SCHEMA" > review.json
+# pipeline parses review.json and posts inline PR comments
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Dev as Developer
+    participant CC as Claude Code
+    participant R as Path rules
+    participant Pre as PreToolUse hook
+    participant GH as GitHub MCP server
+    Dev->>CC: open src/api/orders.ts, "add an endpoint"
+    CC->>R: file matches src/api/**
+    R-->>CC: load api.md rule only
+    CC->>GH: search related PRs (token from env)
+    GH-->>CC: matching PRs
+    CC->>Pre: Bash(git push --force)
+    Pre-->>CC: non-zero exit, blocked
+    CC-->>Dev: refused force-push; standards applied
+```
+
+The api rule loaded **only** because the file matched its glob; the force-push was blocked by the **hook/permission deterministically**, not by hoping the model read CLAUDE.md.
+
+### Validation
+
+- **Hierarchy test:** a teammate clones the repo and immediately gets the commit-style and API rules — proving they're at the **project** level, not someone's `~/.claude/`.
+- **Conditional-load test:** confirm `api.md` loads when editing `src/api/x.ts` and is **absent** when editing `web/Button.css` — proving the `paths` glob scopes it.
+- **Determinism test:** attempt `git push --force` 100 times; assert 100 blocks. A CLAUDE.md sentence would leak; the `deny`/hook must be 100%.
+- **No-secret test:** grep the repo for tokens — `.mcp.json` must contain `${GITHUB_TOKEN}`, never a real key.
+- **Isolation test:** run `/audit`; confirm its file-by-file output does **not** appear in the main transcript and that it cannot write files.
+
+### Common pitfalls
+
+- Putting team standards in `~/.claude/CLAUDE.md` so a fresh clone never sees them (§5.1).
+- A monolithic CLAUDE.md that always loads Terraform/API/test rules, wasting context — use path-scoped `.claude/rules/` (§5.3).
+- Writing "never force-push" in CLAUDE.md and assuming it's enforced — it's probabilistic; use `permissions.deny`/a hook (§5.6).
+- Committing the GitHub token into `.mcp.json` instead of `${GITHUB_TOKEN}` + a git-ignored personal override (§5.6, Chapter 4).
+- Reviewing a PR with the **same** session that generated it, or in interactive mode inside CI — use a fresh `claude -p` instance (§5.9).
+
+## 5.12 Exam Focus — Key Takeaways
+
+| Concept | What the exam tests |
+|---|---|
+| CLAUDE.md hierarchy | Team standards → project (committed); personal style → user (`~/.claude/`); subtree-only → directory. "Would a fresh clone see it?" (§5.1). |
+| `@path` imports | Avoid duplicating a standard across packages by importing one shared file (no space after `@`, depth ≤ 5) (§5.2). |
+| Path-scoped rules | Conventions spanning many directories by file type → `.claude/rules/` with a `paths` glob; one-folder convention → directory CLAUDE.md (§5.3). |
+| Slash commands / Skills | Shared workflow → project command (committed); `context: fork` isolates verbose output; `allowed-tools` enforces least privilege (§5.4–5.5). |
+| Settings, permissions, hooks | Deterministic guarantees ("never push to main", "block secrets") → `permissions.deny`/`PreToolUse` hook, **not** CLAUDE.md; `settings.local.json` for personal, git-ignored tweaks (§5.6). |
+| Planning vs direct execution | Large/ambiguous/architectural → planning mode then approve; small/clear/single-file → direct execution; big codebase → Explore subagent (§5.7). |
+| Context & sessions | `/compact` reclaims a full window (lossy); `/memory` persists across sessions; `fork_session` compares approaches fairly; beware stale `--resume` (§5.8, §5.10). |
+| CI/CD | Headless `-p` (never interactive); `--output-format json` + `--json-schema` for auto-comments; review with a **fresh** instance (§5.9). |
+
+> **Maps to Domain 3 (20%).** If you can stand up the team configuration above — hierarchy, path-scoped rules, an isolated least-privilege skill, a credential-free MCP server, deterministic permission/hook guardrails, and a headless CI review — you have the core of the second-most-weighted exam domain.
 
 # Chapter 6: Prompt Engineering — Advanced Techniques
 
 > Documentation: [Prompt Engineering](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/overview) | [Anthropic Cookbook](https://github.com/anthropics/anthropic-cookbook)
 
+Prompt engineering is the discipline of shaping a model's behavior **without changing its weights** — using only the words, structure, and examples you put into the request. This chapter is the backbone of **Domain 4 — Prompt Engineering and Structured Output (20% of the exam)**, the joint-second-heaviest domain. The exam does not test clever phrasing; it tests whether you reach for the *right technique* for a given failure mode and whether you know each technique's guarantees and limits. By the end you should be able to choose and combine these tools:
+
+- **Few-shot prompting** (§6.1) — demonstrate the behavior instead of describing it.
+- **Explicit criteria** (§6.2) — replace vague adjectives with categorical rules.
+- **XML tags and role prompting** (§6.3) — separate instructions from data, and set the model's persona.
+- **Chain-of-thought and extended thinking** (§6.4) — let the model reason before it answers.
+- **Prefilling the assistant turn** (§6.5) — constrain the *start* of the response to force a shape.
+- **Structured output with `tool_use`** (§6.6) — guarantee schema-valid JSON, not just plausible JSON.
+- **Prompt chaining and the interview pattern** (§6.7) — decompose a task across focused calls.
+- **Validation and retry-with-feedback** (§6.8) — close the loop when extraction fails.
+- **Self-correction** (§6.9) — make the model surface its own contradictions.
+
+§6.10 then builds a complete **contract-extraction service** end-to-end, combining most of these techniques, and §6.11 distills what the exam tests.
+
+A useful mental model is to match each technique to the failure it fixes:
+
+```mermaid
+flowchart TD
+    Start[Output is wrong or inconsistent] --> Q1{What kind of failure?}
+    Q1 -->|Inconsistent format or<br/>handles edge cases badly| FS[Add few-shot examples<br/>section 6.1]
+    Q1 -->|Too many false positives,<br/>vague judgement| EC[Write explicit criteria<br/>section 6.2]
+    Q1 -->|Model confuses instructions<br/>with input data| XML[Wrap data in XML tags<br/>section 6.3]
+    Q1 -->|Skips reasoning on<br/>hard multi-step tasks| COT[Chain-of-thought or<br/>extended thinking 6.4]
+    Q1 -->|Adds preamble or<br/>wrong opening shape| PF[Prefill the assistant turn<br/>section 6.5]
+    Q1 -->|Malformed or<br/>non-schema JSON| TU[Use tool_use schema<br/>section 6.6]
+    Q1 -->|Schema-valid but<br/>values are wrong| VR[Validate and retry<br/>section 6.8]
+```
+
+The exam angle on the whole chapter: know that prompt techniques are **probabilistic** (they raise the odds of correct behavior), whereas `tool_use` schemas and downstream validation are the **deterministic** layers. Syntax can be guaranteed; semantics must be checked.
+
 ## 6.1 Few-shot Prompting
 
-Few-shot prompting is the inclusion of 2–4 input/output examples in a prompt to demonstrate the expected behavior.
+Few-shot prompting is the inclusion of 2–4 input/output examples in a prompt to demonstrate the expected behavior. It is, per Domain 4, *the single most effective method* for producing consistently formatted, actionable output.
 
 **Why few-shot is more effective than textual descriptions:**
-- A vague instruction like “be more precise” can be interpreted in many ways
-- An example unambiguously shows the expected format and decision logic
-- The model generalizes the pattern to new cases (it does not just repeat the examples)
+- A vague instruction like "be more precise" can be interpreted in many ways.
+- An example unambiguously shows the expected format and decision logic.
+- The model generalizes the pattern to new cases (it does not just repeat the examples).
+- Examples *reduce hallucination* in extraction tasks, because they anchor the model to a concrete shape rather than letting it invent fields.
+
+**Why it works (mechanism):** an example simultaneously encodes the output *schema*, the *tone*, and the *decision boundary* in one artifact. A prose rule encodes only what you remembered to write down; an example also encodes everything you left implicit (key ordering, null handling, how to phrase a fix). This is why one good example often beats three paragraphs of instructions.
 
 **Types of few-shot examples and when to use them:**
 
-1. **Examples for ambiguous scenarios:**
+1. **Examples for ambiguous scenarios** — show the *decision*, not just the format:
 
 ```
 Request: "My order is broken"
 Action: Call get_customer -> lookup_order -> check status.
-Rationale: “broken” may mean a damaged item; you need order details.
+Rationale: "broken" may mean a damaged item; you need order details.
 
 Request: "Get me a manager"
 Action: Immediately call escalate_to_human.
@@ -1878,7 +2224,7 @@ Finding example:
 }
 ```
 
-3. **Examples to separate acceptable vs problematic code:**
+3. **Examples to separate acceptable vs problematic code** — teach the *boundary* between a true issue and a false positive:
 
 ```
 // Acceptable (do not flag):
@@ -1888,7 +2234,7 @@ const items = data.filter(x => x.active);
 const items = data.filter(x => x.active == true); // Use strict equality ===
 ```
 
-4. **Examples for extraction from different document formats:**
+4. **Examples for extraction from different document formats** — one example per structure you expect to see:
 
 ```
 Document with inline citations:
@@ -1900,7 +2246,7 @@ Document with bibliography references:
 -> {"value": "42%", "source": "reference_1", "type": "bibliography"}
 ```
 
-5. **Examples for informal measurements:**
+5. **Examples for informal measurements** — where rules cannot enumerate every phrasing:
 
 ```
 Text: "about two handfuls of rice"
@@ -1912,8 +2258,7 @@ Text: "a pinch of salt"
 
 Few-shot is especially effective for extracting informal and non-standard measurement units that are too diverse for purely rule-based instructions.
 
-**Format normalization rules in prompts:**
-When using strict JSON schemas for structured output, add normalization rules in the prompt:
+**Format normalization rules in prompts:** when using strict JSON schemas for structured output, add normalization rules in the prompt so the *values* (not just the syntax) are consistent:
 
 ```
 Normalization:
@@ -1922,9 +2267,18 @@ Normalization:
 - Percentages: decimal fraction; "half" -> 0.5
 ```
 
-This prevents semantic errors where the JSON is syntactically valid but values are inconsistent.
+This prevents semantic errors where the JSON is syntactically valid but values are inconsistent — exactly the gap `tool_use` cannot close on its own (§6.6).
+
+**Pitfalls:**
+- **Biased example set.** If all your examples are the "flag it" case, the model over-flags. Always include *negative* examples (what *not* to do) when teaching a boundary.
+- **Examples that contradict your instructions.** When prose and examples disagree, the model tends to follow the examples — so the example is the real spec. Keep them aligned.
+- **Overfitting the wording.** If every example phrases a fix as "Use a parameterized query," the model may echo that exact phrase. Vary surface form when you want generalization, not mimicry.
+
+**Exam angle:** if a question describes *inconsistent formatting* or *poor handling of ambiguous/edge cases*, the intended answer is almost always "add 2–4 targeted few-shot examples with rationale" — not "write a longer instruction."
 
 ## 6.2 Explicit Criteria vs Vague Instructions
+
+The single highest-leverage fix for a *judgement* task (review, triage, classification) is to replace adjectives with enumerated, falsifiable rules.
 
 **Bad (vague):**
 
@@ -1933,7 +2287,9 @@ Check code comments for accuracy.
 Be conservative—report only high-confidence findings.
 ```
 
-**Good (explicit criteria):**
+"Conservative" and "high-confidence" are not operational; two runs will draw the line differently, and you cannot debug "the model wasn't conservative enough."
+
+**Good (explicit criteria)** — list both what to flag *and* what to ignore:
 
 ```
 Flag a comment as problematic ONLY if:
@@ -1947,7 +2303,7 @@ Do NOT flag:
 - Missing comments (that is a separate category)
 ```
 
-**Define severity criteria with examples:**
+**Define severity criteria with examples** — pair each level with a concrete case so the model calibrates, not guesses:
 
 ```
 CRITICAL: Runtime failure for users
@@ -1963,9 +2319,196 @@ LOW: Code quality
   Example: Duplication, suboptimal algorithm for small data
 ```
 
-## 6.3 Prompt Chaining
+**Why this matters — the false-positive trust problem:** a high false-positive rate in *one* category undermines developer trust in *every* category. If the "style" checks cry wolf, engineers start ignoring the "security" checks too. The remedy is not "be more conservative" (vague) but to (a) write categorical criteria and (b) *temporarily disable* a category whose false-positive rate is too high, rather than degrading the whole reviewer.
 
-Prompt chaining breaks a complex task into a sequence of focused steps:
+**Pitfalls:**
+- Stacking soft hedges ("be careful," "use judgement") — they add tokens, not precision.
+- Defining what to flag but never what to ignore — the model fills the silence by over-reporting.
+- Severity levels with no examples — the labels drift run-to-run.
+
+**Exam angle:** when a scenario reports *too many false positives* or *eroded trust*, the correct lever is explicit categorical criteria (and disabling noisy categories), **not** a generic "be more conservative" instruction. This distinction is called out verbatim in Domain 4.
+
+## 6.3 XML Tags and Role Prompting
+
+These two structural techniques are about *where* information sits and *who* the model is being.
+
+### Delimiting with XML tags
+
+Claude is specifically tuned to respect XML-style tags. Wrapping each part of a prompt in named tags lets the model tell instructions apart from data, and lets you reference parts by name.
+
+```
+You are reviewing a contract. The contract text is in <contract>.
+Your task instructions are in <instructions>. Output only the <result>.
+
+<instructions>
+Extract the parties, effective date, and termination clause.
+</instructions>
+
+<contract>
+{{ untrusted_document_text }}
+</contract>
+```
+
+**Why it works:**
+- **Instruction/data separation.** Without delimiters, a document that itself contains the words "ignore the above and summarize" can hijack the task. Tags make the boundary explicit and are a *first-line mitigation for prompt injection* (the data lives in `<contract>`, the authority lives in `<instructions>`).
+- **Referability.** You can write "quote the relevant sentence from `<contract>` in your `<result>`," which improves grounding and makes outputs auditable.
+- **Composability.** Tagged sections are easy to template, cache (a stable `<instructions>` block caches well; see Chapter 18), and recombine.
+
+### Role prompting (system prompt persona)
+
+Assigning a role in the **system prompt** sets the model's perspective, vocabulary, and default standards.
+
+```python
+response = client.messages.create(
+    model="claude-...",
+    system="You are a senior contracts attorney. You are precise, "
+           "cite the exact clause you rely on, and you never guess "
+           "at a value that is not present in the document.",
+    messages=[{"role": "user", "content": prompt}],
+)
+```
+
+**Why it works:** a persona is a compact way to pull in a whole bundle of expectations (a "contracts attorney" implies precision, clause citation, and caution about absent data) without listing each rule. It also shifts *defaults* — the same question answered "as an attorney" vs "as a friendly assistant" differs in rigor and hedging.
+
+**System vs user content (exam-relevant):** put *durable* role, rules, and output contract in `system`; put the *specific* task and data in the `user` turn. This separation is what makes prompt caching effective and keeps the contract stable across requests.
+
+**Pitfalls:**
+- Treating a role as a *guarantee*. "You are a strict validator" makes the model *act* stricter; it does not enforce anything. Real enforcement is `tool_use` schemas (§6.6) and code-side validation (§6.8) — the same probabilistic-vs-deterministic line as hooks-vs-prompts in Chapter 3.
+- Over-specifying a persona until it crowds out the task. The role should be a few sentences, not a biography.
+
+**Exam angle:** XML tags = "separate instructions from untrusted data + reduce injection risk"; role prompting = "set expertise and standards in the *system* prompt." Both are probabilistic quality levers, not security boundaries.
+
+## 6.4 Chain-of-Thought and Extended Thinking
+
+For multi-step reasoning (math, multi-clause logic, reconciling figures), letting the model *think before it answers* materially improves accuracy.
+
+**Two ways to get reasoning:**
+
+1. **Prompted chain-of-thought (CoT)** — instruct the model to reason step by step, ideally into a *named scratchpad* so you can separate thinking from the answer:
+
+```
+Think step by step inside <scratchpad>...</scratchpad>.
+Then give only the final JSON inside <answer>...</answer>.
+```
+
+2. **Extended thinking** — a model capability (enabled with a `thinking` budget) where the model produces internal reasoning before its final response. You allocate a token budget for thinking; the model uses it for harder problems and the visible answer follows.
+
+**Why it helps:** reasoning tokens give the model "room to work." A model forced to emit the answer immediately must compute multi-step results in a single forward pass; a model allowed to lay out intermediate steps can catch its own arithmetic and logic errors before committing to an answer. This is the same reason §6.9 self-correction works.
+
+**Choosing between them:**
+
+| | Prompted CoT (`<scratchpad>`) | Extended thinking |
+|---|---|---|
+| Control | You shape the steps in the prompt | Model manages its own reasoning within a budget |
+| Output hygiene | You must strip the scratchpad before using the answer | Thinking is delivered as a separate block, not mixed into the answer |
+| Best for | Light reasoning, when you want to *steer* the steps | Hard, open-ended reasoning where depth matters |
+
+**Pitfalls:**
+- **Leaking the scratchpad into output.** If you ask for both reasoning and JSON in one blob and then `json.loads` the whole thing, it breaks. Put reasoning in `<scratchpad>` / a thinking block and the result in `<answer>`, and parse only the answer.
+- **Forcing CoT where it is pure overhead.** Trivial extraction does not need a scratchpad; you pay latency and tokens for nothing.
+- **Pairing thinking with prefill incorrectly.** Prefilling the assistant turn (§6.5) constrains the start of the *response*; do not use it to try to suppress or fake the thinking block.
+
+**Exam angle:** know that reasoning (prompted CoT *or* extended thinking) is the lever for *accuracy on hard multi-step tasks*, and that the reasoning trace must be **separated** from the machine-consumed output.
+
+## 6.5 Prefilling the Assistant Turn
+
+You can seed the **beginning** of Claude's response by supplying an `assistant` message in the request. The model continues *from* your prefill, which constrains the shape of what follows.
+
+```python
+messages = [
+    {"role": "user", "content": "Extract the invoice as JSON."},
+    {"role": "assistant", "content": "{"},   # <- prefill forces JSON, skips preamble
+]
+```
+
+**What prefilling buys you:**
+- **Skip the preamble.** Without it the model may open with "Sure! Here is the JSON:"; prefilling `{` forces it straight into the object.
+- **Lock the format.** Prefill `[` to force a JSON array, or prefill an opening tag like `<result>` to force tagged output.
+- **Steer persona/decision.** Prefilling "As an attorney, my assessment is" nudges tone and stance for the continuation.
+
+**Why it works:** the model only ever predicts the *next* token given everything so far — including the assistant text you provided. By writing the first token(s) of the answer, you remove the model's freedom to choose a different opening, which is often where format drift starts.
+
+**Pitfalls:**
+- **The prefill is not echoed back.** The API response continues *after* your prefill, so reconstruct the full value as `prefill + response` (e.g. `"{" + completion`) before parsing.
+- **Trailing whitespace.** A prefill that ends in a space or newline can degrade output; end it on a meaningful token (e.g. `{` not `{ `).
+- **Prefill is a shaping tool, not a schema guarantee.** It biases the opening; it does not validate the rest. For hard guarantees, combine with `tool_use` (§6.6) and validation (§6.8).
+
+**Exam angle:** prefilling = "constrain the response by writing its first tokens" — classic uses are *forcing JSON/array output* and *removing conversational preamble*. Remember to prepend the prefill when reading the result.
+
+## 6.6 Structured Output with `tool_use` and JSON Schemas
+
+When you need machine-readable output, the most reliable mechanism is **`tool_use` with a JSON Schema** — not "ask for JSON and hope."
+
+**Why `tool_use` beats free-text JSON:** the tool's `input_schema` constrains generation so the model emits arguments that conform to the schema. This **eliminates JSON syntax errors** (unbalanced braces, trailing commas, smart quotes) and guarantees the *shape* — the field names, types, and required keys you declared.
+
+```python
+extract_invoice = {
+    "name": "extract_invoice",
+    "description": "Return structured fields from an invoice.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "vendor": {"type": "string"},
+            "total":  {"type": "number"},
+            "currency": {"type": "string", "enum": ["USD", "EUR", "GBP"]},
+            "line_items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name":  {"type": "string"},
+                        "price": {"type": "number"}
+                    },
+                    "required": ["name", "price"]
+                }
+            },
+            "confidence": {"type": "string", "enum": ["high", "medium", "unclear"]}
+        },
+        "required": ["vendor", "total", "currency", "line_items"]
+    }
+}
+```
+
+**Controlling whether a tool is called — `tool_choice`:**
+
+| `tool_choice` | Behavior | Use when |
+|---|---|---|
+| `"auto"` (default) | Model may answer in text *or* call a tool | Conversational agents that sometimes just reply |
+| `"any"` | Model **must** call *some* tool | You always want structured output and have several schemas |
+| `{"type": "tool", "name": "extract_invoice"}` | Force *this* tool | You want exactly one schema every time (extraction) |
+
+```mermaid
+flowchart TD
+    Req[Send request with input_schema] --> Choice{tool_choice?}
+    Choice -->|auto| MayText[Model may return text<br/>or call a tool]
+    Choice -->|any| MustTool[Model must call some tool]
+    Choice -->|forced name| OneTool[Model must call the named tool]
+    MustTool --> Parse[Read tool_use.input as the object]
+    OneTool --> Parse
+    Parse --> Valid{Passes code-side<br/>validation?}
+    Valid -->|yes| Done[Use the data]
+    Valid -->|no| Retry[Retry with the error<br/>section 6.8]
+```
+
+**Schema design that the exam rewards:**
+- **`required` vs optional.** Make a field optional/nullable when the source *may not contain* it — otherwise the model fabricates a value to satisfy the schema. "Don't make me invent data" is a recurring exam theme.
+- **Enums with an escape hatch.** Use a closed enum for known categories, plus an `"other"` / `"unclear"` value **and** a free-text detail field, so new cases are captured rather than mis-bucketed (extensible categorization).
+- **Single source of truth.** Generating the schema from a model (e.g. Pydantic → JSON Schema, §6.8) keeps the tool definition and your validator in sync.
+
+**The hard limit — `tool_use` guarantees syntax, not semantics.** A schema cannot know that `total` should equal `sum(line_items)`, or that `currency` matches the symbol in the document. *Syntactically valid, semantically wrong* output is the failure mode §6.8 and §6.9 exist to catch.
+
+**Pitfalls:**
+- Assuming schema-valid means correct. It only means *well-shaped*.
+- Over-constraining with `required` so the model invents values for missing fields.
+- Using `tool_choice: "auto"` when you *always* need structure (the model may answer in prose). Use `"any"` or a forced name.
+
+**Exam angle:** "guarantee schema-conformant output / eliminate JSON syntax errors" → **`tool_use` + JSON Schema**. "Always structured, multiple schemas" → `tool_choice: "any"`. "Exactly one extraction schema" → forced tool. "Don't fabricate missing data" → optional/nullable fields. "Catch wrong totals" → that is validation, not the schema.
+
+## 6.7 Prompt Chaining and the Interview Pattern
+
+### Prompt chaining
+
+Prompt chaining breaks a complex task into a sequence of focused steps, each consuming the previous step's output:
 
 ```
 Step 1: Analyze auth.ts (local issues only)
@@ -1979,17 +2522,17 @@ Step 3: Integration pass (cross-file dependencies)
 ```
 
 **Why this matters:**
-- Avoids **attention dilution**—when the model receives too many files at once, it may miss bugs in some files while providing shallow commentary on others
-- Ensures consistent analysis quality per file
-- Allows separate analysis of cross-file interactions
+- Avoids **attention dilution** — when the model receives too many files at once, it may miss bugs in some files while giving shallow commentary on others.
+- Ensures consistent analysis quality per file.
+- Allows separate analysis of cross-file interactions in a dedicated integration pass.
 
-**When to use prompt chaining vs dynamic decomposition:**
-- **Prompt chaining** — predictable, repeatable tasks (code review, file migrations)
-- **Dynamic decomposition** — open-ended investigations where subtasks become clear only during execution
+**Chaining vs dynamic decomposition:**
+- **Prompt chaining** — predictable, repeatable tasks with a *known* shape (code review, file migrations). You design the steps up front.
+- **Dynamic decomposition** — open-ended investigations where the subtasks become clear only *during* execution; here a coordinator agent decides steps at runtime (Chapter 3).
 
-## 6.4 The “Interview” Pattern
+### The "interview" pattern
 
-Before implementing a solution, Claude asks clarifying questions:
+Before implementing a solution, Claude asks clarifying questions instead of guessing at requirements:
 
 ```
 Claude: "Before implementing caching for the API, a few questions:
@@ -2000,13 +2543,19 @@ Claude: "Before implementing caching for the API, a few questions:
 ```
 
 **When this is useful:**
-- Unfamiliar domain (fintech, healthcare, legal systems)
-- Tasks with non-obvious implications (cache strategies, failure modes)
-- Multiple viable approaches where the best choice depends on context
+- Unfamiliar domain (fintech, healthcare, legal systems).
+- Tasks with non-obvious implications (cache strategies, failure modes).
+- Multiple viable approaches where the best choice depends on context.
 
-## 6.5 Validation and Retry-with-Feedback
+**Pitfalls:** chaining adds latency and cost (N calls instead of one) — use it when attention dilution or per-step quality justifies it, not reflexively. The interview pattern is wrong for high-volume autonomous extraction (you cannot stop to ask 10,000 times); reserve it for design-time and ambiguous one-offs.
 
-When extracted data fails validation:
+**Exam angle:** "model misses bugs across many files / shallow per-file output" → chaining with a per-file pass plus an integration pass. "Predictable pipeline" → chaining; "subtasks emerge at runtime" → dynamic decomposition.
+
+## 6.8 Validation and Retry-with-Feedback
+
+`tool_use` removes syntax errors; **validation** is how you catch the *semantic* ones, and **retry-with-feedback** is how you recover.
+
+When extracted data fails validation, retry with the error spelled out:
 
 ```
 Step 1: Extract data from the document
@@ -2017,25 +2566,33 @@ Step 3: If there's an error—retry with context:
   - The specific error: "Field 'total' = 150, but sum(line_items) = 145. Re-check values."
 ```
 
+The retry prompt must carry **all three**: the source, the bad output, and the *concrete* error. A vague "that was wrong, try again" gives the model nothing to correct.
+
 **When retry will be effective:**
-- Format errors (date in the wrong format)
-- Structural errors (a field placed in the wrong location)
-- Arithmetic inconsistencies (the model can re-check)
+- Format errors (date in the wrong format).
+- Structural errors (a field placed in the wrong location).
+- Arithmetic inconsistencies (the model can re-check its own sums).
 
 **When retry will NOT help:**
-- The information is absent from the source document
-- The required context is external (the data is in another document not provided)
+- The information is simply **absent** from the source document — re-prompting cannot conjure data that isn't there.
+- The required context is **external** (the value lives in another document you didn't provide). Retrying just burns calls; the fix is to supply the missing source or mark the field unknown.
 
-**Pydantic as a validation tool:**
-Pydantic is a Python library for schema-based data validation. For the exam, the key points are:
-- **Structural validation:** types, requiredness, enum constraints checked in code after receiving JSON from Claude
-- **Semantic validation:** custom validators enforce business logic (sum of items equals total; start_date < end_date)
-- **Validate–retry loops:** on Pydantic validation failure, construct an error message and re-prompt Claude with the error context
-- **JSON Schema generation:** Pydantic models can generate JSON Schema for `tool_use`, providing a single source of truth
+**Pydantic as a validation tool** (the exam's canonical example):
+- **Structural validation:** types, requiredness, enum constraints, checked in code *after* receiving JSON from Claude.
+- **Semantic validation:** custom validators enforce business logic (`sum(line_items) == total`; `start_date < end_date`).
+- **Validate–retry loops:** on a validation failure, construct an error message and re-prompt Claude with that error context.
+- **JSON Schema generation:** Pydantic models can emit JSON Schema for `tool_use`, giving a **single source of truth** for both the tool definition and the validator.
 
-## 6.6 Self-correction
+**Pitfalls:**
+- Retrying when the data is absent/external (infinite-loop trap). Bound retries (e.g. max 2) and then route to a human or a null result.
+- Omitting the specific error from the retry prompt (no signal to fix).
+- Treating Pydantic success as full correctness — it only checks the rules you wrote.
 
-A pattern for detecting internal contradictions:
+**Exam angle:** "JSON is valid but the totals don't reconcile" → semantic validation + retry-with-error. "Retry isn't fixing it" → the info is absent or external; stop retrying. "Single source of truth for schema + validation" → Pydantic generating the JSON Schema.
+
+## 6.9 Self-correction
+
+Self-correction makes the model **surface its own contradictions** by extracting *both* a stated value and an independently computed value, then flagging any mismatch:
 
 ```json
 {
@@ -2049,148 +2606,977 @@ A pattern for detecting internal contradictions:
 }
 ```
 
-The model extracts both the stated value and a computed value—if they differ, `conflict_detected` allows you to handle the discrepancy.
+The model extracts the value *as written* (`stated_total`) and the value it *computes* from the parts (`calculated_total`); when they differ, `conflict_detected` lets downstream code route the discrepancy to review instead of silently trusting a wrong figure.
 
----
+**Why it works:** it converts an invisible reasoning step into an *observable field*. Instead of hoping the model noticed the document's own arithmetic error, you ask it to write down both numbers, and the disagreement becomes data you can act on. It pairs naturally with chain-of-thought (§6.4) — the model reasons out the calculated value before emitting it.
+
+**Self-correction vs independent review (link to Domain 4.6):** a model is poor at challenging its *own* conclusions because it retains its generation context. Self-correction (one instance, two values) catches *internal* arithmetic/consistency errors cheaply; for *subtle* issues, a **second independent Claude instance** reviewing without the generation context is stronger. Use self-correction for in-line consistency checks and an independent reviewer for deeper audits.
+
+**Pitfalls:**
+- Trusting `stated_total` alone — that is the number you most want to verify.
+- Asking one instance to "double-check your work" and expecting rigor; without a fresh context it tends to ratify itself. Use the two-value pattern or a separate instance.
+
+**Exam angle:** "detect that the document's stated total doesn't match its line items" → extract `stated` *and* `calculated` + a `conflict_detected` flag. "Find subtle issues the author missed" → an independent review instance, not self-review.
+
+## 6.10 End-to-End Case Study: A Contract-Extraction Service
+
+The techniques above only matter when they combine. Here is a complete, realistic service that turns messy uploaded contracts into validated structured data — the kind of design Domain 4 asks you to reason about. It exercises **role prompting, XML tags, few-shot, chain-of-thought, `tool_use` schemas, prefilling, validation/retry, and self-correction** in one pipeline.
+
+### Requirements
+
+- Accept heterogeneous contract documents (different vendors, layouts, citation styles).
+- Extract a fixed structure: `parties`, `effective_date`, `total_value`, `currency`, `line_items`, `termination_notice_days`.
+- **Never fabricate** a value that is not in the document — missing fields must come back as `null`, not invented.
+- Output must be **schema-valid JSON** suitable for direct insertion into a database (no syntax errors, no preamble).
+- Catch the common real-world defect where the document's *stated* total disagrees with the **sum of its line items**, and route those to human review instead of trusting them.
+- High volume and unattended — no interview/clarification loop at runtime.
+
+### Architecture
+
+Two layers: a **probabilistic** extraction layer (prompt techniques) and a **deterministic** validation layer (code), with a bounded retry between them.
+
+```mermaid
+flowchart TD
+    Doc([Uploaded contract]) --> Build[Build prompt<br/>role + XML tags + few-shot]
+    Build --> Call[Call Claude<br/>thinking on + forced extract tool]
+    Call --> Pre[Prefill assistant turn<br/>open brace]
+    Pre --> Json[tool_use.input<br/>structured JSON]
+    Json --> Schema{Schema valid?<br/>Pydantic structure}
+    Schema -->|no| RetryA[Retry with error]
+    Schema -->|yes| Sem{Semantics OK?<br/>stated equals sum}
+    Sem -->|conflict| Review([Human review queue])
+    Sem -->|absent or external| RetryB[Retry once then null]
+    Sem -->|ok| Store([Write to database])
+    RetryA -. bounded retry .-> Call
+    RetryB -. bounded retry .-> Call
+```
+
+The model owns extraction; **code — not prompt text — owns the guarantees** (schema conformance, the stated-vs-sum check, the retry bound). This is the same probabilistic-vs-deterministic split the exam tests in Chapter 3, applied to structured output.
+
+### Implementation
+
+**1) Role + XML tags + few-shot in the prompt**, with normalization rules so values are consistent:
+
+```python
+SYSTEM = (
+    "You are a senior contracts attorney. You are precise, you cite only "
+    "values present in the document, and you NEVER guess a value that is "
+    "absent — you return null for it."
+)
+
+FEWSHOT = """
+<example>
+<contract>Term: 90 days written notice. Fee: USD 12,000.</contract>
+<result>{"termination_notice_days": 90, "total_value": 12000, "currency": "USD"}</result>
+</example>
+<example>
+<contract>This agreement may be ended by either party.</contract>
+<result>{"termination_notice_days": null, "total_value": null, "currency": null}</result>
+</example>
+"""
+
+NORMALIZE = """
+Normalization: dates as ISO 8601 (YYYY-MM-DD); currency as amount + ISO code;
+notice periods as an integer number of days. If a field is not stated, use null.
+"""
+
+def build_prompt(doc_text: str) -> str:
+    return (
+        f"{NORMALIZE}\n"
+        f"Examples:\n{FEWSHOT}\n"
+        "Think step by step inside <scratchpad>, reconcile the stated total "
+        "against the sum of line items, then call extract_contract.\n"
+        f"<contract>\n{doc_text}\n</contract>"
+    )
+```
+
+Note the **negative example** (a contract with no notice period → `null` fields): it teaches the model *not to fabricate*, which the requirements demand.
+
+**2) Force the extraction schema with `tool_use`** (syntax guarantee) and let the model reason first:
+
+```python
+extract_contract = {
+    "name": "extract_contract",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "parties": {"type": "array", "items": {"type": "string"}},
+            "effective_date": {"type": ["string", "null"]},
+            "stated_total": {"type": ["number", "null"]},
+            "calculated_total": {"type": ["number", "null"]},
+            "currency": {"type": ["string", "null"], "enum": ["USD", "EUR", "GBP", None]},
+            "line_items": {
+                "type": "array",
+                "items": {"type": "object",
+                          "properties": {"name": {"type": "string"},
+                                         "price": {"type": "number"}},
+                          "required": ["name", "price"]}
+            },
+            "termination_notice_days": {"type": ["integer", "null"]},
+            "conflict_detected": {"type": "boolean"}
+        },
+        "required": ["parties", "line_items", "conflict_detected"]
+    }
+}
+
+resp = client.messages.create(
+    model="claude-...",
+    system=SYSTEM,
+    thinking={"type": "enabled", "budget_tokens": 1024},   # CoT for reconciliation
+    tools=[extract_contract],
+    tool_choice={"type": "tool", "name": "extract_contract"},  # forced -> always structured
+    messages=[{"role": "user", "content": build_prompt(doc_text)}],
+)
+data = next(b.input for b in resp.content if b.type == "tool_use")
+```
+
+The schema makes nullable fields explicit (`["number", "null"]`) so absent data returns `null` instead of a fabricated number, and it captures **both** `stated_total` and `calculated_total` for self-correction (§6.9).
+
+> When extracting *free-text* JSON instead of a tool (e.g. a quick non-tool path), prefill the assistant turn with `{` to force the object and drop any "Here is the JSON" preamble — then parse `"{" + completion`.
+
+**3) Deterministic validation + bounded retry-with-feedback** (the guarantees live here, not in the prompt):
+
+```python
+from pydantic import BaseModel, model_validator
+
+class Contract(BaseModel):
+    stated_total: float | None
+    calculated_total: float | None
+    conflict_detected: bool
+    # ... other fields ...
+
+    @model_validator(mode="after")
+    def totals_must_reconcile(self):
+        s, c = self.stated_total, self.calculated_total
+        if s is not None and c is not None and abs(s - c) > 0.01:
+            # semantic error tool_use cannot catch
+            object.__setattr__(self, "conflict_detected", True)
+        return self
+
+def extract(doc_text, max_retries=2):
+    err = None
+    for _ in range(max_retries + 1):
+        data = call_claude(doc_text, prior_error=err)   # passes the error into the prompt
+        try:
+            c = Contract(**data)
+        except ValidationError as e:
+            err = str(e)                                 # structural error -> retry with it
+            continue
+        if c.conflict_detected:
+            route_to_human_review(c); return c           # stated != sum -> review, don't trust
+        return c                                          # clean -> store
+    return None                                           # give up after bound (absent/external)
+```
+
+### Execution trace
+
+A contract whose stated total ($150) disagrees with its line items ($145):
+
+```mermaid
+sequenceDiagram
+    actor Up as Uploader
+    participant Svc as Extraction service
+    participant Cl as Claude
+    participant Val as Pydantic validator
+    participant Hu as Review queue
+    Up->>Svc: contract.pdf text
+    Svc->>Cl: prompt (role + XML + few-shot, forced tool, thinking on)
+    Cl->>Cl: scratchpad: sum line items = 145, stated = 150
+    Cl-->>Svc: tool_use {stated 150, calculated 145, conflict_detected true}
+    Svc->>Val: validate structure and semantics
+    Val-->>Svc: schema OK, conflict_detected stays true
+    Svc->>Hu: route case for human review
+    Hu-->>Up: "Total mismatch flagged for confirmation"
+```
+
+The model did the arithmetic *in the scratchpad* (chain-of-thought), wrote down both totals (self-correction), the schema guaranteed the JSON parsed (`tool_use`), and **code** — not a prompt instruction — made the route-to-human decision. No single technique would have caught this alone.
+
+### Validation
+
+- **No-fabrication test:** feed a contract missing the notice period; assert `termination_notice_days is None` (the negative few-shot example + nullable schema must hold).
+- **Syntax test:** run 1,000 documents through the forced tool; assert *zero* `json` parse failures (this is what `tool_use` guarantees).
+- **Semantic test:** feed a contract where stated ≠ sum; assert it lands in the **review queue**, not the database.
+- **Retry-bound test:** feed a contract missing data that is only in an external annex; assert it stops after `max_retries` and returns `null` rather than looping forever.
+
+### Common pitfalls
+
+- Trusting `tool_use` to catch the total mismatch — it guarantees *syntax*, not *semantics*; the reconciliation must be code (§6.6, §6.8).
+- Making every field `required`, so the model fabricates a notice period or currency to satisfy the schema (§6.6).
+- Retrying forever when the data is absent or in an unprovided annex — bound the retries (§6.8).
+- Putting the "stated must equal sum" rule only in the prompt and hoping — it is a deterministic check, so it belongs in a validator (§6.8), mirroring hooks-vs-prompts from Chapter 3.
+- Mixing the `<scratchpad>` reasoning into the JSON you parse — keep reasoning (thinking block / scratchpad) separate from the machine-read output (§6.4).
+
+## 6.11 Exam Focus — Key Takeaways
+
+| Concept | What the exam tests |
+|---|---|
+| Few-shot prompting | Most effective fix for inconsistent format / ambiguous edge cases; 2–4 examples with rationale, include negative examples (§6.1). |
+| Explicit criteria | Replace "be conservative" with enumerated flag/ignore rules + severity examples; disable noisy categories rather than degrading the whole reviewer (§6.2). |
+| XML tags / role | Tags separate instructions from untrusted data (injection mitigation); role lives in the *system* prompt — both probabilistic (§6.3). |
+| CoT / extended thinking | The lever for accuracy on hard multi-step tasks; keep the reasoning trace separate from the parsed output (§6.4). |
+| Prefilling | Constrain the response by writing its first tokens (force JSON/array, drop preamble); prepend the prefill when reading the result (§6.5). |
+| `tool_use` + JSON Schema | Guarantees schema-valid syntax, **not** semantics; `tool_choice` `auto` vs `any` vs forced; nullable fields prevent fabrication; enum + "other" for extensibility (§6.6). |
+| Chaining / interview | Per-file + integration passes beat one giant prompt (attention dilution); chaining for predictable pipelines, dynamic decomposition for emergent subtasks (§6.7). |
+| Validation + retry | Retry with the *concrete* error works for format/structure/arithmetic; useless when data is absent/external — bound the retries (§6.8). |
+| Self-correction | Extract `stated` *and* `calculated` + `conflict_detected`; for subtle issues prefer an independent review instance over self-review (§6.9). |
+
+> **Maps to Domain 4 (20%).** The throughline: prompt techniques raise the *probability* of correct behavior, while `tool_use` schemas guarantee *syntax* and code-side validation guarantees *semantics*. If you can build and defend the contract-extraction service above — choosing the right technique per failure mode and knowing where the deterministic line sits — you have the core of this domain.
 
 # Chapter 7: Message Batches API
 
 > Documentation: [Message Batches](https://platform.claude.com/docs/en/build-with-claude/message-batches)
 
-## 7.1 Overview
+The Message Batches API trades **latency for cost and scale**: you hand Anthropic a large bag of independent requests, walk away, and collect the answers later at **half price**. This chapter sits in **Domain 5 — Context Management and Reliability (15% of the exam)**, the domain that asks you to keep large systems correct and economical under load — and it is the canonical answer whenever an exam scenario says "offline", "overnight", "tens of thousands of documents", or "cut the inference bill". By the end you should be able to decide *when* to batch, drive the *async lifecycle* correctly, and design a *resilient* large job:
 
-The Message Batches API lets you submit batches of requests for asynchronous processing:
+- **What the Batches API is** (§7.1) — the async model, the 50% discount, the 24-hour window, and what it does *not* do.
+- **Batch vs. real-time** (§7.2) — the decision rule the exam tests, framed around who is waiting for the result.
+- **`custom_id` correlation** (§7.3) — why results come back unordered and how you re-attach them to inputs.
+- **The submit → poll → retrieve lifecycle** (§7.4) — the three calls and the states in between.
+- **Failure handling and SLA planning** (§7.5–§7.6) — partial failures, selective resubmission, and backing out a deadline.
+
+§7.7 then builds a complete offline document-classification pipeline end-to-end, and §7.8 distills what the exam tests.
+
+## 7.1 Overview: What the Batches API Is
+
+The Message Batches API lets you submit a collection of independent Messages API requests for **asynchronous** processing. You do not hold a connection open; you submit, you receive a batch ID, and you poll until the batch finishes — at which point you stream the results.
 
 | Attribute | Value |
 |---|---|
-| Savings | **50%** compared to synchronous calls |
-| Processing window | Up to **24 hours** (no latency SLA guarantee) |
-| Multi-turn tool calling | **Not supported** (one request = one response) |
-| Correlation | `custom_id` field to link request and response |
+| Cost | **50% discount** on input *and* output tokens vs. synchronous calls |
+| Processing window | Most batches finish within **1 hour**; the hard ceiling is **24 hours** (no per-request latency SLA) |
+| Batch size | Up to **100,000 requests** or **256 MB**, whichever comes first |
+| Result retention | Results are available for **29 days** after the batch is created |
+| Correlation | Each request carries a `custom_id`; results are keyed by it and arrive **in any order** |
+| Feature parity | **All** Messages API features work inside a batch — tools, vision, system prompts, **prompt caching**, structured outputs |
+| Multi-turn tool calling | **Not supported** — one request produces one response; there is no agentic loop inside a batch |
 
-## 7.2 When to Use Batch API vs Synchronous API
+**Why it exists — the economics.** Half-price tokens are the headline. For a job that processes 50,000 invoices or re-classifies a year of support tickets, the 50% discount is often the difference between "we run this nightly" and "we don't run this at all." The cost applies to the *whole* batch's token usage, so the larger and more repetitive the job, the more you save — and because prompt caching also works inside a batch, a shared system prompt across thousands of requests can stack a further ~90% discount on the cached prefix on top of the 50%.
+
+**The catch — no latency guarantee.** "Up to 24 hours" is a ceiling, not a target. Most batches finish far sooner, but you cannot *promise* a finish time, so the API is unusable for anything a human is actively waiting on. This single property is what every exam question about batching turns on.
+
+**Pitfall — treating a batch like a chat.** A batch request is one-shot: the model receives the messages and returns one response. If you put tools in a batch request and the model emits a `tool_use`, there is nothing to execute it and feed the result back — the batch does not loop. Batches are for *stateless, single-turn* work (classify, extract, summarize, score, enrich), not for multi-step agents. If your task needs an agentic loop, it belongs in the synchronous Messages API (Chapter 3), not here.
+
+**Exam angle.** Expect a table-stakes question that hands you a property — "50% cheaper", "results in any order", "no SLA", "one request one response" — and asks which API it describes. The distractor is almost always the synchronous Messages API. Anchor on *asynchronous + discounted + no latency guarantee*.
+
+## 7.2 When to Use the Batch API vs. the Synchronous API
+
+The decision rule is a single question: **is something — a human or a downstream synchronous system — blocked waiting for this result?** If yes, use the synchronous Messages API. If the result is only needed *eventually* (by morning, by the weekly report, whenever the job finishes), batch it and take the discount.
+
+```mermaid
+flowchart TD
+    A[New inference workload] --> B{Is anyone blocked<br/>waiting on the result?}
+    B -->|yes, a user or live system| C[Synchronous Messages API<br/>full price, immediate]
+    B -->|no, needed eventually| D{Independent single-turn<br/>requests?}
+    D -->|no, needs an agentic loop| C
+    D -->|yes| E{Large volume or<br/>cost-sensitive?}
+    E -->|yes| F[Batch API<br/>50 percent off, up to 24h]
+    E -->|borderline| G[Either works —<br/>batch if volume grows]
+```
 
 | Task | API | Why |
 |---|---|---|
 | Pre-merge PR check | **Synchronous** | The developer is waiting; 24 hours is unacceptable |
+| Interactive code review | **Synchronous** | Immediate response required in the editor |
+| Live customer-support chat | **Synchronous** | A user is reading the reply in real time |
 | Overnight tech-debt report | **Batch** | Result is needed by morning; 50% savings |
-| Weekly security audit | **Batch** | Not urgent; 50% savings |
-| Interactive code review | **Synchronous** | Immediate response required |
-| Processing 10,000 documents | **Batch** | Bulk processing; savings are significant |
+| Weekly security audit | **Batch** | Not urgent; runs on a schedule; 50% savings |
+| Classifying 10,000 documents | **Batch** | Bulk, offline, no one waiting; savings are significant |
+| Nightly enrichment of a CRM table | **Batch** | Scheduled, large, latency-tolerant |
 
-## 7.3 Using `custom_id`
+**Why "who is waiting" is the right axis.** Volume alone does not decide it — you *can* run 10,000 synchronous calls, and you *can* batch a single request. What makes batching correct is the combination of (a) tolerance for latency and (b) independence of the requests. A live chat with one user fails (a); a multi-turn agent fails (b). Everything that passes both is a batch candidate, and at that point the 50% discount makes batching the default, not the exception.
+
+**Pitfall — batching latency-sensitive work to save money.** The discount tempts teams to batch things users are waiting on. A batch that *usually* finishes in 10 minutes will *eventually* take 20 hours when the queue is deep, and that one bad day is a production incident. Never put a human-facing path on the batch API, no matter how fast it normally returns.
+
+**Pitfall — going synchronous for a huge offline job "to keep it simple".** The mirror-image mistake. Running 50,000 documents through synchronous calls pays double and hammers your rate limits; the batch API is *built* for this shape and the discount is free money you are declining.
+
+**Exam angle.** These questions are almost always a sorting task: a list of workloads, each tagged Batch or Synchronous. Decide each one on the "who is waiting / is it a loop" test. The deliberately tricky rows are (1) a high-volume task that is nonetheless interactive — stays synchronous — and (2) a low-volume task that is purely offline — batch is still fine, the discount applies even to small jobs.
+
+## 7.3 Correlating Requests and Results with `custom_id`
+
+Every request in a batch carries a `custom_id` you assign. It is the *only* link between an input and its result, because **batch results come back in arbitrary order** — the API makes no promise that result #1 corresponds to request #1.
 
 ```json
 {
   "custom_id": "doc-invoice-2024-001",
   "params": {
-    "model": "claude-sonnet-4-6",
+    "model": "claude-haiku-4-5",
     "max_tokens": 1024,
     "messages": [{"role": "user", "content": "Extract data from: ..."}]
   }
 }
 ```
 
-`custom_id` allows you to:
-- Link the result to the original document
-- On failure, re-submit only the failed documents
-- Avoid re-processing successful documents
+`custom_id` lets you:
 
-## 7.4 Handling Failures in Batches
+- **Re-attach each result to its source** document, record, or row — by key, never by position.
+- **Resubmit only the failures** — identify the failed `custom_id`s and build a new, smaller batch from just those.
+- **Avoid reprocessing successes** — already-succeeded `custom_id`s are done; you never pay for them twice.
+- **Make the job idempotent** — a stable, deterministic `custom_id` (e.g. derived from the document's primary key) means a re-run produces the same keys, so you can dedupe and safely retry.
 
-1. Submit a batch of 100 documents
-2. 95 succeed; 5 fail (context limit exceeded)
-3. Identify failures by `custom_id`
-4. Modify strategy (e.g., split long documents into chunks)
-5. Re-submit only the 5 failed documents
+**Why ordering is not guaranteed.** A batch of 100,000 requests is processed in parallel across Anthropic's fleet; requests finish when they finish. Building your result-handling around array index is the single most common batch bug — it silently mislabels every record the moment one request reorders or fails.
 
-## 7.5 SLA Planning
+**Pitfall — non-unique or positional `custom_id`s.** `custom_id` must be unique within a batch. Reusing one (or using a bare loop index like `"0"`, `"1"` that you then match positionally against your input list) destroys the only reliable correlation you have. Derive it from something meaningful and unique in your domain: `invoice-2024-001`, `ticket-558823`, `user-4471-enrich`.
 
-If you need a result in 30 hours and the Batch API can take up to 24 hours:
-- Submission window: 30 - 24 = **6 hours**
-- Batches must be submitted no later than 24 hours before the deadline
-- For frequent submissions, split into 4-hour windows
+**Exam angle.** A scenario describes results coming back mismatched, or asks "how do you know which answer belongs to which document?" The answer is always: key on `custom_id`; never rely on order.
 
----
+## 7.4 The Batch Lifecycle: Submit → Poll → Retrieve
+
+A batch moves through three operations and a small set of states. You **create** it, you **poll** its `processing_status` until it reaches `ended`, then you **stream the results**.
+
+```mermaid
+flowchart TD
+    A[Build requests<br/>each with a unique custom_id] --> B[batches.create<br/>returns batch id + status in_progress]
+    B --> C[batches.retrieve id<br/>read processing_status]
+    C --> D{processing_status?}
+    D -->|in_progress| E[wait, then poll again]
+    E --> C
+    D -->|ended| F[batches.results id<br/>stream each result]
+    F --> G{result.type per item?}
+    G -->|succeeded| H[read result.message.content<br/>store by custom_id]
+    G -->|errored / expired / canceled| I[record custom_id<br/>for resubmission]
+```
+
+**The three calls (Python SDK).** `build_practical_test_html.py` is not involved here — this is the live API:
+
+```python
+import anthropic
+from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+from anthropic.types.messages.batch_create_params import Request
+
+client = anthropic.Anthropic()
+
+#-- Step 1 - create: wrap each request as Request(custom_id, params)
+batch = client.messages.batches.create(
+    requests=[
+        Request(
+            custom_id="doc-invoice-2024-001",
+            params=MessageCreateParamsNonStreaming(
+                model="claude-haiku-4-5",
+                max_tokens=1024,
+                messages=[{"role": "user", "content": "Extract data from: ..."}],
+            ),
+        ),
+        # ... up to 100,000 of them
+    ]
+)
+```
+
+```python
+import time
+
+#-- Step 2 - poll: retrieve the batch and check processing_status until "ended"
+while True:
+    batch = client.messages.batches.retrieve(batch.id)
+    if batch.processing_status == "ended":
+        break
+    # request_counts tracks live progress: processing / succeeded / errored
+    time.sleep(60)
+```
+
+```python
+#-- Step 3 - retrieve: stream results; they arrive in ANY order, so key by custom_id
+results = {}
+for result in client.messages.batches.results(batch.id):
+    if result.result.type == "succeeded":
+        msg = result.result.message
+        results[result.custom_id] = next(
+            (b.text for b in msg.content if b.type == "text"), ""
+        )
+    else:
+        results[result.custom_id] = None  # errored / expired / canceled
+```
+
+**The states that matter:**
+
+- **`processing_status`** on the batch object is `in_progress` while work is running and `ended` when every request has reached a terminal result. `ended` does **not** mean "all succeeded" — it means "no more work to do". A cancel request moves it through `canceling`.
+- **`request_counts`** (`processing`, `succeeded`, `errored`, …) is your live progress meter while polling — useful for logging and dashboards.
+- **`result.result.type`** per item is one of `succeeded`, `errored`, `canceled`, or `expired`. Only `succeeded` carries a `result.message`; the others carry error/status detail.
+
+**Why poll instead of stream the whole thing.** There is no open connection holding your batch — it runs server-side for minutes to hours. You poll `retrieve` on a sane interval (every 30–60s is plenty; a tight loop just wastes calls), and only when `processing_status == "ended"` do you pull results. Results live for **29 days**, so there is no rush to fetch them the instant the batch ends.
+
+**Pitfall — fetching results before `ended`, or reading a non-`succeeded` item's message.** Don't call `results()` until the batch has ended, and always branch on `result.type` before reaching for `result.message` — an `errored` or `expired` item has no message, and unconditionally reading `result.message.content` will throw.
+
+**Exam angle.** Expect to identify the correct ordering of the lifecycle (create → poll status → retrieve results), to know that `ended` ≠ "all succeeded", and to know that results are durable for 29 days (so you don't have to handle them synchronously the moment the batch completes).
+
+## 7.5 Handling Failures Within a Batch
+
+Inside one batch, individual requests can fail independently. The whole batch does **not** fail because a few requests did — it reaches `ended`, and each result tells you its own fate. The recovery pattern is **identify by `custom_id`, fix the cause, resubmit only the failures.**
+
+```mermaid
+flowchart TD
+    A[Submit batch of 100 documents] --> B[Batch ends<br/>95 succeeded, 5 errored]
+    B --> C[Stream results,<br/>collect failed custom_ids]
+    C --> D{Why did they fail?}
+    D -->|context limit exceeded| E[Chunk long docs,<br/>then resubmit those 5]
+    D -->|transient server error| F[Resubmit the 5 as-is]
+    E --> G[New small batch<br/>of just the failures]
+    F --> G
+    G --> H[Merge new results<br/>with the 95 successes]
+```
+
+A concrete walk-through:
+
+1. Submit a batch of 100 documents.
+2. The batch ends: 95 succeed, 5 fail (say, each exceeded the context window).
+3. Stream results and collect the 5 failed `custom_id`s (the ones whose `result.type != "succeeded"`).
+4. Change strategy for those 5 — e.g. split each long document into chunks, or trim it.
+5. Resubmit **only** those 5 as a new batch, then merge their results back with the original 95.
+
+**Distinguish the failure types — they need different fixes.** An `errored` result carries an error type. A **validation/`invalid_request` error** (a malformed request, a document over the context limit) will fail again identically if you resubmit unchanged — you must *fix the request* first. A **transient server error** is safe to resubmit as-is. An **`expired`** result means the batch hit the 24-hour ceiling before that request was processed — resubmit it (and consider smaller batches so the window isn't a factor). Blindly retrying a validation failure just burns another batch; blindly *not* retrying a transient one drops good work.
+
+**Why partial failure is a feature, not a bug.** Because successes are billed and delivered regardless of the failures, you never redo 95 good documents to recover 5 bad ones. The `custom_id` keying makes the "merge the retry back in" step trivial: the 5 new results slot into the same dictionary under the same keys.
+
+**Pitfall — re-running the entire batch on any failure.** This pays for the 95 successes a second time and is the exact waste `custom_id`-based selective resubmission exists to prevent. Resubmit the failures only.
+
+**Pitfall — ignoring the error subtype.** Treating every failure as "retry" loops forever on the validation errors; treating every failure as "give up" loses the recoverable ones. Read the error type and route accordingly.
+
+**Exam angle.** The model scenario is "100 submitted, some fail" — the expected answer is *identify failures by `custom_id`, address the root cause, resubmit only those*, and the supporting detail is *distinguish validation failures (fix first) from transient ones (retry as-is)*. This is the Domain 5 error-propagation idea (structured, per-item failure context) applied to batch jobs.
+
+## 7.6 SLA Planning: Backing Out a Deadline
+
+Because the batch window is "up to 24 hours", any real deadline must be planned backward from it. The rule: **your submission deadline = your result deadline − 24 hours.**
+
+If you need a result in **30 hours** and a batch can take up to **24**:
+
+- Submission window: 30 − 24 = **6 hours**. You must submit no later than 6 hours from now.
+- Equivalently, a batch must be submitted **at least 24 hours before** the moment you need its output.
+- For work that arrives continuously, don't accumulate it into one giant end-of-day batch — slice it into smaller batches on a cadence (e.g. every 4 hours) so no single item is ever waiting on a full 24-hour window, and so a late-arriving item still clears the deadline.
+
+**Why size and cadence interact with the window.** A 100,000-request batch and a 500-request batch share the same 24-hour ceiling, but the small one almost always finishes far sooner. Splitting a huge job into several smaller batches both smooths your progress visibility (each ends independently) and reduces the blast radius if one batch expires — you re-run a slice, not the whole day.
+
+**Pitfall — planning against the *typical* finish time.** "It usually takes 20 minutes" is not a deadline you can commit to. SLA math uses the **24-hour ceiling**, every time. Provision the buffer for the worst case, not the average.
+
+**Pitfall — one daily mega-batch for streaming inputs.** If you collect a day's documents and submit at 11pm for an 8am deadline, you have only 9 hours of buffer and every document waited all day. Frequent smaller batches keep each item's clock short and keep you inside the SLA.
+
+**Exam angle.** A timing question gives you a result deadline and asks for the latest safe submission time, or the right batching cadence. Compute against 24 hours: *latest submission = deadline − 24h*; for continuous inputs, *split into fixed windows* so nothing rides the full ceiling.
+
+## 7.7 End-to-End Case Study: An Offline Document-Classification Pipeline
+
+The pieces above only matter assembled into a real job. Here is a complete, latency-tolerant pipeline of exactly the shape Domain 5 asks you to reason about — a nightly classification-and-enrichment run over a large document set, built for cost and resilience.
+
+### Requirements
+
+- Each night, **classify and tag 50,000 support tickets** from the day's queue (category, priority, product area) and write the tags back to the warehouse.
+- Results are needed by the **8:00 AM** analytics refresh — **no human is waiting** overnight.
+- **Cost matters**: 50,000 tickets is a large, repetitive job; the team wants the inference bill minimized.
+- The work is **single-turn and independent** — each ticket is classified on its own; there is no conversation and no tool loop.
+- The pipeline must be **resilient**: a handful of oversized or transiently-failed tickets must not sink the run or force a full re-process.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    Q[Nightly ticket queue<br/>50,000 tickets] --> R[Build requests<br/>custom_id = ticket id<br/>shared cached system prompt]
+    R --> S[batches.create]
+    S --> P[Poll processing_status<br/>every 60s until ended]
+    P --> G[Stream results<br/>key every result by custom_id]
+    G --> OK[succeeded<br/>write tags to warehouse]
+    G --> BAD[errored or expired<br/>collect failed ids]
+    BAD --> FIX[Chunk oversized tickets;<br/>resubmit failures only]
+    FIX --> S
+    OK --> DONE[Warehouse ready<br/>before 8 AM refresh]
+```
+
+The job is **submitted once and polled**, not held open; the model is **Haiku 4.5** because classification is simple and cheap; a **shared, cached system prompt** rides every request; and failures are **re-attached and resubmitted by `custom_id`** rather than re-running the whole batch.
+
+### Implementation
+
+Build the batch with a stable `custom_id` per ticket and a *shared* system prompt marked for prompt caching — the cached prefix is paid once and read at ~0.1× for all 50,000 requests, stacking on top of the batch's 50% discount:
+
+```python
+import anthropic
+from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+from anthropic.types.messages.batch_create_params import Request
+
+client = anthropic.Anthropic()
+
+#-- Shared, cacheable instructions - identical across every request in the batch
+TAGGING_SYSTEM = [
+    {"type": "text", "text": "You are a support-ticket classifier. Return JSON only."},
+    {
+        "type": "text",
+        "text": TAXONOMY_AND_FEWSHOTS,            # large, stable, reused by all
+        "cache_control": {"type": "ephemeral"},   # cached prefix, ~0.1x on reads
+    },
+]
+
+requests = [
+    Request(
+        custom_id=f"ticket-{t['id']}",            # stable key, derived from the PK
+        params=MessageCreateParamsNonStreaming(
+            model="claude-haiku-4-5",             # cheap + fast: right tier for classification
+            max_tokens=256,                        # tags are short; small cap controls cost
+            system=TAGGING_SYSTEM,
+            messages=[{"role": "user", "content": t["body"]}],
+        ),
+    )
+    for t in nightly_tickets                       # up to 100,000 per batch
+]
+
+batch = client.messages.batches.create(requests=requests)
+```
+
+Poll on a calm interval, then stream results and split succeeded from failed — keyed entirely by `custom_id`:
+
+```python
+import time
+
+while True:
+    batch = client.messages.batches.retrieve(batch.id)
+    if batch.processing_status == "ended":        # ended != all-succeeded
+        break
+    time.sleep(60)
+
+tags, failed_ids = {}, []
+for result in client.messages.batches.results(batch.id):
+    if result.result.type == "succeeded":
+        msg = result.result.message
+        tags[result.custom_id] = next((b.text for b in msg.content if b.type == "text"), "")
+    else:
+        failed_ids.append(result.custom_id)       # errored / expired / canceled
+
+write_tags_to_warehouse(tags)                      # 49,990 good rows land immediately
+```
+
+Resubmit only the failures, after fixing their cause — never the whole batch:
+
+```python
+if failed_ids:
+    retry_requests = [
+        Request(
+            custom_id=fid,
+            params=MessageCreateParamsNonStreaming(
+                model="claude-haiku-4-5",
+                max_tokens=256,
+                system=TAGGING_SYSTEM,
+                messages=[{"role": "user", "content": chunk_if_oversized(ticket_body(fid))}],
+            ),
+        )
+        for fid in failed_ids
+    ]
+    retry_batch = client.messages.batches.create(requests=retry_requests)
+    # poll + merge retry_batch results back into `tags` under the same custom_ids
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Cron as Nightly job
+    participant API as Batches API
+    participant DW as Warehouse
+    Cron->>API: batches.create(50,000 requests)
+    API-->>Cron: batch id, processing_status in_progress
+    loop every 60s
+        Cron->>API: batches.retrieve(id)
+        API-->>Cron: in_progress (succeeded 41,200 / processing 8,800)
+    end
+    API-->>Cron: processing_status ended (49,990 ok / 10 errored)
+    Cron->>API: batches.results(id)
+    API-->>Cron: results keyed by custom_id, unordered
+    Cron->>DW: write 49,990 tags
+    Cron->>API: batches.create(10 failures, chunked)
+    API-->>Cron: ended, 10 ok
+    Cron->>DW: merge final 10 tags before 8 AM
+```
+
+Notice the run *never blocks* on a connection, *never re-pays* for the 49,990 successes, and clears the deadline with hours to spare — the 24-hour ceiling was never close, because the job was sized and scheduled with buffer.
+
+### Validation
+
+- **Cost check:** confirm the batch line items bill at ~50% of synchronous, and that `usage.cache_read_input_tokens` is non-zero on the bulk of requests — proving the shared system prompt cached. If cache reads are zero, a per-request difference (a timestamp, an unsorted field) is invalidating the prefix.
+- **Correlation check:** assert every warehouse row was keyed by `custom_id`, not by result position — reorder the results stream in a test and confirm tags still land on the right tickets.
+- **Resilience check:** inject an oversized ticket; confirm the batch still reaches `ended`, the bad ticket surfaces as a failed `custom_id`, and only it (not the other 49,999) is resubmitted.
+- **SLA check:** confirm submission happens ≥ 24 hours before the 8 AM dependency, or that the cadence keeps every item inside the window.
+
+### Common pitfalls
+
+- Putting this on the synchronous API "to keep it simple" — pays double and stresses rate limits for a job no one is waiting on (§7.2).
+- Matching results to tickets by array index instead of `custom_id` — silently mislabels tickets the moment one reorders or fails (§7.3).
+- Re-running all 50,000 when 10 fail, instead of resubmitting the 10 by `custom_id` (§7.5).
+- Reading `result.message` without checking `result.type` first — throws on the errored items (§7.4).
+- Planning the 8 AM deadline against the *typical* finish time instead of the 24-hour ceiling (§7.6).
+
+## 7.8 Exam Focus — Key Takeaways
+
+| Concept | What the exam tests |
+|---|---|
+| What batching is | Asynchronous, **50% cheaper**, up to **24h** (no latency SLA), one request → one response, results retained **29 days** (§7.1). |
+| Batch vs. synchronous | Decide on **who is waiting** and **is it a loop**: live/interactive/agentic → synchronous; offline + independent + high-volume → batch (§7.2). |
+| `custom_id` | Results arrive **unordered**; correlate by `custom_id`, never by position — also enables selective retry and idempotency (§7.3). |
+| Lifecycle | **create → poll `processing_status` until `ended` → stream `results`**; `ended` ≠ all-succeeded; branch on `result.type` (§7.4). |
+| Failure handling | Identify failures by `custom_id`, **fix the cause, resubmit only those**; distinguish validation (fix first) from transient (retry as-is) (§7.5). |
+| SLA planning | Latest submission = **deadline − 24h**; split continuous inputs into fixed windows so nothing rides the full ceiling (§7.6). |
+
+> **Maps to Domain 5 (15%).** If you can build and defend the nightly classification pipeline above — batch-vs-real-time judgment, the submit/poll/retrieve lifecycle, `custom_id` correlation, selective failure recovery, and 24-hour SLA math — you have the cost-and-reliability core this domain tests, plus the platform fact that Batches is first-party (and Claude Platform on AWS) only, not Amazon Bedrock or Vertex AI.
 
 # Chapter 8: Task Decomposition Strategies
 
+> Documentation: [Subagents](https://platform.claude.com/docs/en/agent-sdk/subagents) | [Sessions](https://platform.claude.com/docs/en/agent-sdk/sessions)
+
+Decomposition is the skill of turning *one* complex request into the *right* set of subtasks — and knowing when to leave it as one task. It is the orchestration counterpart to Chapter 3's agent mechanics: Chapter 3 built the coordinator and the `Task` tool; this chapter decides *what* the coordinator should hand to those subagents and *in what order*. It maps to **Domain 1 — Agent Architecture and Orchestration (27% of the exam)**, specifically objective **1.6 Task Decomposition Strategies for Complex Workflows**, and it leans on the multi-agent and context-passing skills from 1.2–1.3.
+
+The exam tests decomposition as a series of *judgement calls*, not a single algorithm. By the end of this chapter you should be able to pick the right strategy on sight:
+
+- **Fixed pipelines / prompt chaining** (§8.1) — predictable, known-in-advance steps.
+- **Dynamic adaptive decomposition** (§8.2) — subtasks generated from what you discover.
+- **Sequential vs parallel** (§8.3) — when subtasks may run concurrently and when a dependency forbids it.
+- **Multi-pass review (fan-out then integrate)** (§8.4) — splitting a large artifact per-unit, then a cross-unit pass.
+- **When *not* to decompose** (§8.5) — the over-decomposition failure mode the exam loves to probe.
+
+§8.6 ties it together with an end-to-end **multi-agent research system**, and §8.7 distills the exam angle.
+
 ## 8.1 Fixed Pipelines (Prompt Chaining)
 
-Each step is defined in advance:
+A fixed pipeline (a.k.a. *prompt chaining*) hard-codes the sequence of steps in advance. The output of each stage becomes the input to the next:
 
+```mermaid
+flowchart TD
+    Doc[Raw document] --> Meta[Extract metadata]
+    Meta --> Data[Extract structured data]
+    Data --> Val{Validation passes?}
+    Val -->|no| Fix[Repair or reject]
+    Val -->|yes| Enrich[Enrich from reference data]
+    Enrich --> Out[Final structured output]
+    Fix --> Out
 ```
-Document -> Metadata extraction -> Data extraction -> Validation -> Enrichment -> Final output
-```
+
+Each box is a separate, focused model call (or a deterministic step). Because the structure never changes, you can test each stage in isolation, cache intermediate results, and reason about cost up front.
+
+**Why split a chain instead of doing it in one prompt?** Each step gets the model's full attention and a narrow instruction, so accuracy on each sub-step rises. You also gain a natural checkpoint after every stage — validation can reject bad output *before* it contaminates enrichment.
 
 **When to use:**
-- The task structure is predictable (reviews always follow the same template)
-- All steps are known up front
-- You need stability and reproducibility
+- The task structure is predictable (e.g., invoice or review parsing always follows the same template).
+- All steps are known up front and the order never depends on the data.
+- You need stability, reproducibility, and per-stage observability.
+
+**Pitfalls:**
+- **Brittleness when reality varies.** If some documents need an extra step, a *fixed* pipeline can't add one — that's the signal to move to §8.2.
+- **Error propagation.** Without a validation gate, a bad extraction silently flows downstream. Always put a check between stages that feed each other.
+- **Over-chaining trivial work.** Three stages that each do one tiny thing add three round-trips of latency; collapse them (see §8.5).
+
+**Exam angle:** "predictable, same template every time" → fixed pipeline / prompt chaining. The distractor will usually be dynamic decomposition (wrong because the scope is fully known in advance).
 
 ## 8.2 Dynamic Adaptive Decomposition
 
-Subtasks are generated based on intermediate results:
+In a dynamic plan the subtasks are **generated from intermediate results** — you cannot enumerate them before you start because the next step depends on what the last step found:
 
+```mermaid
+flowchart TD
+    Goal[Goal: add tests to a legacy codebase] --> Map[Map structure<br/>Glob and Grep]
+    Map --> Found[Found: 3 modules untested,<br/>2 partially covered]
+    Found --> Prio[Prioritize: payments module first<br/>highest risk]
+    Prio --> Work[Begin writing tests]
+    Work --> Disc{Hidden dependency<br/>discovered?}
+    Disc -->|yes| Adapt[Insert new subtask:<br/>mock the external API]
+    Disc -->|no| Next[Continue to next module]
+    Adapt --> Next
 ```
-1. "Add tests for a legacy codebase"
-2. -> First: map the structure (Glob, Grep)
-3. -> Found: 3 modules with no tests, 2 with partial coverage
-4. -> Prioritize: start with the payments module (high risk)
-5. -> During work: discovered a dependency on an external API
-6. -> Adapt: add a mock for the external API before writing tests
-```
+
+The plan is a living thing: the agent maps the terrain first, forms a prioritized plan, then **revises that plan** when it discovers something it could not have known up front (here, an external-API dependency that forces a new "add a mock" subtask).
+
+**Why this is harder — and more powerful.** A fixed pipeline assumes omniscience about the steps. Open-ended work doesn't grant that: you must let the agent expand the plan as evidence arrives. The discipline is to *map before you commit* — explore structure first, then prioritize by risk, rather than diving into the first file you see.
 
 **When to use:**
-- Open-ended investigative tasks
-- When the full scope is unknown up front
-- When each step depends on the results of the previous step
+- Open-ended, investigative tasks (debugging, auditing, "figure out why X is slow").
+- The full scope is unknown at the start.
+- Each step's *output* determines the next step's *existence*.
 
-## 8.3 Multi-pass Code Review
+**Pitfalls:**
+- **No exit condition.** A plan that keeps spawning subtasks never finishes. Anchor it with a goal and quality bar ("stop when every module has ≥1 test").
+- **Adapting too eagerly.** Replanning on every minor surprise thrashes. Replan when a discovery *changes the structure of the work*, not for cosmetic findings.
+- **Losing the thread across steps.** Because later subtasks depend on earlier findings, those findings must be carried forward explicitly (the context-passing rule from Chapter 3 §3.4).
 
-For pull requests with 10+ files:
+**Exam angle:** "scope unknown up front / each step depends on the last" → dynamic adaptive decomposition. Watch for "map the structure first, then build a prioritized plan" — that phrasing is the tell.
 
+## 8.3 Sequential vs Parallel Decomposition
+
+Once you have subtasks, the next decision is *ordering*: can they run concurrently, or does a dependency force a sequence? This is where decomposition meets the parallel-spawning capability from Chapter 3 §3.4 (multiple `Task` calls in one coordinator turn run at once).
+
+```mermaid
+flowchart TD
+    Start[Subtasks identified] --> Q{Does task B need<br/>task A output?}
+    Q -->|no, independent| Par[Spawn in parallel<br/>multiple Task calls, one turn]
+    Q -->|yes, B depends on A| Seq[Run sequentially<br/>pass A result into B]
+    Par --> Agg[Aggregate results]
+    Seq --> Agg
+    Agg --> Done[Validated result]
 ```
-Pass 1 (per-file): Analyze auth.ts -> list local issues
-Pass 1 (per-file): Analyze database.ts -> list local issues
-Pass 1 (per-file): Analyze routes.ts -> list local issues
-...
-Pass 2 (integration): Analyze relationships between files
-  -> Cross-file issues: inconsistent types, circular dependencies
+
+**The rule is dependency-driven, not preference-driven.** Independent subtasks (search topic X, search topic Y, search topic Z) should fan out in parallel — it is faster and the results don't interact. Dependent subtasks (extract a schema, *then* validate data against it) must be sequenced, because running them at once would feed the validator nothing.
+
+**Why parallel is not free.** Parallel subagents each consume tokens and an isolated context window; spawning ten when three would do wastes budget and makes aggregation noisier. Parallelize for *independent coverage*, not as a default.
+
+**Common dependency shapes:**
+- **Fan-out / fan-in (map-reduce):** N independent subtasks in parallel, then one aggregation step (this is §8.4's review pattern and §8.6's research pattern).
+- **Linear chain:** A → B → C, each consuming the prior result (this is §8.1).
+- **Diamond:** A → {B, C in parallel} → D — split after a shared setup step, then rejoin.
+
+**Pitfalls:**
+- **Parallelizing a true dependency** produces a subagent that runs with missing input and fails or hallucinates.
+- **Sequencing independent work** leaves performance on the table — three serial searches where one parallel turn would do.
+- **Forgetting aggregation must wait.** The fan-in step depends on *all* fan-out subtasks; the coordinator must collect every result before synthesizing.
+
+**Exam angle:** the question often hides a dependency in prose. Ask "does B need A's output?" If yes → sequential; if no → parallel. "Split research coverage to minimize duplication" is a parallel-fan-out cue.
+
+## 8.4 Multi-pass Review (Fan-out, then Integrate)
+
+A large artifact — a pull request touching 14 files — is the canonical fan-out-then-integrate case. Pass 1 analyzes each unit in isolation (parallelizable); Pass 2 reasons across units, which *cannot* be parallelized because it needs every Pass 1 result:
+
+```mermaid
+flowchart TD
+    PR[Pull request: 14 files] --> P1a[Pass 1: analyze auth.ts<br/>local issues]
+    PR --> P1b[Pass 1: analyze database.ts<br/>local issues]
+    PR --> P1c[Pass 1: analyze routes.ts<br/>local issues]
+    P1a --> P2[Pass 2: integration pass<br/>cross-file reasoning]
+    P1b --> P2
+    P1c --> P2
+    P2 --> Cross[Cross-file issues:<br/>inconsistent types, circular deps]
 ```
 
 **Why a single pass over 14 files is bad:**
-- Attention dilution: deep analysis for some files, shallow for others
-- Inconsistent comments: a pattern is flagged in one file but approved in another
-- Missed bugs: obvious errors get skipped due to cognitive overload
+- **Attention dilution:** the model analyzes some files deeply and others shallowly when forced to hold all 14 at once.
+- **Inconsistent comments:** a pattern is flagged in one file but approved in another, because the model never sees them side by side under one rubric.
+- **Missed bugs:** obvious errors get skipped under cognitive overload.
 
----
+**Why two passes fix it.** Pass 1 gives each file the model's full attention under an identical rubric (consistency). Pass 2 exists *only* to catch what per-file analysis structurally cannot: inconsistent types across modules, circular dependencies, a function deleted in one file but still called in another. The integration pass is a dependent (sequential) step — it consumes all Pass 1 outputs, so it is the fan-in of §8.3.
+
+**Pitfalls:**
+- **Skipping Pass 2.** Per-file review *never* finds cross-file bugs; without integration you ship the circular dependency.
+- **Letting Pass 1 reason across files.** That re-introduces attention dilution; keep each Pass 1 subagent scoped to one file.
+- **Unbounded fan-out.** 200 files at once is its own overload; batch them and aggregate batch summaries.
+
+**Exam angle:** "PR with 10+ files," "deep but consistent review" → per-file passes plus a *separate* cross-file integration pass. The wrong answer is "review all files in one prompt."
+
+## 8.5 When NOT to Decompose
+
+Decomposition has a cost: every subagent is an isolated context window that must be briefed explicitly (Chapter 3 §3.4), plus a round-trip and an aggregation step. **Over-decomposition** — splitting work that didn't need splitting — is a failure mode the exam deliberately tests.
+
+```mermaid
+flowchart TD
+    Task[Incoming task] --> Q1{Multiple independent<br/>aspects or large artifact?}
+    Q1 -->|no| Single[Do it in one focused agent<br/>no decomposition]
+    Q1 -->|yes| Q2{Subtasks need separate<br/>context or tools?}
+    Q2 -->|no| Single
+    Q2 -->|yes| Decomp[Decompose into subagents]
+```
+
+**Do NOT decompose when:**
+- The task is **small or single-aspect** — a one-file review or a single lookup. A coordinator + subagent here just adds latency and a briefing burden for no gain.
+- **Subtasks are tightly coupled** and constantly need each other's intermediate state. Splitting them forces you to shuttle context back and forth through the coordinator, which is slower and lossier than keeping them in one context.
+- **The overhead exceeds the benefit** — three trivial steps that a single prompt handles accurately.
+
+**Why the exam cares.** Objective 1.2 explicitly names "**risk of overly narrow decomposition by the coordinator**." A coordinator that shatters a cohesive task into micro-subtasks loses the shared context that made the task tractable, and aggregation becomes the hard part. The skill being tested is restraint: decompose for *independent coverage* or *attention isolation*, not reflexively.
+
+**Pitfalls:**
+- **Decomposing to look sophisticated.** The right answer is sometimes "one agent, one prompt."
+- **Fragmenting shared context.** If every subtask needs the same large document, you pay to re-brief each subagent — keep it in one context instead.
+
+**Exam angle:** when a question describes a *small or tightly-coupled* task and offers an elaborate multi-agent split, the elaborate option is usually the trap. Prefer the simplest design that meets the requirement.
+
+## 8.6 End-to-End Case Study: A Multi-Agent Research System
+
+The strategies above only matter when combined under real constraints. Here is a complete research assistant — the kind of system the exam's **Multi-Agent Research System** scenario asks you to reason about. It exercises *every* decision in this chapter: fixed vs dynamic, parallel vs sequential, fan-out/fan-in, and the restraint of §8.5.
+
+### Requirements
+
+- Answer a broad research question (e.g., *"Compare the security posture of three managed Kubernetes offerings"*) with a cited, synthesized report.
+- **Split coverage** across subtopics so two subagents never research the same thing (minimize duplication — objective 1.2).
+- Independent subtopics should be researched **in parallel**; synthesis must wait for **all** of them (a dependency).
+- If synthesis reveals a **gap** (a subtopic with thin or conflicting evidence), the coordinator must **adaptively** spawn one more targeted search — not blindly re-run everything.
+- Do **not** over-decompose: a single, simple factual question should be answered directly without the whole machine.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    User([User question]) --> Coord[Coordinator]
+    Coord --> Plan{Simple single-fact<br/>question?}
+    Plan -->|yes| Direct[Answer directly<br/>no decomposition]
+    Plan -->|no| Split[Decompose into<br/>independent subtopics]
+    Split --> R1[Research subagent A<br/>subtopic 1]
+    Split --> R2[Research subagent B<br/>subtopic 2]
+    Split --> R3[Research subagent C<br/>subtopic 3]
+    R1 -. findings only .-> Synth[Synthesis step<br/>fan-in: needs all results]
+    R2 -. findings only .-> Synth
+    R3 -. findings only .-> Synth
+    Synth --> Gap{Coverage gap or<br/>conflict found?}
+    Gap -->|yes| Extra[Adaptive: spawn one<br/>targeted follow-up search]
+    Gap -->|no| Report[Cited final report]
+    Extra --> Synth
+```
+
+The coordinator first applies §8.5 (don't decompose trivial questions). For real questions it **fans out** independent subtopics in parallel (§8.3), then runs a **dependent** synthesis (§8.4 fan-in), and only **adapts** (§8.2) when synthesis exposes a gap — a bounded refinement loop, not an open-ended one.
+
+### Implementation
+
+Define the coordinator and a least-privilege research subagent (reusing the Chapter 3 mechanics):
+
+```python
+coordinator = AgentDefinition(
+    name="research_coordinator",
+    description="Splits a research question into non-overlapping subtopics, "
+                "runs them in parallel, synthesizes, and fills gaps.",
+    system_prompt=(
+        "Decompose the question into independent subtopics that do not overlap. "
+        "If the question is a single simple fact, answer it directly without subagents. "
+        "Spawn one Task per subtopic in a single turn so they run in parallel. "
+        "After synthesis, if a subtopic has thin or conflicting evidence, spawn ONE "
+        "targeted follow-up search; otherwise produce the cited report. "
+        "Judge by coverage and citation quality, not by number of subagents."
+    ),
+    allowed_tools=["Task"],   # the coordinator only orchestrates
+)
+
+researcher = AgentDefinition(
+    name="researcher",
+    description="Researches exactly one subtopic and returns cited findings.",
+    system_prompt="Research the assigned subtopic only. Return findings with sources.",
+    allowed_tools=["web_search", "fetch_url"],   # least privilege: no Task, can't re-decompose
+)
+```
+
+Fan out independent subtopics **in one coordinator turn** so they run concurrently — and pass each subagent its full context explicitly, because subagents inherit nothing (Chapter 3 §3.4):
+
+```python
+# One coordinator turn emits three parallel Tasks, each fully briefed:
+Task(researcher, prompt="Subtopic: EKS security posture.\n"
+                        "Cover: IAM integration, network policy, CVE response.\n"
+                        "Return: bullet findings, each with a source URL.")
+Task(researcher, prompt="Subtopic: GKE security posture.\n...")
+Task(researcher, prompt="Subtopic: AKS security posture.\n...")
+# All three execute concurrently; none can see the others' context.
+```
+
+The synthesis + gap check is a **sequential, dependent** step — it must collect *every* researcher result first:
+
+```python
+def synthesize(findings: list) -> Report:
+    report = merge_and_cite(findings)
+    gap = find_thin_or_conflicting_subtopic(report)   # bounded adaptive trigger
+    if gap:
+        more = Task(researcher, prompt=f"Targeted follow-up on: {gap}. ...")
+        report = merge_and_cite(findings + [more])
+    return report
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant Co as Coordinator
+    participant A as Researcher A (EKS)
+    participant B as Researcher B (GKE)
+    participant C as Researcher C (AKS)
+    U->>Co: Compare security of EKS, GKE, AKS
+    Co->>Co: Not a single fact, decompose into 3 subtopics
+    par Parallel fan-out
+        Co->>A: Task(subtopic: EKS, full brief)
+        Co->>B: Task(subtopic: GKE, full brief)
+        Co->>C: Task(subtopic: AKS, full brief)
+    end
+    A-->>Co: EKS findings + sources
+    B-->>Co: GKE findings + sources
+    C-->>Co: AKS findings + sources
+    Co->>Co: Synthesize - AKS evidence is thin
+    Co->>C: Task(targeted follow-up: AKS network policy)
+    C-->>Co: Additional AKS findings
+    Co-->>U: Cited comparative report
+```
+
+Notice three chapter ideas at once: the **parallel `par` block** is §8.3 fan-out; **synthesis waits for all three** results (fan-in dependency); and the single **targeted follow-up** is bounded §8.2 adaptation — not a blind re-run of all subtopics.
+
+### Validation
+
+- **No-duplication test:** inspect the three Task prompts and assert their subtopics are disjoint — proves the coordinator split coverage (objective 1.2) rather than overlapping.
+- **Parallelism test:** assert all three research Tasks are emitted in a *single* coordinator turn (concurrent), not three serial turns.
+- **Dependency test:** assert synthesis runs only after all three results return — remove one and synthesis must block, proving the fan-in dependency.
+- **Restraint test:** feed a single simple fact ("What is the latest EKS version?") and assert the coordinator answers directly with **zero** subagents (§8.5).
+- **Bounded-adaptation test:** simulate a thin subtopic and assert exactly **one** follow-up Task fires — not a full re-run.
+
+### Common pitfalls
+
+- **Overlapping subtopics** so two subagents research the same thing — wasted tokens and contradictory findings (violates "minimize duplication").
+- **Serial searches** where a single parallel turn would do — leaving latency on the table (§8.3).
+- **Synthesizing before all results return** — the report omits whichever subagent hadn't finished (broken fan-in).
+- **Re-running every subtopic** on a single gap instead of one targeted follow-up — unbounded, expensive adaptation (§8.2).
+- **Decomposing a trivial question** through the full pipeline — over-decomposition (§8.5).
+- **Forgetting to brief each subagent** — isolated context means an unbriefed researcher produces nothing useful (Chapter 3 §3.4).
+
+## 8.7 Exam Focus — Key Takeaways
+
+| Concept | What the exam tests |
+|---|---|
+| Fixed pipeline (prompt chaining) | Predictable, same-template, all-steps-known-up-front work → chain fixed stages with validation gates (§8.1). |
+| Dynamic adaptive decomposition | Open-ended/unknown scope where each step depends on the last → map structure first, then build and revise a prioritized plan (§8.2). |
+| Sequential vs parallel | Decide by dependency: "does B need A's output?" No → parallel fan-out; yes → sequential (§8.3). |
+| Fan-out / fan-in | Independent subtasks in parallel, then one aggregation that depends on all of them (§8.3, §8.4). |
+| Multi-pass review | 10+ file PR → per-file passes for consistency, plus a *separate* cross-file integration pass for circular deps/type mismatches (§8.4). |
+| When NOT to decompose | Small, single-aspect, or tightly-coupled work → one focused agent; over-decomposition loses shared context (§8.5). |
+| Split coverage | Coordinator must partition subtopics to minimize duplication; subagents inherit no context and must be briefed (§8.6). |
+
+> **Maps to Domain 1 (27%), objective 1.6.** If you can choose fixed vs dynamic, parallel vs sequential, and — crucially — *when not to decompose*, and defend the research system above, you own the decomposition half of the most heavily weighted exam domain.
 
 # Chapter 9: Escalation and Human-in-the-Loop
 
+> Documentation: [Agent SDK Hooks](https://platform.claude.com/docs/en/agent-sdk/hooks) | [Subagents](https://platform.claude.com/docs/en/agent-sdk/subagents) | [Sessions](https://platform.claude.com/docs/en/agent-sdk/sessions)
+
+An autonomous agent is only safe if it knows the edge of its own competence and hands off cleanly when it gets there. Escalation — pausing autonomy and routing a decision to a human — is the control that keeps an agent inside policy when the situation exceeds what it should decide alone. This chapter maps primarily to **Domain 1 — Agent Architecture and Orchestration (27% of the exam)**, specifically *1.4 multi-step workflows with enforcement and handoff patterns*, and to **Domain 5 — Context Management and Reliability (15%)**, specifically *5.2 escalation patterns* and *5.5 human oversight and confidence calibration*. The exam tests judgment here, not trivia: it gives you a borderline case and asks whether the agent should solve, ask, or escalate — and *how* the escalation is enforced.
+
+By the end you should be able to reason about five things and assemble them into a production human-in-the-loop system:
+
+- **Escalation triggers** (§9.1) — the reliable signals that say "stop and hand off," and the seductive-but-wrong ones.
+- **Escalation patterns** (§9.2) — immediate vs. attempt-first vs. nuanced (acknowledge → resolve → escalate).
+- **Structured handoff** (§9.3) — the self-contained packet a human needs, because they never see the transcript.
+- **Confidence calibration and human oversight** (§9.4) — routing low-confidence work to review, and auditing the high-confidence remainder.
+- **Deterministic enforcement** (§9.5) — making the escalation happen with a hook, not a hope.
+
+§9.6 then builds a complete **high-value payment-approval agent** end-to-end — triggers, an approval gate enforced by a hook, a structured handoff, and resuming after the human decides — and §9.7 distills what the exam tests.
+
 ## 9.1 When to Escalate to a Human
 
-**Escalation triggers (clear rules):**
+Escalation is a routing decision: *who* should make this call, the agent or a person? The skill the exam rewards is recognizing the trigger from a short scenario and acting on it **immediately and correctly**, without over-investigating or guessing.
 
-| Situation | Action |
-|---|---|
-| The customer explicitly asks “get me a manager” | Escalate immediately; do not attempt to solve |
-| Policy does not cover the request | Escalate (e.g., competitor price matching when policy is silent) |
-| The agent cannot make progress | Escalate after a reasonable number of attempts |
-| Financial operation above a threshold | Escalate (preferably enforced via a hook, not a prompt) |
-| Multiple matches when searching for a customer | Ask for additional identifiers; do not guess |
+**Escalation triggers (clear, reliable rules):**
+
+| Situation | Action | Why this is the right call |
+|---|---|---|
+| The customer explicitly asks "get me a manager" | Escalate immediately; do not attempt to solve | An explicit human request is a hard signal. Continuing to "help" overrides the customer's stated choice and erodes trust. |
+| Policy does not cover the request | Escalate (e.g., competitor price matching when policy is silent) | The agent has no authority to invent policy. A silent/ambiguous policy is a decision a human must own. |
+| The agent cannot make progress | Escalate after a *reasonable* number of attempts | Looping forever burns tokens and frustrates the user; a bounded number of real attempts then handoff is the contract. |
+| Financial/irreversible operation above a threshold | Escalate (enforce via a **hook**, not a prompt) | Money and irreversible actions need a *guarantee*, not a >90% tendency. See §9.5. |
+| Multiple matches when searching for a customer | Ask for additional identifiers; do not guess | Acting on the wrong record is a data-integrity and privacy incident. Disambiguate first. |
+
+**Pitfall — the over-eager solver.** The most common wrong answer treats an explicit "I want a manager" as something to *talk the customer out of*. On the exam, an explicit request for a human is an **immediate** escalation with no further investigation. (See *5.2 skills*: "Execute explicit requests for a human immediately without additional investigation.")
 
 **What is NOT a reliable trigger:**
 
-| Unreliable method | Why it fails |
-|---|---|
-| Sentiment analysis | Customer mood does not correlate with case complexity |
-| Model self-rated confidence (1–10) | The model can be confidently wrong; calibration is poor |
-| An automatic classifier | Overengineering; may require training data you don’t have |
+| Unreliable method | Why it fails | What to do instead |
+|---|---|---|
+| Sentiment analysis | Customer mood does not correlate with case complexity; a calm customer can have an out-of-policy case and an angry one can have a trivial one | Trigger on *facts* (explicit request, policy gap, threshold), not tone |
+| Model self-rated confidence (1–10) | The model can be **confidently wrong**; verbalized confidence is poorly calibrated and easily gamed by phrasing | Use calibrated, *measured* field-level scores against labeled data (§9.4), not a number the model invents |
+| An automatic classifier (bolted on) | Overengineering; needs training data you may not have, and adds a failure mode | Start with explicit rules + few-shot examples; add ML only when rules demonstrably can't express the policy |
+
+> **Exam angle.** A frequent distractor is "use sentiment analysis to decide when to escalate." It is wrong for a *principled* reason — emotion is not complexity. Anchor escalation in concrete, checkable conditions.
 
 ## 9.2 Escalation Patterns
 
-**Immediate escalation:**
+Knowing *that* to escalate is half the answer; the exam also tests the *shape* of the interaction. There are three patterns, and choosing the wrong one is a graded mistake.
+
+```mermaid
+flowchart TD
+    In[Customer message] --> Q1{Explicit request<br/>for a human?}
+    Q1 -->|yes| Esc[Escalate immediately<br/>no further attempts]
+    Q1 -->|no| Q2{Inside agent scope<br/>and policy?}
+    Q2 -->|no, policy gap| Esc
+    Q2 -->|yes| Try[Attempt resolution<br/>offer concrete option]
+    Try --> Q3{Customer satisfied<br/>or reiterates human?}
+    Q3 -->|reiterates human| Esc
+    Q3 -->|satisfied| Done[Resolve and close]
+```
+
+**Immediate escalation** — an explicit request short-circuits everything:
 
 ```
 Customer: "I want to speak to a manager"
@@ -2198,7 +3584,7 @@ Agent: [immediately calls escalate_to_human]
 NOT: "I can help with your issue, let me..."
 ```
 
-**Escalation after an attempt to resolve:**
+**Escalation after an attempt to resolve** — the request is in scope, so try first, then hand off if the offer doesn't land:
 
 ```
 Customer: "My refrigerator broke two days after purchase"
@@ -2206,7 +3592,7 @@ Agent: [checks the order, offers a warranty replacement]
 If the customer is not satisfied -> escalate
 ```
 
-**Nuanced escalation (acknowledge → resolve → escalate on reiteration):**
+**Nuanced escalation (acknowledge → resolve → escalate on reiteration)** — this is the pattern most often tested, because the naive answer escalates too early:
 
 ```
 Customer: "This is outrageous, I'm very unhappy with the quality!"
@@ -2216,9 +3602,9 @@ Customer: "No, I want to talk to someone!"
 Agent: [customer insists again -> immediate escalation]
 ```
 
-Key principle: acknowledge emotion first, then propose a concrete solution, and only escalate if the customer reiterates the desire for a human. Do not escalate on the first expression of dissatisfaction (that is not the same as requesting a manager).
+**Key principle:** acknowledge the emotion first, then propose a *concrete* solution, and only escalate if the customer reiterates the desire for a human. Do not escalate on the first expression of dissatisfaction — venting is not the same as requesting a manager. Escalating too early throws away first-contact resolution (the Customer Support scenario targets 80%+); escalating too late, after an explicit human request, overrides the customer.
 
-**Escalation for a policy gap:**
+**Escalation for a policy gap** — the agent must not improvise authority it doesn't have:
 
 ```
 Customer: "Competitor X has this item 30% cheaper—give me a discount"
@@ -2226,7 +3612,11 @@ Policy: covers price adjustments only on your own site
 Agent: [escalates — policy does not cover competitor price matching]
 ```
 
+> **Pitfall.** Treating a policy *gap* as a policy *denial*. The agent shouldn't say "no, we don't do that" (it has no authority to decide) **or** invent a discount (out of policy). The correct move is to escalate the exception to someone who can own it.
+
 ## 9.3 Structured Handoff Protocols
+
+The human who picks up an escalation **does not see the conversation transcript** — they see whatever the agent hands them. So the handoff packet must be *complete, self-contained, and structured*. This is the same discipline as passing context to a subagent (Chapter 3, §3.4): the receiver inherits nothing you don't explicitly include.
 
 On escalation, the agent should pass a structured summary to a human:
 
@@ -2248,24 +3638,237 @@ On escalation, the agent should pass a structured summary to a human:
 }
 ```
 
-The human operator does not have access to the full conversation transcript—they only see this summary. Therefore it must be complete and self-contained.
+The human operator does not have access to the full conversation transcript — they only see this summary. Therefore it must be complete and self-contained.
+
+**What makes a handoff good (and what the exam checks):**
+
+- **Identifiers** (`customer_id`, `order_id`) so the human can act without re-asking.
+- **Root cause and actions_taken** so the human doesn't repeat work the agent already did — this is what protects first-contact resolution even across a handoff.
+- **A recommended_action** — the agent did the legwork; surface its proposal so the human can confirm rather than re-investigate.
+- **An explicit escalation_reason** — this also becomes the audit record for *why* autonomy stopped.
+
+> **Pitfall — the lossy handoff.** A summary like "customer is unhappy, please help" forces the human to start from zero, defeating the point of the agent. Preserve the **transactional facts** — IDs, amounts, dates — verbatim; these are exactly the values progressive summarization tends to blur (Domain 5, *5.1*). Keep them in a structured packet, not buried in prose.
 
 ## 9.4 Confidence Calibration and Human Oversight
 
+Not every human-in-the-loop decision is a live chat handoff. In high-volume pipelines (the **Structured Data Extraction** scenario), the loop is *statistical*: most items auto-process, and a calibrated minority routes to human review. The exam tests two ideas here — **calibrated field-level confidence** and **stratified auditing** — and warns against trusting a single aggregate number.
+
 For data extraction systems:
 
-1. **Field-level confidence scores:** the model outputs a confidence score per extracted field
-2. **Calibration:** use labeled validation sets to tune thresholds
+1. **Field-level confidence scores:** the model outputs a confidence score *per extracted field*, not one score for the whole document — a date can be certain while a hand-written total is not.
+2. **Calibration:** use labeled validation sets to tune thresholds, so "0.9 confidence" actually corresponds to ~90% observed accuracy (this is what *calibration* means — and why the model's self-rated 1–10 from §9.1 is not it).
 3. **Routing:**
    - High confidence + stable accuracy -> automated processing
    - Low confidence or ambiguous sources -> human review
 
-**Stratified random sampling:**
-- Even for high-confidence extractions, regularly audit a sample
-- An aggregate 97% accuracy can hide 40% errors for a particular document type
-- Analyze accuracy by document type and by field, not only overall
+```mermaid
+flowchart TD
+    Doc[Extracted field<br/>plus confidence] --> T{Confidence above<br/>calibrated threshold?}
+    T -->|yes| Auto[Auto-process]
+    T -->|no| Review[Route to human review]
+    Auto --> Sample{{Stratified random<br/>sample}}
+    Sample -. audit a slice .-> QA[Per-type and per-field<br/>accuracy check]
+    Review --> QA
+    QA -. found drift .-> Recal[Recalibrate thresholds]
+```
 
----
+**Stratified random sampling:**
+
+- Even for high-confidence extractions, regularly audit a sample — confidence is an estimate, not a guarantee, and new document layouts cause silent drift.
+- An aggregate 97% accuracy can hide 40% errors for a particular document type — the good majority masks a broken minority.
+- Analyze accuracy **by document type and by field**, not only overall; that segmentation is what surfaces the hidden 40%.
+
+> **Exam angle.** When a question reports a single headline accuracy ("our extractor is 97% accurate, ship it"), the expected critique is that an *aggregate* can mask a failing segment. The fix is stratified sampling and per-segment analysis *before* trusting automation — not raising the global threshold blindly.
+
+## 9.5 Deterministic Escalation: Hooks vs. Prompt Instructions
+
+Escalation triggers can live in two very different places, and the distinction is the single most testable point in this chapter. You can *ask* the model to escalate (a prompt instruction), or you can *force* the escalation in code (a hook). They are not interchangeable.
+
+A **prompt instruction** ("if the amount is over $10,000, escalate to a human") is **probabilistic**: the model will comply most of the time, but "most of the time" is not a control you can put in front of an auditor. A **hook** (`PreToolUse`) intercepts the tool call before it executes and **deterministically** redirects it — the model cannot bypass code.
+
+```python
+# Probabilistic: a guideline the model usually follows
+# (fine for soft preferences; NOT for money/irreversible actions)
+system_prompt = "If a transfer is over $10,000, escalate to a human for approval."
+
+# Deterministic: a hook the model cannot bypass
+@hook("PreToolUse")
+def require_approval_over_limit(tool_call):
+    if tool_call.name == "execute_transfer" and tool_call.args["amount"] > 10_000:
+        # Code, not a suggestion: redirect to the approval gate.
+        return redirect(to="request_human_approval", reason="amount_over_limit")
+    return allow(tool_call)
+```
+
+| Attribute | Hooks | Prompt instructions |
+|---|---|---|
+| Guarantee | **Deterministic** (100%) | **Probabilistic** (>90%, not 100%) |
+| Enforced by | Code in the agent runtime | The model's adherence |
+| When to use | Critical business rules, financial/irreversible operations, compliance gates | General preferences, tone, recommendations, formatting |
+| Example | Block/route any transfer > $10,000 | "Try to resolve before escalating" |
+| Failure mode | None for the rule itself (it always fires) | Silent leakage on edge phrasings, long contexts, adversarial input |
+
+**Rule:** when failure has financial, legal, or safety consequences, the escalation must be a **hook**, not a prompt. Prompts are for the soft, recoverable preferences around it ("be empathetic," "offer an alternative first"). This mirrors Chapter 3's hooks-vs-prompts principle; here the *thing being enforced* is the human-approval gate itself.
+
+> **Exam angle.** A classic question: "policy says transfers over $10k need manager approval — where do you put that rule?" The graded answer is a hook/precondition, justified by *determinism*. "Put it in the system prompt" is the distractor that sounds reasonable and fails in production.
+
+## 9.6 End-to-End Case Study: A High-Value Payment-Approval Agent
+
+The pieces above only matter when they fit together. Here is a complete, realistic human-in-the-loop system — a payments assistant that can move money but **must** get a human to approve anything large, with the approval gate enforced deterministically and the workflow able to *resume* after the human decides. This is a different problem from Chapter 3's refund agent: there the hook *blocked* an over-limit action; here the hook *opens an approval gate and the agent pauses, waits for a human verdict, then continues* — true human-in-the-loop, not just a stop.
+
+### Requirements
+
+- Let an internal operator request outbound payments in natural language ("pay invoice INV-4471, $14,200 to Acme Ltd").
+- Look up the payee and the invoice (read-only tools).
+- **Hard rule:** any transfer **at or above $10,000** requires **explicit human approval** before execution — no exceptions, no model discretion.
+- The approval must be a real pause: the agent emits a structured approval request, **waits**, and only executes on an approved verdict; on rejection it cancels and explains.
+- Sub-threshold transfers (< $10,000) that are otherwise valid may execute automatically.
+- Escalate (don't guess) when the payee lookup returns multiple matches.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    Op([Operator]) --> Coord[Payments coordinator]
+    Coord -->|Task| Lookup[Subagent payee and invoice<br/>get_payee, lookup_invoice]
+    Lookup --> Multi{Multiple payee<br/>matches?}
+    Multi -->|yes| Disamb[Ask operator<br/>for identifier]
+    Multi -->|no| Coord
+    Coord --> Transfer[execute_transfer]
+    Transfer --> Gate{{PreToolUse hook<br/>amount at or above 10000?}}
+    Gate -->|yes| Approve[request_human_approval<br/>pause and wait]
+    Gate -->|no| Exec[Execute transfer]
+    Approve --> Human([Approver])
+    Human -->|approved| Exec
+    Human -->|rejected| Cancel[Cancel and explain]
+```
+
+The coordinator owns orchestration; the lookup subagent is least-privilege (it can read payees and invoices but **cannot move money**); the **hook — not prompt text — enforces the approval gate**, because a missed gate is an unrecoverable financial event.
+
+### Implementation
+
+Define the coordinator and a least-privilege lookup subagent:
+
+```python
+coordinator = AgentDefinition(
+    name="payments_coordinator",
+    description="Prepares and submits outbound payments; routes large transfers for human approval.",
+    system_prompt=(
+        "You help an operator pay invoices. Look up the payee and invoice, "
+        "confirm the amount, then call execute_transfer. "
+        "Be empathetic and explain delays, but never promise a payment you have not executed."
+    ),
+    allowed_tools=["Task", "execute_transfer", "request_human_approval"],
+)
+
+payee_lookup = AgentDefinition(
+    name="payee_lookup",
+    description="Reads payee and invoice records. Read-only.",
+    system_prompt="Return the payee and invoice details as structured data. If multiple payees match, return all candidates.",
+    allowed_tools=["get_payee", "lookup_invoice"],   # least privilege: cannot move money
+)
+```
+
+Enforce the $10,000 approval gate deterministically with a `PreToolUse` hook — this is the line the exam wants you to get right. Note it does not *block* the workflow; it *redirects* into a human-approval step:
+
+```python
+APPROVAL_LIMIT = 10_000
+
+@hook("PreToolUse")
+def require_approval_over_limit(tool_call):
+    if tool_call.name == "execute_transfer" and tool_call.args["amount"] >= APPROVAL_LIMIT:
+        # The model cannot bypass this; it is code, not a suggestion.
+        return redirect(
+            to="request_human_approval",
+            reason="amount_over_limit",
+            payload=build_handoff(tool_call.args),   # structured, self-contained
+        )
+    return allow(tool_call)
+```
+
+Build the structured handoff packet the approver sees (they never see the transcript — §9.3):
+
+```python
+def build_handoff(args):
+    return {
+        "payee_id": args["payee_id"],
+        "payee_name": args["payee_name"],
+        "invoice_id": args["invoice_id"],
+        "amount": args["amount"],
+        "actions_taken": [
+            "Verified payee via get_payee",
+            "Matched invoice via lookup_invoice",
+        ],
+        "recommended_action": "Approve transfer",
+        "escalation_reason": "Transfer at or above the $10,000 approval limit",
+    }
+```
+
+Resume after the human decides. The agent paused at the gate; the verdict re-enters the loop and decides the next tool call:
+
+```python
+def on_approval_verdict(verdict, case):
+    if verdict.approved:
+        # Resume the named session and let the loop continue to execution.
+        resume_session(case.session_id, message=f"Approval granted by {verdict.approver}; proceed.")
+    else:
+        cancel_transfer(case)  # do NOT execute; explain to the operator
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Op as Operator
+    participant Co as Coordinator
+    participant L as Lookup subagent
+    participant Gate as PreToolUse hook
+    participant Hu as Approver
+    Op->>Co: "Pay invoice INV-4471, 14200 to Acme"
+    Co->>L: Task(context: invoice INV-4471 + payee)
+    L-->>Co: payee Acme, invoice valid, amount 14200
+    Co->>Gate: execute_transfer(amount=14200)
+    Gate->>Gate: 14200 >= 10000, redirect to approval
+    Gate->>Hu: request_human_approval(handoff packet)
+    Note over Co,Hu: Agent pauses — waits for a verdict
+    Hu-->>Co: approved by manager
+    Co->>Co: resume session, proceed to execute
+    Co-->>Op: "Transfer of 14200 to Acme executed after approval."
+```
+
+Notice the coordinator *intended* to transfer directly; the **hook redirected it deterministically** into a human gate, the agent **paused**, and execution only continued on an approved verdict. With only a prompt instruction ("escalate transfers over $10k"), the model would comply ~90% of the time — and the 1-in-10 miss is an un-recallable wire transfer.
+
+### Validation
+
+- **Determinism test:** fire 100 transfers of $10,000 and assert 100 approval requests and **zero** auto-executions. A prompt-only design will leak; the hook design must be 100%.
+- **Boundary test:** assert `$9,999.99` auto-executes and `$10,000.00` routes to approval — get the `>=` vs `>` boundary right (off-by-one here is a compliance hole).
+- **Resume test:** approve a paused case and assert exactly one `execute_transfer`; reject another and assert **no** transfer and a clear operator explanation.
+- **Handoff-completeness test:** assert the approval payload contains payee, invoice, amount, and reason with no reference to "see the conversation" (the approver has no transcript — §9.3).
+- **Least-privilege test:** assert the `payee_lookup` subagent cannot call `execute_transfer`.
+- **Disambiguation test:** when `get_payee` returns two matches, assert the agent asks for an identifier instead of paying either (§9.1).
+
+### Common pitfalls
+
+- Putting the $10,000 rule in the system prompt instead of a hook — probabilistic, not guaranteed (§9.5).
+- Treating the gate as a hard *stop* instead of a *pause-and-resume*: a real human-in-the-loop must continue after approval, not dead-end (§9.6 resume step).
+- A lossy handoff ("large payment, please approve") that forces the approver to re-investigate, since they cannot see the transcript (§9.3).
+- Escalating on operator *frustration* about a delay instead of on the *amount* — tone is not a trigger (§9.1).
+- Guessing a payee when the lookup is ambiguous instead of asking for an identifier (§9.1).
+- Treating assistant text like "Payment sent" as the completion signal instead of `stop_reason == "end_turn"` (Chapter 3, §3.1).
+
+## 9.7 Exam Focus — Key Takeaways
+
+| Concept | What the exam tests |
+|---|---|
+| Reliable triggers | Escalate on *facts* — explicit human request, policy gap, can't-progress, over-threshold, ambiguous match — not on sentiment or self-rated confidence (§9.1). |
+| Immediate vs. nuanced | An explicit "get me a human" escalates **immediately**; in-scope complaints follow acknowledge → resolve → escalate-on-reiteration (§9.2). |
+| Policy gaps | A silent/ambiguous policy is escalated, not denied and not improvised (§9.1–9.2). |
+| Structured handoff | The human sees only the packet, not the transcript — make it complete, with IDs, actions taken, recommendation, and reason (§9.3). |
+| Confidence calibration | Use calibrated *field-level* scores against labeled data; an aggregate accuracy can mask a failing segment — audit with stratified sampling (§9.4). |
+| Hooks vs. prompts | Financial/irreversible escalation gates must be **deterministic hooks**, not prompt instructions (§9.5). |
+| Human-in-the-loop, not just stop | A true approval gate **pauses, waits for a verdict, and resumes** — it doesn't dead-end the workflow (§9.6). |
+
+> **Maps to Domain 1 (27%) and Domain 5 (15%).** If you can build and defend the payment-approval agent above — correct triggers, the right escalation pattern, a self-contained handoff, calibrated routing, and a deterministic approval gate that pauses and resumes — you have the human-in-the-loop core that these two domains test.
 
 # Chapter 10: Error Handling in Multi-agent Systems
 

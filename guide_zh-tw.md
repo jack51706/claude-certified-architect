@@ -1586,33 +1586,62 @@ sequenceDiagram
 
 # 第 5 章:Claude Code — 設定與工作流程
 
-> 文件:[Claude Code](https://code.claude.com/docs/en/overview) | [Memory / CLAUDE.md](https://code.claude.com/docs/en/memory) | [Skills](https://code.claude.com/docs/en/skills) | [MCP](https://code.claude.com/docs/en/mcp) | [Hooks](https://code.claude.com/docs/en/hooks) | [Sub-agents](https://code.claude.com/docs/en/sub-agents) | [GitHub Actions](https://code.claude.com/docs/en/github-actions) | [Headless](https://code.claude.com/docs/en/headless)
+> 文件:[Claude Code](https://code.claude.com/docs/en/overview) | [Memory / CLAUDE.md](https://code.claude.com/docs/en/memory) | [Skills](https://code.claude.com/docs/en/skills) | [MCP](https://code.claude.com/docs/en/mcp) | [Hooks](https://code.claude.com/docs/en/hooks) | [Sub-agents](https://code.claude.com/docs/en/sub-agents) | [Settings](https://code.claude.com/docs/en/settings) | [GitHub Actions](https://code.claude.com/docs/en/github-actions) | [Headless](https://code.claude.com/docs/en/headless)
+
+第 3、4 章是用**程式**建構代理——你親手寫的迴圈、子代理、hooks 與 MCP。**Claude Code 則是同一套機制,以「可設定的工具」形式交付**,而非你呼叫的函式庫。這裡考試考的技能是**設定**:把正確的指令放進正確的檔案、為規則設定範圍讓它只在相關時才載入、以確定性方式管控危險工具,並把 Claude Code 接進團隊的 CI。本章是 **Domain 3 — Claude Code 設定與工作流程(佔考試 20%)** 的骨幹——僅次於代理編排,是第二大領域。
+
+讀完你應能掌握六根支柱,並把它們組裝成可供團隊使用的設定:
+
+- **CLAUDE.md 階層**(§5.1–5.3)— 指令放在哪、`@path` 匯入如何使其模組化,以及 `.claude/rules/` 如何**條件式**載入慣例。
+- **可重複使用的工作流程**(§5.4–5.5)— 自訂斜線命令與技能,包含 `context: fork` 隔離與 `allowed-tools` 限制。
+- **設定、權限與 hooks**(§5.6)— `settings.json` 的優先順序、逐工具的 allow/ask/deny,以及用於確定性強制執行的生命週期 hooks。
+- **規劃 vs 直接執行**(§5.7)— 何時先調查再核准,何時直接動手。
+- **上下文與工作階段管理**(§5.8、§5.10)— `/compact`、`/memory`、`--resume` 與 `fork_session`。
+- **CI/CD 整合**(§5.9)— headless 的 `-p`、結構化 JSON 輸出,以及審查工作階段的隔離。
+
+§5.11 接著從頭到尾組裝一個完整的**團隊上線設定**——階層、規則、一個技能、一個 MCP 伺服器、一個權限 hook,以及 CI——§5.12 則濃縮考試重點。
 
 ## 5.1 CLAUDE.md 階層
 
-CLAUDE.md 是 Claude Code 的指令檔。它具有三層階層:
+CLAUDE.md 是 Claude Code 在啟動時自動載入、並在每一回合作為上下文注入的指令檔。它具有三層階層,而且**所有適用的層級會被合併**,而非互相覆寫:
 
 ```
 1. User-level: ~/.claude/CLAUDE.md
-   - 僅套用於該使用者
+   - 僅套用於該使用者、該機器
    - 不透過 VCS 共享
-   - 個人偏好與工作風格
+   - 個人偏好與工作風格(例如「用中文解釋」)
 
 2. Project-level: .claude/CLAUDE.md 或根目錄的 CLAUDE.md
    - 套用於所有專案貢獻者
-   - 透過 VCS 管理
+   - 透過 VCS 管理(已提交、經審查、共享)
    - 程式碼規範、測試規範、架構決策
 
 3. Directory-level: 子目錄中的 CLAUDE.md
-   - 在處理該目錄中的檔案時套用
+   - 在處理該目錄中的檔案時套用(按需載入)
    - 該部分程式碼庫特有的慣例
 ```
 
-**常見錯誤:** 新進團隊成員沒有收到專案指令,因為這些指令被放在 `~/.claude/CLAUDE.md`(user-level)而非 `.claude/CLAUDE.md`(project-level)。
+**為何要有階層。** 這三層把三種對象與三種生命週期分開:*你*(個人,從不共享)、*團隊*(版控,像程式碼一樣審查),以及*某個子樹*(在別處只會變成雜訊的在地慣例)。把指令放在錯誤的層級,正是考試最常考的 Claude Code 設定錯誤。
+
+```mermaid
+flowchart TD
+    Start[Claude Code 開始一回合] --> U[載入 user CLAUDE.md<br/>個人偏好]
+    U --> P[載入 project CLAUDE.md<br/>團隊標準]
+    P --> Q{正在編輯<br/>某子目錄中的檔案?}
+    Q -->|是| D[同時載入該<br/>目錄的 CLAUDE.md]
+    Q -->|否| Skip[略過目錄層級]
+    D --> Merge[將所有層級<br/>合併進上下文]
+    Skip --> Merge
+    Merge --> Run[Claude 帶著<br/>合併後的指令行動]
+```
+
+**常見錯誤(考試最愛):** 新進團隊成員收不到專案標準,因為有人把它放進 `~/.claude/CLAUDE.md`(user-level,從不提交)而非 `.claude/CLAUDE.md`(project-level,在 VCS 中)。要背的診斷問題是:*「在隊友筆電上重新 `git clone` 一次,看得到這條指令嗎?」* 若必須看得到,它就屬於 **project** 層級。若那是不該強加於他人的個人習慣,它就屬於 **user** 層級。
+
+**考試角度:** 區分每一層服務*誰*。個人風格 → user。團隊契約 → project(已提交)。在別處只會變成雜訊的子樹專屬慣例 → directory。
 
 ## 5.2 `@path` 語法(檔案匯入)
 
-CLAUDE.md 可以使用 `@path` 參照外部檔案,使設定模組化:
+龐大的 CLAUDE.md 難以審查,還會讓內容在各套件間重複。CLAUDE.md 可以使用 `@path` 參照外部檔案,使設定模組化:
 
 ```markdown
 # Project CLAUDE.md
@@ -1623,12 +1652,16 @@ Project overview is in @README.md and dependencies are in @package.json
 ```
 
 **`@path` 的規則:**
-- 在檔案路徑前緊接著使用 `@`(沒有空格)
-- 支援相對路徑與絕對路徑
-- 相對路徑會相對於包含該匯入的檔案來解析
-- 最大匯入巢狀深度為 5
+- 在檔案路徑前緊接著使用 `@`(沒有空格)。
+- 支援相對路徑與絕對路徑。
+- 相對路徑會相對於包含該匯入的檔案來解析。
+- 最大匯入巢狀深度為 5(被匯入的檔案本身還可再匯入,最多五層)。
 
-這可以避免重複,並讓每個套件只包含相關的規範。
+**為何重要。** 匯入讓每項標準都有單一權威來源。一個 monorepo 可以只保留一份 `standards/testing.md`,讓各套件的 CLAUDE.md 只拉進它真正需要的標準——`web/` 套件匯入 React 規則、`api/` 套件匯入服務規則,兩者都不背負對方的雜訊。它也讓你能把既有專案檔案直接當成上下文重用(`@README.md`、`@package.json`),而不必把它們改寫進 CLAUDE.md——改寫版本會逐漸過時。
+
+**陷阱:** `@` 後面有空格會破壞匯入(它變成純文字);相對路徑是從*匯入檔案所在*的目錄解析,而非儲存庫根目錄,所以搬動一個 CLAUDE.md 可能會悄悄弄壞它的匯入;而深度 5 的限制意味著層層串接的匯入可能在沒有明顯錯誤的情況下被截斷。
+
+**考試角度:** 當題目問如何避免在十個套件間重複同一份測試標準,答案是用 `@path` 匯入單一共享檔案——不是複製貼上,也不是一個巨大的根 CLAUDE.md。
 
 ## 5.3 `.claude/rules/` 目錄
 
@@ -1664,19 +1697,25 @@ Do not mock the database—use a test database.
 ```
 
 **運作方式:**
-- 只有在 Claude Code 編輯符合 `paths` 模式的檔案時,規則才會被載入
-- 這可以節省上下文與 tokens——不相關的規則不會被載入
-- Glob 模式讓你能依檔案類型套用慣例,而不受位置影響(對於散落在程式碼庫各處的測試而言相當理想)
+- 只有在 Claude Code 觸及符合 `paths` glob 的檔案時,規則才會被載入。
+- 這可以節省上下文與 tokens——不相關的規則永遠不會被載入,讓模型的視窗專注在正在編輯的內容上。
+- Glob 模式讓你能依*檔案類型*套用慣例,而不受*位置*影響(對於散落在程式碼庫各處的測試而言相當理想)。
+
+**為何條件式載入勝過一個大檔案。** CLAUDE.md 的每一行,在*每一*回合都要付出代價,不論它是否相關。一個 600 行的龐然大物會在你編輯 CSS 時還花上下文描述 Terraform 慣例。路徑範圍規則把這件事反轉:Terraform 規則在你打開 `.tf` 檔案之前都是隱形的,然後在它能幫上忙時恰好出現。這與 MCP 資源(第 4 章)和工具搜尋背後「只載入相關內容」的原則相同——上下文是一筆預算,而規則讓你按需花用。
 
 **何時使用搭配 `paths` 的 `.claude/rules/`,而非 directory-level CLAUDE.md:**
-- 搭配 `paths` 的 `.claude/rules/` — 當慣例適用於散布在許多目錄中的檔案時(測試、遷移)
-- Directory-level CLAUDE.md — 當慣例與特定目錄綁定,且其他地方不需要時
+- 搭配 `paths` 的 `.claude/rules/` — 當慣例適用於**散布在許多目錄中**的檔案時(測試、遷移、`*.tf`)。像 `**/*.test.ts` 這樣的 glob 不論它們落在何處都能一網打盡。
+- Directory-level CLAUDE.md — 當慣例**與某個特定目錄綁定**,且其他地方不需要時。
+
+**陷阱:** 當測試檔案散落在數十個資料夾時,卻為測試寫一個 directory-level CLAUDE.md——你就得把它複製到每一個資料夾。glob 規則才是可維護的選擇。反過來說,為只會套用到單一資料夾的事物寫 glob 規則則是過度設計;一個 directory CLAUDE.md 更簡單。
+
+**考試角度:**「慣例依檔案類型橫跨許多目錄」→ 帶 glob 的路徑範圍規則。「慣例屬於單一資料夾」→ directory CLAUDE.md。
 
 ## 5.4 自訂斜線命令與技能
 
 > **注意:**在目前的 Claude Code 版本中,自訂命令(`.claude/commands/`)已與技能(`.claude/skills/`)整合。兩種格式都會建立 `/name` 命令。考試指南所引用的是 `.claude/commands/`——該格式仍受支援。
 
-斜線命令是可重複使用的提示範本,透過 `/name` 來叫用:
+斜線命令是透過 `/name` 叫用的**可重複使用提示範本**。與其每次重打「審查這份 diff 找安全問題、檢查 OWASP top 10、並行內回報」,你只要存一次,然後叫用 `/review`。
 
 **`.claude/commands/` 格式(舊版,仍受支援):**
 
@@ -1695,16 +1734,20 @@ Do not mock the database—use a test database.
 ```
 
 **專案命令**(`.claude/commands/` 或 `.claude/skills/`):
-- 儲存在 VCS 中,且任何人在複製儲存庫時都能取用
-- 確保團隊間工作流程一致
+- 儲存在 VCS 中,且任何人在複製儲存庫時都能取用。
+- 確保團隊間**工作流程一致**——每位開發者的 `/review` 都做同一件事。
 
 **使用者命令**(`~/.claude/commands/` 或 `~/.claude/skills/`):
-- 不透過 VCS 分享的個人命令
-- 用於個人的工作流程
+- 不透過 VCS 分享的個人命令。
+- 用於你不想強加於隊友的個人工作流程。
+
+**為何這是設定問題,而不只是便利性。** 斜線命令把*臨時指令*變成*版控產物*。一旦 `/review` 住進儲存庫,審查提示就會像其他程式碼一樣被審查、隨時間改進,而且不會在工程師之間漂移。這正是考試所獎勵的團隊一致性特性。
+
+**考試角度:**「團隊每個人都應跑同一套審查/測試流程」→ 放在 `.claude/` 的專案命令(已提交)。「我的個人捷徑」→ 放在 `~/.claude/` 的使用者命令。
 
 ## 5.5 技能 — `.claude/skills/`
 
-技能是透過 SKILL.md frontmatter 設定的進階命令:
+技能是透過 SKILL.md frontmatter 設定的進階命令——是從純提示範本升級為*受治理*範本的路徑:
 
 ```yaml
 ---
@@ -1721,61 +1764,157 @@ argument-hint: "要分析的目錄路徑"
 
 | 參數 | 描述 |
 |---|---|
-| `context: fork` | 在隔離的子代理中執行技能。冗長的輸出不會汙染主工作階段 |
-| `allowed-tools` | 限制有哪些工具可用(安全性——例如,若未允許,技能就無法刪除檔案) |
-| `argument-hint` | 在未帶參數叫用時,提示要求提供一個引數 |
+| `context: fork` | 在**隔離的子代理**中執行技能。它冗長的輸出不會汙染主工作階段——只有最終結果會回傳(與 Agent SDK 的 `Task` 相同的隔離,§3.4)。 |
+| `allowed-tools` | 限制有哪些工具可用。安全邊界:一個只被授予 `["Read","Grep","Glob"]` 的唯讀分析技能,即使提示被操弄,也*無法*寫入或刪除檔案。 |
+| `argument-hint` | 在未帶參數叫用命令時顯示的提示,要求使用者提供所需的引數。 |
+
+**為何 `context: fork` 是招牌特性。** 一個分析技能可能讀 40 個檔案、印出好幾頁輸出。在主工作階段中,這會埋掉你的工作上下文;而 fork 之後,雜訊被收束,你拿回的是一段摘要。這是 Skill 層級對應於 Explore 子代理(§5.7)的做法——以隔離上下文作為一等、宣告式的設定。
+
+**為何 `allowed-tools` 是真正的安全控制。** 它是把最小權限原則(§3.2)套用到工作流程:*能力*固定在 frontmatter 裡、寫在程式碼中,而非在提示裡協商。一個只能讀取的技能,放在不可信的輸入上執行也安全,因為沒有任何提示能授予它從未被賦予的寫入權限。
 
 **何時使用技能 vs CLAUDE.md:**
-- **技能** — 針對特定任務(審查、分析、產生)的按需叫用
-- **CLAUDE.md** — 永遠載入的一般標準與慣例
+- **技能** — 針對特定任務(審查、分析、產生)的*按需*叫用。你想要時才跑它。
+- **CLAUDE.md** — *永遠載入*的一般標準與慣例。不論你問不問,它都套用於每一回合。
 
-**個人技能(`~/.claude/skills/`):**
-- 以不同名稱建立個人變體,如此就不會影響團隊成員
+**個人技能(`~/.claude/skills/`):** 以不同名稱建立個人變體,如此就不會影響團隊成員。
 
-## 5.6 規劃模式 vs 直接執行
+**陷阱:** 把笨重、偶爾才用的任務(一次完整的架構稽核)放進 CLAUDE.md 好讓它「永遠可用」——那會在每一回合浪費上下文。稽核屬於一個你需要時才叫用的 `context: fork` 技能。
+
+**考試角度:**「把冗長技能的輸出與主工作階段隔離」→ `context: fork`。「阻止技能刪除檔案」→ `allowed-tools`。「只在被要求時才跑某任務」→ 技能,而非 CLAUDE.md。
+
+## 5.6 設定、權限與 Hooks
+
+指令告訴模型要*做*什麼;**`settings.json` 與權限控制它*被允許*做什麼**,而 **hooks 讓某些規則具備確定性**。這就是 Claude Code 不再只是個有禮貌的助理、轉而成為受治理工具之處——考試把它視為安全層。
+
+**`settings.json` 優先順序。** 設定來自三個檔案,依優先序由低到高套用:
+
+```
+1. User settings:    ~/.claude/settings.json        (你的機器、所有專案)
+2. Project settings: .claude/settings.json          (已提交、與團隊共享)
+3. Local overrides:  .claude/settings.local.json     (每位開發者、git-ignored)
+```
+
+優先序較高的檔案會覆寫較低檔案中的同一個鍵。要記住的模式是:**把 `.claude/settings.json` 提交為團隊契約;把個人微調放進 `.claude/settings.local.json`(git-ignored),這樣它們就不會洩漏進共享設定。**
+
+**權限:逐工具的 allow / ask / deny。** 權限住在 `settings.json` 裡,可管控個別工具、甚至工具的引數:
+
+```json
+{
+  "permissions": {
+    "allow": ["Read", "Grep", "Glob", "Bash(npm test:*)"],
+    "ask":   ["Edit", "Write"],
+    "deny":  ["Bash(rm -rf:*)", "Bash(git push:*)"]
+  }
+}
+```
+
+- **allow** — 不詢問即執行(安全、頻繁的操作,例如跑測試)。
+- **ask** — 每次使用前都詢問確認(對編輯採人類介入)。
+- **deny** — 直接封鎖;不論模型如何決定都無法執行。
+
+`deny` 勝過 `allow`。對 `git push` 的 `deny` 意味著*沒有*任何提示能說服 Claude Code 去推送——它不是強烈建議,而是一道牆。
+
+**Hooks:確定性的生命週期強制執行。** Hooks 是 harness 在生命週期事件時執行的 shell 命令——`PreToolUse`、`PostToolUse`、工作階段開始/結束,以及壓縮。你在 Agent SDK 中寫過的同一批 hooks(§3.5)也存在於 Claude Code,設定在 `settings.json` 裡。`PreToolUse` hook 可以在工具呼叫執行*之前*檢查它並**封鎖**它(以非零結束碼):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/block-secrets.sh" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+該腳本會從 stdin 收到工具呼叫;若它偵測到比方說一個會讀取 `.env` 或推送到 `main` 的命令,它就以非零結束,該動作即被拒絕——**確定性地、以程式碼,而非交由模型裁量。**
+
+**Hooks/權限 vs 提示指令(反覆出現的考試主題)。**
+
+| 機制 | 保證 | 用於 |
+|---|---|---|
+| **`deny` 權限 / `PreToolUse` hook** | **確定性(100%)** | 「絕不推送到 main」、「絕不刪除資料庫」、「封鎖機密外洩」 |
+| **CLAUDE.md 指令** | **機率性(>90%,並非 100%)** | 「偏好小型提交」、「解釋推理」、「大型重構前先詢問」 |
+
+**規則(與 §3.5 相同):** 當違規會造成財務、法律、安全或安危後果時,用 `deny` 權限或 hook 來強制執行——而*非*CLAUDE.md 裡的一句話。遵循提示的模型多數時候是對的;`deny` 規則則每次都對。
+
+**陷阱:** 在 CLAUDE.md 裡寫「Claude 絕不可執行 `git push --force`」並相信它已被強制執行。並沒有——那只是強烈的推力。保證住在 `permissions.deny` 或 `PreToolUse` hook 裡。
+
+**考試角度:** 任何「保證這個危險動作不會發生」→ 權限/hook(確定性)。任何「鼓勵這個好習慣」→ CLAUDE.md(機率性)。個人 vs 共享設定 → `settings.local.json`(git-ignored)vs 已提交的 `settings.json`。
+
+## 5.7 規劃模式 vs 直接執行
 
 **規劃模式:**
-- 模型只進行調查與規劃;不會做出變更
-- 使用 Read、Grep、Glob 探索程式碼庫
-- 產生一份由使用者核准的實作計畫
-- 安全探索,不產生副作用
+- 模型只進行調查與規劃;**不會**做出變更。
+- 使用 Read、Grep、Glob 探索程式碼庫。
+- 在任何編輯之前產生一份由使用者核准的實作計畫。
+- 安全探索,**不產生副作用**。
 
 **何時使用規劃模式:**
-- 大型變更(數十個檔案)
-- 多種看似可行的做法(微服務:該如何定義邊界?)
-- 架構決策(用哪個框架?採用什麼結構?)
-- 不熟悉的程式碼庫(變更前必須先理解)
-- 影響 45 個以上檔案的函式庫遷移
+- 大型變更(數十個檔案)。
+- 多種看似可行的做法(微服務:該如何定義邊界?)。
+- 架構決策(用哪個框架?採用什麼結構?)。
+- 不熟悉的程式碼庫(變更前必須先理解)。
+- 影響 45 個以上檔案的函式庫遷移。
 
 **何時使用直接執行:**
-- 具有明確堆疊追蹤的單檔修正
-- 新增一項驗證檢查
-- 充分理解、不模糊的變更
+- 具有明確堆疊追蹤的單檔修正。
+- 新增一項驗證檢查。
+- 充分理解、不模糊的變更。
 
-**結合做法:**
-1. 以規劃模式進行調查與設計
-2. 使用者核准計畫
-3. 以直接執行來實作已核准的計畫
+```mermaid
+flowchart TD
+    Task[傳入的任務] --> Q1{多檔案或<br/>有架構影響?}
+    Q1 -->|是| Plan[規劃模式<br/>調查,不編輯]
+    Q1 -->|否| Q2{明確、單檔、<br/>不模糊的修正?}
+    Q2 -->|是| Direct[直接執行<br/>現在就改]
+    Q2 -->|否| Plan
+    Plan --> Approve{使用者核准<br/>計畫?}
+    Approve -->|是| Direct
+    Approve -->|否| Plan
+    Direct --> Done[變更已套用]
+```
+
+**為何這個區分重要。** 在龐大、模糊的變更上直接執行,會冒著朝錯誤方向做出數十處編輯、且回復代價高昂的風險。規劃模式把成本前置成一份*便宜、可逆*的產物——一份你能在動到任何檔案之前用一句話就修正的書面計畫。反過來說,為一行錯字的修正硬套上規劃與核准循環,純粹是額外負擔。
+
+**結合做法(考試偏好的答案):**
+1. 以規劃模式進行調查與設計。
+2. 使用者核准計畫。
+3. 以直接執行來實作已核准的計畫。
 
 **Explore 子代理** — 用於探索程式碼庫的專用子代理:
-- 將冗長的輸出與主上下文隔離
-- 只回傳一份摘要
-- 防止在多階段任務中耗盡上下文視窗
+- 將冗長的探查輸出與主上下文隔離。
+- 只回傳一份摘要。
+- 防止在多階段任務中耗盡上下文視窗(與 `context: fork` 相同的上下文隔離概念,§5.5)。
 
-## 5.7 `/compact` 命令
+**陷阱:** 用直接執行跑一個 45 檔的遷移,做到一半才發現做法錯了。先規劃、核准,再執行。
 
-`/compact` 是用於壓縮上下文的內建命令:
-- 摘要先前的歷史記錄,以釋放上下文視窗
-- 用於長時間的調查工作階段,當上下文被冗長的工具輸出填滿時
-- 風險:確切的數值、日期與特定細節可能在摘要過程中遺失
+**考試角度:** 大型/模糊/架構性 → 規劃模式;小型/明確/單檔 → 直接執行;「在不撐爆上下文視窗的情況下探索大型程式碼庫」→ Explore 子代理。
 
-## 5.8 `/memory` 命令
+## 5.8 `/compact` 與 `/memory` 命令
 
-`/memory` 是用於管理工作階段間記憶的內建命令:
-- 開啟 `CLAUDE.md` 檔案進行編輯,讓你能儲存筆記、偏好設定與上下文
-- 資訊會跨工作階段持續保存,並在啟動時自動載入
-- 適合用於儲存專案慣例、使用者偏好、常用命令以及目前的工作上下文
-- 取代在每個工作階段重新解釋相同指令的做法
+這兩個內建命令分別管理工作階段*內*與*跨*工作階段的上下文。
+
+**`/compact` — 壓縮目前的上下文。**
+- 摘要先前的歷史記錄,以釋放上下文視窗。
+- 用於長時間的調查工作階段,當視窗被冗長的工具輸出填滿時。
+- **風險:** 確切的數值、日期與特定細節可能在摘要過程中遺失。若你之後會需要精確數字,請在壓縮*之前*把它記下來(放進 `/memory` 或一則筆記)。
+
+**`/memory` — 跨工作階段保存上下文。**
+- 開啟 `CLAUDE.md` 檔案進行編輯,讓你能儲存筆記、偏好設定與上下文。
+- 資訊會跨工作階段持續保存,並在啟動時自動載入。
+- 適合用於儲存專案慣例、使用者偏好、常用命令以及目前的工作上下文。
+- 取代在每個工作階段重新解釋相同指令的做法。
+
+**為何兩者並存。** `/compact` 對抗*單一工作階段*的限制——視窗有限,而冗長的工具輸出會吃掉它。`/memory` 對抗*跨工作階段*的限制——新的工作階段是一片空白,所以任何值得保留的東西都必須寫進 CLAUDE.md。一個現在回收空間;另一個把知識帶往未來。
+
+**陷阱:** 把你還需要的數值壓縮掉。壓縮在設計上就是有損的——把任何不在 CLAUDE.md 或沒寫下來的東西,都視為 `/compact` 之後可能消失。
+
+**考試角度:**「調查到一半上下文視窗滿了」→ `/compact`(並當心遺失的細節)。「不想每個工作階段都重新解釋慣例」→ `/memory` → CLAUDE.md。
 
 ## 5.9 用於 CI/CD 的 Claude Code CLI
 
@@ -1785,9 +1924,9 @@ argument-hint: "要分析的目錄路徑"
 claude -p "Analyze this pull request for security issues"
 ```
 
-- 非互動模式:處理提示、輸出到 stdout,然後結束
-- 不等待使用者輸入
-- 在 CI/CD 管線中執行 Claude 的唯一正確方式
+- 非互動(headless)模式:處理提示、輸出到 stdout,然後結束。
+- **不**等待使用者輸入——所以它永遠不會卡住管線。
+- 在 CI/CD 中執行 Claude Code 的唯一正確方式。
 
 **用於 CI 的結構化輸出:**
 
@@ -1795,15 +1934,17 @@ claude -p "Analyze this pull request for security issues"
 claude -p "Review this PR" --output-format json --json-schema '{"type":"object",...}'
 ```
 
-- `--output-format json` — 以 JSON 格式輸出
-- `--json-schema` — 依據結構描述驗證輸出
-- 結果可被解析,以自動張貼行內 PR 留言
+- `--output-format json` — 輸出 JSON 而非散文。
+- `--json-schema` — 依結構描述驗證輸出,讓下游步驟拿到可預期的形狀。
+- 結果可被管線解析,以自動張貼行內 PR 留言。
 
-**工作階段上下文隔離:**
-產生程式碼的同一個 Claude 工作階段,在審查該程式碼時往往較不有效(模型會保留其推理上下文,較不可能挑戰自己的決定)。請使用獨立的執行個體進行審查。
+**為何在 CI 中 headless 模式不可妥協。** 互動式 Claude Code 會等待真人;CI runner 沒有真人,所以互動式的叫用會一直阻塞直到逾時。`-p` 跑一次就結束,結果在 stdout 上——這正是建置步驟所需的契約。把它與儲存庫中已提交的 CLAUDE.md 搭配,讓 CI 執行自動繼承團隊的測試標準與審查準則。
 
-**避免重複留言:**
-在新的提交後重新審查時,將先前的審查結果納入上下文,並指示 Claude 只回報新的或尚未解決的問題。
+**工作階段上下文隔離(微妙但會考)。** *產生*程式碼的同一個 Claude 工作階段,在*審查*它時較不有效——它會保留自己的推理,較不可能挑戰自己的決定。**用獨立的執行個體進行審查**,而非寫程式的那一個。(這呼應 §5.10:全新的視角勝過已被定錨的視角。)
+
+**避免重複留言。** 在新的提交後重新審查時,將先前的審查結果納入上下文,並指示 Claude 只回報**新的或尚未解決**的問題——否則每次執行都會重貼相同的發現。
+
+**考試角度:**「在管線中執行 Claude」→ `-p`(絕不互動)。「給自動留言用的機器可解析結果」→ `--output-format json` + `--json-schema`。「為何不重用產生程式碼的工作階段來審查?」→ 它不會挑戰自己的作品;用一個全新的執行個體。
 
 ## 5.10 `fork_session` 與工作階段管理
 
@@ -1813,53 +1954,258 @@ claude -p "Review this PR" --output-format json --json-schema '{"type":"object",
 claude --resume investigation-auth-bug
 ```
 
-- 以已儲存的上下文繼續先前的對話
-- 適合跨多個工作階段的長期調查
-- 風險:若檔案自先前工作階段以來已變更,工具結果可能已過時
+- 以已儲存的上下文繼續先前的對話。
+- 適合跨多個工作階段的長期調查。
+- **風險:** 若檔案自先前工作階段以來已變更,快取的工具結果可能已過時——Claude 會在一份過時的快照上推理。
 
 **`fork_session`** 從共享上下文建立一個獨立分支:
 
-```
-Codebase investigation
-         |
-    fork_session
-    /           \
-Approach A:      Approach B:
-Redux            Context API
+```mermaid
+flowchart TD
+    Base[程式碼庫調查<br/>共享上下文] --> Fork[fork_session]
+    Fork --> A[做法 A<br/>Redux]
+    Fork --> B[做法 B<br/>Context API]
+    A --> CompareA[評估 A 的取捨]
+    B --> CompareB[評估 B 的取捨]
+    CompareA --> Pick[比較並選擇]
+    CompareB --> Pick
 ```
 
-- 兩個分叉都繼承到分支點為止的上下文
-- 之後,它們各自獨立分歧
-- 適合用於比較不同做法或測試策略
+- 兩個分叉都繼承到分支點為止的上下文,然後各自獨立分歧。
+- 適合用於比較不同做法或測試策略,而不會讓一者汙染另一者。
+
+**為何在比較時 fork 勝過單一線性工作階段。** 若你在*同一*條對話串裡先探索 Redux 再探索 Context API,Redux 的討論會偏倚 Context API 的分析——模型已經先入為主地框定了。fork 讓每個做法擁有*相同的起始上下文,但在那之後各自從乾淨的狀態出發*,所以比較才公平。這是 §5.9「獨立審查者」原則的工作階段層級版本。
 
 **何時應改為開始新工作階段而非恢復:**
-- 工具結果已過時(檔案已變更)
-- 已經過了很長時間,上下文已劣化
-- 與其用舊的工具資料恢復,不如以「以下是我們發現內容的簡短摘要:……」重新開始
+- 工具結果已過時(檔案自上次以來已變更)。
+- 已經過了很長時間,上下文已劣化。
+- 與其恢復一個塞滿過時工具資料的工作階段,通常不如以「以下是我們發現內容的簡短摘要:……」重新開始。
 
+**陷阱:** 在一次大型重構後 `--resume` 一個一週前的工作階段,並信任它快取的檔案讀取。那些讀取描述的是舊程式碼。寧可用一份摘要播種一個全新的工作階段。
+
+**考試角度:**「公平地比較兩種做法」→ `fork_session`。「繼續一個長期調查」→ `--resume`(留意過時)。「自從上次檔案大幅變更」→ 用摘要重新開始,不要恢復。
+
+## 5.11 端到端案例研究:讓一個團隊上線 Claude Code
+
+上述特性唯有組裝起來才有意義。以下是一個為團隊打造、完整且真實的 Claude Code 設定——正是考試的 **「為團隊開發設定 Claude Code」** 情境要你能推理的設定(也是 Practical Exercise 2 要你建構的)。
+
+### 需求
+
+一個 6 人開發團隊希望每位成員在 `git clone` 的那一刻,就獲得**一致、受治理**的 Claude Code 行為:
+
+- **通用標準**(提交風格、語言)在每一回合套用。
+- **API 與測試慣例**,**只**在編輯 API 或測試檔案時才載入——其餘時候不浪費上下文。
+- 一個共享的 **`/audit` 工作流程**,用以分析架構,但必須唯讀且隔離執行,讓它冗長的輸出不會埋掉主工作階段。
+- 一個共享的 **GitHub MCP 伺服器**用於 PR 搜尋——所有人共用同一套工具,**不提交任何憑證**(每位開發者的 token 都是個人的)。
+- 一個**硬性保證**:Claude Code **絕不**可執行 `git push --force` 或讀取機密檔案,不論提示如何。
+- **CI** 以 headless 執行 Claude Code 來審查 PR 並張貼行內留言。
+
+### 架構
+
+```mermaid
+flowchart TD
+    Clone[開發者 git clone 儲存庫] --> Proj[已提交的專案 .claude]
+    Proj --> CM[CLAUDE.md<br/>通用標準]
+    Proj --> Rules[.claude/rules<br/>路徑範圍的 api 與 test 規則]
+    Proj --> Skill[.claude/skills/audit<br/>context fork、唯讀工具]
+    Proj --> MCP[.mcp.json<br/>GitHub 伺服器、token 來自 env]
+    Proj --> Settings[.claude/settings.json<br/>deny 強制推送與機密]
+    Settings --> Hook{{PreToolUse hook<br/>封鎖危險 Bash}}
+    MCP --> Local[.claude.json 使用者覆寫<br/>個人 GitHub token]
+    Proj --> CI[CI 執行 claude -p<br/>審查 PR、張貼留言]
+```
+
+專案 `.claude/` 是**團隊契約**(已提交);每位開發者只在一個 git-ignored 的覆寫檔中加入自己的**個人 token**;`settings.json` + hook 讓危險命令規則具備**確定性**,而非一句提示。
+
+### 實作
+
+**專案標準** — `CLAUDE.md`(永遠載入),搭配一個模組化匯入:
+
+```markdown
+# Project CLAUDE.md
+Use Conventional Commits (feat/fix/chore). Keep commits small.
+Detailed test policy: @./standards/testing.md
+```
+
+**路徑範圍慣例** — 只在符合的檔案上載入:
+
+```yaml
+# .claude/rules/api.md
 ---
+paths: ["src/api/**/*"]
+---
+Use async/await with explicit error handling; return the standard response wrapper.
+```
+
+```yaml
+# .claude/rules/tests.md
+---
+paths: ["**/*.test.ts", "**/*.test.tsx"]
+---
+Use describe/it blocks and data factories. Do not mock the database; use a test DB.
+```
+
+**隔離、唯讀的稽核技能** — 冗長輸出留在主工作階段之外:
+
+```yaml
+# .claude/skills/audit/SKILL.md
+---
+context: fork
+allowed-tools: ["Read", "Grep", "Glob"]
+argument-hint: "Path to the package to audit"
+---
+Audit the package's dependency graph and architectural patterns. Output a short report.
+```
+
+**共享 MCP 伺服器、不提交機密** — token 來自環境:
+
+```json
+// .mcp.json  (已提交)
+{
+  "mcpServers": {
+    "github": {
+      "command": "github-mcp-server",
+      "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" }
+    }
+  }
+}
+```
+
+每位開發者在自己的環境(或個人的 `~/.claude.json` 覆寫)中設定 `GITHUB_TOKEN`——儲存庫保持零憑證。
+
+**確定性護欄** — `settings.json` 直接拒絕危險命令,`PreToolUse` hook 再加上一道程式化檢查:
+
+```json
+// .claude/settings.json  (已提交)
+{
+  "permissions": {
+    "allow": ["Read", "Grep", "Glob", "Bash(npm test:*)"],
+    "ask":   ["Edit", "Write"],
+    "deny":  ["Bash(git push --force:*)", "Read(.env)", "Read(**/secrets/**)"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": ".claude/hooks/guard.sh" }] }
+    ]
+  }
+}
+```
+
+**CI 審查(headless)** — 跑一個*全新*的執行個體,而非寫程式的那一個:
+
+```bash
+claude -p "Review this PR. Report only new or unresolved issues." \
+  --output-format json --json-schema "$SCHEMA" > review.json
+# 管線解析 review.json 並張貼行內 PR 留言
+```
+
+### 執行軌跡
+
+```mermaid
+sequenceDiagram
+    actor Dev as 開發者
+    participant CC as Claude Code
+    participant R as 路徑規則
+    participant Pre as PreToolUse hook
+    participant GH as GitHub MCP 伺服器
+    Dev->>CC: 打開 src/api/orders.ts,「新增一個端點」
+    CC->>R: 檔案符合 src/api/**
+    R-->>CC: 只載入 api.md 規則
+    CC->>GH: 搜尋相關 PR(token 來自 env)
+    GH-->>CC: 符合的 PR
+    CC->>Pre: Bash(git push --force)
+    Pre-->>CC: 非零結束碼,已封鎖
+    CC-->>Dev: 拒絕強制推送;標準已套用
+```
+
+api 規則之所以載入,**只**因為檔案符合它的 glob;強制推送被 **hook/權限確定性地**封鎖,而非寄望模型讀了 CLAUDE.md。
+
+### 驗證
+
+- **階層測試:** 一位隊友複製儲存庫,立刻就拿到提交風格與 API 規則——證明它們在 **project** 層級,而非某人的 `~/.claude/`。
+- **條件載入測試:** 確認 `api.md` 在編輯 `src/api/x.ts` 時載入、在編輯 `web/Button.css` 時**不存在**——證明 `paths` glob 為它設定了範圍。
+- **確定性測試:** 嘗試 `git push --force` 100 次;斷言 100 次封鎖。一句 CLAUDE.md 會漏;`deny`/hook 必須 100%。
+- **零機密測試:** 在儲存庫中 grep token——`.mcp.json` 必須含有 `${GITHUB_TOKEN}`,絕無真實金鑰。
+- **隔離測試:** 執行 `/audit`;確認它逐檔的輸出**不會**出現在主對話紀錄中,且它無法寫入檔案。
+
+### 常見陷阱
+
+- 把團隊標準放進 `~/.claude/CLAUDE.md`,讓全新的複製永遠看不到它們(§5.1)。
+- 一個總是載入 Terraform/API/test 規則的龐大 CLAUDE.md,浪費上下文——改用路徑範圍的 `.claude/rules/`(§5.3)。
+- 在 CLAUDE.md 裡寫「絕不強制推送」並假設它已被強制執行——那是機率性的;改用 `permissions.deny`/一個 hook(§5.6)。
+- 把 GitHub token 提交進 `.mcp.json`,而非用 `${GITHUB_TOKEN}` + 一個 git-ignored 的個人覆寫(§5.6、第 4 章)。
+- 用**同一個**產生 PR 的工作階段去審查它,或在 CI 裡用互動模式——改用一個全新的 `claude -p` 執行個體(§5.9)。
+
+## 5.12 考試重點 — 關鍵整理
+
+| 概念 | 考試考什麼 |
+|---|---|
+| CLAUDE.md 階層 | 團隊標準 → project(已提交);個人風格 → user(`~/.claude/`);子樹專屬 → directory。「全新的複製看得到它嗎?」(§5.1)。 |
+| `@path` 匯入 | 用匯入單一共享檔案來避免標準在各套件間重複(`@` 後無空格、深度 ≤ 5)(§5.2)。 |
+| 路徑範圍規則 | 依檔案類型橫跨許多目錄的慣例 → 帶 `paths` glob 的 `.claude/rules/`;單一資料夾的慣例 → directory CLAUDE.md(§5.3)。 |
+| 斜線命令 / 技能 | 共享工作流程 → 專案命令(已提交);`context: fork` 隔離冗長輸出;`allowed-tools` 強制最小權限(§5.4–5.5)。 |
+| 設定、權限、hooks | 確定性保證(「絕不推送到 main」、「封鎖機密」)→ `permissions.deny`/`PreToolUse` hook,而**非**CLAUDE.md;`settings.local.json` 用於個人、git-ignored 的微調(§5.6)。 |
+| 規劃 vs 直接執行 | 大型/模糊/架構性 → 規劃模式再核准;小型/明確/單檔 → 直接執行;大型程式碼庫 → Explore 子代理(§5.7)。 |
+| 上下文與工作階段 | `/compact` 回收滿載的視窗(有損);`/memory` 跨工作階段保存;`fork_session` 公平比較做法;當心過時的 `--resume`(§5.8、§5.10)。 |
+| CI/CD | Headless 的 `-p`(絕不互動);`--output-format json` + `--json-schema` 用於自動留言;以**全新**執行個體審查(§5.9)。 |
+
+> **對應 Domain 3(20%)。** 如果你能建立上面的團隊設定——階層、路徑範圍規則、一個隔離的最小權限技能、一個零憑證的 MCP 伺服器、確定性的權限/hook 護欄,以及一個 headless 的 CI 審查——你就掌握了權重第二高考試領域的核心。
 
 # 第 6 章:提示工程 — 進階技巧
 
 > 文件:[提示工程](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/overview) | [Anthropic Cookbook](https://github.com/anthropics/anthropic-cookbook)
 
+提示工程是一門**不改動模型權重**、僅靠你放進請求裡的文字、結構與範例來形塑模型行為的學問。本章是 **Domain 4 — 提示工程與結構化輸出(佔考試 20%)** 的骨幹,與另一個領域並列第二重。考試考的不是巧妙的措辭,而是你能否針對特定的失敗模式選對**正確的技巧**,以及你是否清楚每種技巧的保證與限制。讀完本章你應能選用並組合這些工具:
+
+- **少樣本提示**(§6.1)— 用示範取代描述。
+- **明確判準**(§6.2)— 用分類規則取代模糊的形容詞。
+- **XML 標籤與角色提示**(§6.3)— 把指令與資料分開,並設定模型的人設。
+- **思維鏈與擴展思考**(§6.4)— 讓模型先推理再作答。
+- **預填助理回合**(§6.5)— 約束回應的**開頭**以強制其形狀。
+- **以 `tool_use` 做結構化輸出**(§6.6)— 保證 schema 合規的 JSON,而非只是看起來合理的 JSON。
+- **提示鏈接與訪談模式**(§6.7)— 把任務拆解到多次聚焦的呼叫中。
+- **驗證與帶回饋的重試**(§6.8)— 在擷取失敗時把迴圈收尾。
+- **自我修正**(§6.9)— 讓模型主動暴露自己的矛盾。
+
+§6.10 接著從頭到尾建構一個完整的**合約擷取服務**,組合上述大多數技巧,§6.11 則濃縮考試重點。
+
+一個好用的心智模型,是把每種技巧對應到它所修復的失敗:
+
+```mermaid
+flowchart TD
+    Start[輸出錯誤或不一致] --> Q1{是哪一種失敗?}
+    Q1 -->|格式不一致或<br/>邊界情況處理不佳| FS[加入少樣本範例<br/>section 6.1]
+    Q1 -->|誤報太多、<br/>判斷模糊| EC[撰寫明確判準<br/>section 6.2]
+    Q1 -->|模型把指令<br/>當成輸入資料| XML[用 XML 標籤包住資料<br/>section 6.3]
+    Q1 -->|困難的多步驟任務<br/>跳過推理| COT[思維鏈或<br/>擴展思考 6.4]
+    Q1 -->|加上前言或<br/>開頭形狀錯誤| PF[預填助理回合<br/>section 6.5]
+    Q1 -->|格式錯誤或<br/>非 schema 的 JSON| TU[使用 tool_use schema<br/>section 6.6]
+    Q1 -->|schema 有效但<br/>數值錯誤| VR[驗證並重試<br/>section 6.8]
+```
+
+整章的考試角度:要知道提示技巧是**機率性**的(它們提高正確行為的機率),而 `tool_use` schema 與下游驗證才是**確定性**的層。語法可以保證;語意必須檢查。
+
 ## 6.1 少樣本提示
 
-少樣本提示是在提示中加入 2–4 個輸入／輸出範例,以示範預期的行為。
+少樣本提示是在提示中加入 2–4 個輸入／輸出範例,以示範預期的行為。依 Domain 4 所述,它是產生一致格式、可採取行動之輸出**單一最有效的方法**。
 
 **為何少樣本比文字描述更有效:**
-- 像「更精確一點」這樣模糊的指令可能有許多種解讀方式
-- 範例能毫不含糊地展示預期的格式與決策邏輯
-- 模型會將該模式類推到新的案例(它不只是重複那些範例)
+- 像「更精確一點」這樣模糊的指令可能有許多種解讀方式。
+- 範例能毫不含糊地展示預期的格式與決策邏輯。
+- 模型會將該模式類推到新的案例(它不只是重複那些範例)。
+- 範例能**降低擷取任務中的幻覺**,因為它把模型錨定到具體的形狀,而不是任其杜撰欄位。
+
+**為何有效(機制):**一個範例同時把輸出的**結構**、**語氣**與**決策邊界**編碼進同一件成品。文字規則只編碼你記得寫下來的部分;範例還編碼了你所有隱而未宣的東西(鍵的順序、null 的處理、修正建議的措辭)。這就是為何一個好範例往往勝過三段指令。
 
 **少樣本範例的類型及其使用時機:**
 
-1. **用於模糊情境的範例:**
+1. **用於模糊情境的範例**——展示**決策**,而不只是格式:
 
 ```
 Request: "My order is broken"
 Action: Call get_customer -> lookup_order -> check status.
-Rationale: “broken” may mean a damaged item; you need order details.
+Rationale: "broken" may mean a damaged item; you need order details.
 
 Request: "Get me a manager"
 Action: Immediately call escalate_to_human.
@@ -1878,7 +2224,7 @@ Finding example:
 }
 ```
 
-3. **用於區分可接受與有問題程式碼的範例:**
+3. **用於區分可接受與有問題程式碼的範例**——教會模型真正問題與誤報之間的**邊界**:
 
 ```
 // Acceptable (do not flag):
@@ -1888,7 +2234,7 @@ const items = data.filter(x => x.active);
 const items = data.filter(x => x.active == true); // Use strict equality ===
 ```
 
-4. **用於從不同文件格式擷取的範例:**
+4. **用於從不同文件格式擷取的範例**——你預期會遇到的每一種結構各給一個範例:
 
 ```
 Document with inline citations:
@@ -1900,7 +2246,7 @@ Document with bibliography references:
 -> {"value": "42%", "source": "reference_1", "type": "bibliography"}
 ```
 
-5. **用於非正式量測的範例:**
+5. **用於非正式量測的範例**——規則無法窮舉每一種說法之處:
 
 ```
 Text: "about two handfuls of rice"
@@ -1912,8 +2258,7 @@ Text: "a pinch of salt"
 
 少樣本對於擷取非正式且非標準的量測單位特別有效,這類單位過於多樣,難以單純以規則式指令處理。
 
-**提示中的格式正規化規則:**
-當使用嚴格的 JSON 結構描述進行結構化輸出時,在提示中加入正規化規則:
+**提示中的格式正規化規則:**當使用嚴格的 JSON 結構描述進行結構化輸出時,在提示中加入正規化規則,讓**數值**(而不只是語法)保持一致:
 
 ```
 Normalization:
@@ -1922,9 +2267,18 @@ Normalization:
 - Percentages: decimal fraction; "half" -> 0.5
 ```
 
-這可防止語意錯誤,亦即 JSON 在語法上有效、但數值卻不一致的情況。
+這可防止語意錯誤,亦即 JSON 在語法上有效、但數值卻不一致的情況——正是 `tool_use` 本身無法弭平的缺口(§6.6)。
+
+**陷阱:**
+- **範例集偏頗。**若你的範例全是「該標記」的案例,模型就會過度標記。教邊界時務必納入**反面**範例(什麼**不該**做)。
+- **範例與指令相矛盾。**當文字與範例不一致時,模型傾向遵循範例——所以範例才是真正的規格。讓兩者保持一致。
+- **過度貼合措辭。**若每個範例都把修正寫成「Use a parameterized query」,模型可能照抄那句話。當你要的是類推而非模仿時,請變化表面措辭。
+
+**考試角度:**若題目描述**格式不一致**或**對模糊/邊界情況處理不佳**,正解幾乎總是「加入 2–4 個帶理由的針對性少樣本範例」——而不是「寫更長的指令」。
 
 ## 6.2 明確的判準 vs 模糊的指令
+
+對於**判斷型**任務(審查、分流、分類),槓桿最高的單一修正,就是用可列舉、可證偽的規則取代形容詞。
 
 **不佳(模糊):**
 
@@ -1933,7 +2287,9 @@ Normalization:
 請保守一點——只回報高信心的發現。
 ```
 
-**良好(明確判準):**
+「保守」與「高信心」不可操作;兩次執行會劃出不同的界線,而你也無法為「模型不夠保守」除錯。
+
+**良好(明確判準)**——同時列出**該標記**與**該忽略**:
 
 ```
 僅在符合下列情況時,才將某則註解標記為有問題:
@@ -1947,7 +2303,7 @@ Normalization:
 - 缺漏的註解(那屬於另一個類別)
 ```
 
-**用範例定義嚴重程度判準:**
+**用範例定義嚴重程度判準**——每一級都搭配一個具體案例,讓模型校準而非猜測:
 
 ```
 CRITICAL: 使用者端的執行階段失敗
@@ -1963,9 +2319,196 @@ LOW: 程式碼品質
   範例: 重複程式碼、對小型資料採用次佳演算法
 ```
 
-## 6.3 提示鏈接
+**為何這很重要——誤報的信任問題:****某一個**類別的高誤報率,會瓦解開發者對**每一個**類別的信任。若「風格」檢查老是狼來了,工程師連「安全」檢查也會開始忽略。解方不是「更保守一點」(模糊),而是 (a) 撰寫分類判準,且 (b) 對誤報率過高的類別**暫時停用**,而非讓整個審查器品質下降。
 
-提示鏈接將一項複雜任務拆解為一連串聚焦的步驟:
+**陷阱:**
+- 堆疊軟性緩衝詞(「小心一點」「自行判斷」)——它們增加 token,而非精確度。
+- 只定義該標記什麼,卻從不定義該忽略什麼——模型會以過度回報來填補沉默。
+- 嚴重程度分級卻沒有範例——標籤會在多次執行間漂移。
+
+**考試角度:**當情境回報**誤報太多**或**信任受損**時,正確的槓桿是明確的分類判準(以及停用吵雜的類別),**而非**一句籠統的「更保守一點」。這個區別在 Domain 4 中被原文逐字點名。
+
+## 6.3 XML 標籤與角色提示
+
+這兩種結構性技巧關乎資訊**放在哪裡**,以及模型**扮演誰**。
+
+### 用 XML 標籤分隔
+
+Claude 經過特別調校,會尊重 XML 風格的標籤。將提示的每個部分包進具名標籤,能讓模型分辨指令與資料,並讓你以名稱引用各部分。
+
+```
+You are reviewing a contract. The contract text is in <contract>.
+Your task instructions are in <instructions>. Output only the <result>.
+
+<instructions>
+Extract the parties, effective date, and termination clause.
+</instructions>
+
+<contract>
+{{ untrusted_document_text }}
+</contract>
+```
+
+**為何有效:**
+- **指令／資料分離。**沒有分隔符時,一份本身含有「ignore the above and summarize」字樣的文件可能劫持任務。標籤讓邊界變明確,是**提示注入的第一道緩解**(資料住在 `<contract>`,權威住在 `<instructions>`)。
+- **可引用性。**你可以寫「在你的 `<result>` 中引用 `<contract>` 裡相關的句子」,藉此改善紮根程度,並讓輸出可稽核。
+- **可組合性。**已標籤的段落容易做成樣板、快取(穩定的 `<instructions>` 區塊很適合快取;見第 18 章)並重新組合。
+
+### 角色提示(系統提示人設)
+
+在**系統提示**中指派角色,可設定模型的視角、用語與預設標準。
+
+```python
+response = client.messages.create(
+    model="claude-...",
+    system="You are a senior contracts attorney. You are precise, "
+           "cite the exact clause you rely on, and you never guess "
+           "at a value that is not present in the document.",
+    messages=[{"role": "user", "content": prompt}],
+)
+```
+
+**為何有效:**人設是一種精簡的方式,能一次拉進一整組期望(「合約律師」就隱含精確、引用條款、對缺漏資料審慎),而無須逐條列出每項規則。它也會改變**預設值**——同一個問題,以「律師身分」回答 vs 以「友善助理身分」回答,在嚴謹度與保留措辭上都會不同。
+
+**system 與 user 內容(與考試相關):**把**長存**的角色、規則與輸出契約放進 `system`;把**特定**的任務與資料放進 `user` 回合。這種分離正是讓提示快取生效、並使契約在多次請求間保持穩定的關鍵。
+
+**陷阱:**
+- 把角色當成**保證**。「You are a strict validator」只會讓模型**表現得**更嚴格;它不強制任何東西。真正的強制是 `tool_use` schema(§6.6)與程式碼端驗證(§6.8)——與第 3 章 hooks 對提示的「確定性 vs 機率性」是同一條界線。
+- 把人設過度規格化到擠掉了任務本身。角色應是幾句話,而非一篇傳記。
+
+**考試角度:**XML 標籤 =「把指令與不可信資料分開 + 降低注入風險」;角色提示 =「在**系統**提示中設定專業與標準」。兩者都是機率性的品質槓桿,而非安全邊界。
+
+## 6.4 思維鏈與擴展思考
+
+對於多步驟推理(數學、多條款邏輯、對帳數字),讓模型**先思考再作答**能實質提升準確度。
+
+**取得推理的兩種方式:**
+
+1. **提示式思維鏈(CoT)**——指示模型逐步推理,最好是寫進一個**具名草稿區**,讓你能把思考與答案分開:
+
+```
+Think step by step inside <scratchpad>...</scratchpad>.
+Then give only the final JSON inside <answer>...</answer>.
+```
+
+2. **擴展思考**——一種模型能力(以 `thinking` 預算開啟),模型會在最終回應前產生內部推理。你為思考配置一個 token 預算;模型會把它用在較難的問題上,可見的答案隨後產出。
+
+**為何有幫助:**推理 token 給了模型「工作的空間」。被迫立即吐出答案的模型,必須在單次前向傳遞中算出多步驟結果;而被允許鋪陳中間步驟的模型,能在定下答案前抓出自己的算術與邏輯錯誤。這也是 §6.9 自我修正之所以有效的同一個原因。
+
+**兩者如何選:**
+
+| | 提示式 CoT(`<scratchpad>`) | 擴展思考 |
+|---|---|---|
+| 控制 | 你在提示中形塑步驟 | 模型在預算內自行管理推理 |
+| 輸出衛生 | 你必須在使用答案前剝除草稿區 | 思考以獨立區塊交付,不與答案混在一起 |
+| 最適合 | 輕度推理,當你想**引導**步驟時 | 深度至關重要的困難、開放式推理 |
+
+**陷阱:**
+- **草稿區洩漏進輸出。**若你在同一坨內容中同時要求推理與 JSON,然後對整坨 `json.loads`,就會壞掉。把推理放進 `<scratchpad>` / 思考區塊,結果放進 `<answer>`,且只解析答案。
+- **在純屬多餘之處強行 CoT。**瑣碎的擷取不需要草稿區;你白白付出延遲與 token。
+- **思考與預填搭配錯誤。**預填助理回合(§6.5)約束的是**回應**的開頭;別用它試圖壓制或偽造思考區塊。
+
+**考試角度:**要知道推理(提示式 CoT **或**擴展思考)是**困難多步驟任務準確度**的槓桿,且推理軌跡必須與機器消費的輸出**分開**。
+
+## 6.5 預填助理回合
+
+你可以在請求中提供一則 `assistant` 訊息,藉此植入 Claude 回應的**開頭**。模型會**從**你的預填續寫,這就約束了後續內容的形狀。
+
+```python
+messages = [
+    {"role": "user", "content": "Extract the invoice as JSON."},
+    {"role": "assistant", "content": "{"},   # <- 預填強制 JSON,跳過前言
+]
+```
+
+**預填能帶來什麼:**
+- **跳過前言。**沒有它,模型可能會以「Sure! Here is the JSON:」開頭;預填 `{` 會逼它直接進入物件。
+- **鎖定格式。**預填 `[` 以強制 JSON 陣列,或預填像 `<result>` 這樣的開頭標籤以強制標籤式輸出。
+- **引導人設／決策。**預填「As an attorney, my assessment is」會為續寫推動語氣與立場。
+
+**為何有效:**模型永遠只是在預測**下一個** token,而依據的是目前為止的一切——包括你提供的助理文字。藉由寫下答案的第一個(幾個)token,你移除了模型選擇不同開頭的自由,而格式漂移往往正是從那裡開始的。
+
+**陷阱:**
+- **預填不會被回傳。**API 回應是**接在**你的預填之後續寫,所以在解析前要把完整值重組為 `prefill + response`(例如 `"{" + completion`)。
+- **尾端空白。**以空格或換行結尾的預填可能使輸出變差;以有意義的 token 結尾(例如 `{` 而非 `{ `)。
+- **預填是形塑工具,不是 schema 保證。**它偏置開頭;不驗證其餘部分。要硬性保證,請結合 `tool_use`(§6.6)與驗證(§6.8)。
+
+**考試角度:**預填 =「藉由寫下回應的開頭 token 來約束回應」——經典用法是**強制 JSON/陣列輸出**與**移除對話式前言**。記得在讀取結果時把預填補回去。
+
+## 6.6 以 `tool_use` 與 JSON Schema 做結構化輸出
+
+當你需要機器可讀的輸出時,最可靠的機制是**搭配 JSON Schema 的 `tool_use`**——而不是「要求 JSON 然後祈禱」。
+
+**為何 `tool_use` 勝過自由文字 JSON:**工具的 `input_schema` 會約束生成,使模型吐出符合 schema 的引數。這**消除了 JSON 語法錯誤**(不對稱的大括號、尾隨逗號、智慧引號),並保證**形狀**——你宣告的欄位名稱、型別與必填鍵。
+
+```python
+extract_invoice = {
+    "name": "extract_invoice",
+    "description": "Return structured fields from an invoice.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "vendor": {"type": "string"},
+            "total":  {"type": "number"},
+            "currency": {"type": "string", "enum": ["USD", "EUR", "GBP"]},
+            "line_items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name":  {"type": "string"},
+                        "price": {"type": "number"}
+                    },
+                    "required": ["name", "price"]
+                }
+            },
+            "confidence": {"type": "string", "enum": ["high", "medium", "unclear"]}
+        },
+        "required": ["vendor", "total", "currency", "line_items"]
+    }
+}
+```
+
+**控制是否呼叫工具——`tool_choice`:**
+
+| `tool_choice` | 行為 | 何時使用 |
+|---|---|---|
+| `"auto"`(預設) | 模型可用文字回答**或**呼叫工具 | 有時只是回覆的對話式代理 |
+| `"any"` | 模型**必須**呼叫**某個**工具 | 你總是要結構化輸出,且有多個 schema |
+| `{"type": "tool", "name": "extract_invoice"}` | 強制呼叫**這個**工具 | 你每次都要剛好同一個 schema(擷取) |
+
+```mermaid
+flowchart TD
+    Req[帶 input_schema 發送請求] --> Choice{tool_choice?}
+    Choice -->|auto| MayText[模型可回傳文字<br/>或呼叫工具]
+    Choice -->|any| MustTool[模型必須呼叫某個工具]
+    Choice -->|forced name| OneTool[模型必須呼叫指定的工具]
+    MustTool --> Parse[把 tool_use.input 當成物件讀取]
+    OneTool --> Parse
+    Parse --> Valid{通過程式碼端<br/>驗證?}
+    Valid -->|yes| Done[使用資料]
+    Valid -->|no| Retry[帶錯誤重試<br/>section 6.8]
+```
+
+**考試青睞的 schema 設計:**
+- **`required` vs 選填。**當來源**可能不含**某欄位時,把它設為選填／可為 null——否則模型會為了滿足 schema 而杜撰一個值。「別逼我發明資料」是反覆出現的考點。
+- **帶逃生口的 enum。**對已知類別使用封閉 enum,再加上 `"other"` / `"unclear"` 值**以及**一個自由文字的細節欄位,讓新案例被捕捉而非被錯誤歸類(可擴充的分類)。
+- **單一可信來源。**從模型產生 schema(例如 Pydantic → JSON Schema,§6.8)能讓工具定義與你的驗證器保持同步。
+
+**硬性限制——`tool_use` 保證語法,不保證語意。**schema 無法知道 `total` 應等於 `sum(line_items)`,或 `currency` 是否與文件中的符號相符。**語法有效、語意錯誤**的輸出,正是 §6.8 與 §6.9 之所以存在要抓的失敗模式。
+
+**陷阱:**
+- 以為 schema 有效就等於正確。它只代表**形狀良好**。
+- 用 `required` 過度約束,以致模型為缺漏欄位發明值。
+- 在你**總是**需要結構時卻用 `tool_choice: "auto"`(模型可能用散文回答)。請用 `"any"` 或強制名稱。
+
+**考試角度:**「保證 schema 合規的輸出 / 消除 JSON 語法錯誤」→ **`tool_use` + JSON Schema**。「總是結構化、有多個 schema」→ `tool_choice: "any"`。「剛好一個擷取 schema」→ 強制工具。「別杜撰缺漏資料」→ 選填／可為 null 的欄位。「抓出錯誤的 total」→ 那是驗證,不是 schema。
+
+## 6.7 提示鏈接與訪談模式
+
+### 提示鏈接
+
+提示鏈接將一項複雜任務拆解為一連串聚焦的步驟,每一步都消費前一步的輸出:
 
 ```
 Step 1: Analyze auth.ts (僅限本檔案內部的問題)
@@ -1979,17 +2522,17 @@ Step 3: 整合遍歷 (跨檔案相依)
 ```
 
 **為何這很重要:**
-- 避免**注意力稀釋**——當模型一次收到太多檔案時,可能會漏掉某些檔案中的 bug,同時對其他檔案只提供淺薄的評論
-- 確保每個檔案的分析品質一致
-- 允許對跨檔案的互動進行獨立分析
+- 避免**注意力稀釋**——當模型一次收到太多檔案時,可能會漏掉某些檔案中的 bug,同時對其他檔案只提供淺薄的評論。
+- 確保每個檔案的分析品質一致。
+- 允許在專屬的整合遍歷中,對跨檔案的互動進行獨立分析。
 
-**何時使用提示鏈接 vs 動態分解:**
-- **提示鏈接** — 可預測、可重複的任務(程式碼審查、檔案遷移)
-- **動態分解** — 開放式的調查,子任務只有在執行過程中才會變得明朗
+**鏈接 vs 動態分解:**
+- **提示鏈接**——形狀**已知**、可預測、可重複的任務(程式碼審查、檔案遷移)。你預先設計好步驟。
+- **動態分解**——開放式的調查,子任務只有在執行**過程中**才會變得明朗;此時由協調者代理在執行階段決定步驟(第 3 章)。
 
-## 6.4 「訪談」模式
+### 「訪談」模式
 
-在實作解決方案之前,Claude 會先問釐清問題:
+在實作解決方案之前,Claude 會先問釐清問題,而不是對需求妄加猜測:
 
 ```
 Claude: "在為這個 API 實作快取之前,先問幾個問題:
@@ -2000,13 +2543,19 @@ Claude: "在為這個 API 實作快取之前,先問幾個問題:
 ```
 
 **何時這很有用:**
-- 不熟悉的領域(金融科技、醫療保健、法律系統)
-- 帶有不明顯影響的任務(快取策略、失敗模式)
-- 存在多種可行方法,而最佳選擇取決於上下文
+- 不熟悉的領域(金融科技、醫療保健、法律系統)。
+- 帶有不明顯影響的任務(快取策略、失敗模式)。
+- 存在多種可行方法,而最佳選擇取決於上下文。
 
-## 6.5 驗證與帶回饋的重試
+**陷阱:**鏈接會增加延遲與成本(N 次呼叫而非一次)——當注意力稀釋或每步品質值得時才用,別反射性地用。訪談模式不適合高量的自主擷取(你不可能停下來問一萬次);把它留給設計階段與模糊的一次性任務。
 
-當擷取出的資料未通過驗證時:
+**考試角度:**「模型在眾多檔案間漏掉 bug / 每檔輸出淺薄」→ 以每檔遍歷加整合遍歷做鏈接。「可預測的管線」→ 鏈接;「子任務在執行階段才浮現」→ 動態分解。
+
+## 6.8 驗證與帶回饋的重試
+
+`tool_use` 移除語法錯誤;**驗證**是你抓出**語意**錯誤的方式,而**帶回饋的重試**是你復原的方式。
+
+當擷取出的資料未通過驗證時,帶著明確寫出的錯誤重試:
 
 ```
 Step 1: 從文件中擷取資料
@@ -2017,25 +2566,33 @@ Step 3: 若有錯誤——帶著上下文重試:
   - 具體的錯誤: "Field 'total' = 150, but sum(line_items) = 145. Re-check values."
 ```
 
+重試提示必須同時帶上**這三者**:來源、錯誤的輸出,以及**具體**的錯誤。一句籠統的「剛剛錯了,再試一次」沒給模型任何可修正的東西。
+
 **何時重試會有效:**
-- 格式錯誤(日期格式錯誤)
-- 結構錯誤(欄位放在錯誤的位置)
-- 算術不一致(模型可以重新檢查)
+- 格式錯誤(日期格式錯誤)。
+- 結構錯誤(欄位放在錯誤的位置)。
+- 算術不一致(模型可以重新檢查自己的加總)。
 
 **何時重試沒有幫助:**
-- 該資訊在來源文件中根本不存在
-- 所需的上下文在外部(資料位於另一份未提供的文件中)
+- 該資訊在來源文件中根本**不存在**——重新提示無法變出本就不在的資料。
+- 所需的上下文在**外部**(數值位於另一份你未提供的文件中)。重試只是浪費呼叫;解方是提供缺漏的來源,或把該欄位標為未知。
 
-**Pydantic 作為驗證工具:**
-Pydantic 是一個用於以結構描述為基礎進行資料驗證的 Python 函式庫。對於考試而言,重點如下:
-- **結構驗證:** 在從 Claude 收到 JSON 之後,於程式碼中檢查型別、必填性、enum 約束
-- **語意驗證:** 自訂驗證器強制執行業務邏輯(各項目總和等於 total;start_date < end_date)
-- **驗證—重試迴圈:** 當 Pydantic 驗證失敗時,建構一則錯誤訊息,並帶著錯誤上下文重新提示 Claude
-- **JSON Schema 產生:** Pydantic 模型可為 `tool_use` 產生 JSON Schema,提供單一可信來源
+**Pydantic 作為驗證工具**(考試的典型範例):
+- **結構驗證:**在從 Claude 收到 JSON **之後**,於程式碼中檢查型別、必填性、enum 約束。
+- **語意驗證:**自訂驗證器強制執行業務邏輯(`sum(line_items) == total`;`start_date < end_date`)。
+- **驗證—重試迴圈:**當驗證失敗時,建構一則錯誤訊息,並帶著該錯誤上下文重新提示 Claude。
+- **JSON Schema 產生:**Pydantic 模型可為 `tool_use` 產生 JSON Schema,為工具定義與驗證器提供**單一可信來源**。
 
-## 6.6 自我修正
+**陷阱:**
+- 在資料缺漏／外部時重試(無限迴圈陷阱)。為重試設上限(例如最多 2 次),然後改道給真人或回傳 null 結果。
+- 在重試提示中省略具體錯誤(沒有可修正的訊號)。
+- 把 Pydantic 通過當成完全正確——它只檢查你所寫的規則。
 
-一種偵測內部矛盾的模式:
+**考試角度:**「JSON 有效但 total 對不上」→ 語意驗證 + 帶錯誤重試。「重試沒能修好」→ 資訊缺漏或在外部;停止重試。「schema + 驗證的單一可信來源」→ 由 Pydantic 產生 JSON Schema。
+
+## 6.9 自我修正
+
+自我修正讓模型**主動暴露自己的矛盾**:同時擷取一個陳述值與一個獨立計算出的值,然後標記任何不一致:
 
 ```json
 {
@@ -2049,148 +2606,977 @@ Pydantic 是一個用於以結構描述為基礎進行資料驗證的 Python 函
 }
 ```
 
-模型同時擷取陳述值與計算值——若兩者不同,`conflict_detected` 讓你能處理這項差異。
+模型擷取**如所寫的**值(`stated_total`)與它從各部分**計算出的**值(`calculated_total`);當兩者不同時,`conflict_detected` 讓下游程式碼把這項差異改道送審,而不是默默信任一個錯誤的數字。
 
----
+**為何有效:**它把一個看不見的推理步驟轉成一個**可觀測的欄位**。你不是寄望模型注意到文件本身的算術錯誤,而是要它把兩個數字都寫下來,於是這份分歧就變成你可以據以行動的資料。它與思維鏈(§6.4)天生搭配——模型在吐出計算值之前會先推理出它。
+
+**自我修正 vs 獨立審查(連結 Domain 4.6):**模型不擅於挑戰**自己**的結論,因為它保留了生成時的上下文。自我修正(單一實例、兩個值)能廉價地抓出**內部**的算術/一致性錯誤;對於**細微**的問題,由一個**獨立的第二個 Claude 實例**在沒有生成上下文的情況下審查會更強。把自我修正用於行內一致性檢查,把獨立審查者用於更深入的稽核。
+
+**陷阱:**
+- 只信任 `stated_total`——那正是你最該驗證的數字。
+- 要求單一實例「再檢查一次你的工作」並期待嚴謹;沒有全新的上下文,它傾向自我背書。請用雙值模式或另一個實例。
+
+**考試角度:**「偵測文件陳述的 total 與其各項目不符」→ 擷取 `stated` **與** `calculated` + 一個 `conflict_detected` 旗標。「找出作者漏掉的細微問題」→ 獨立的審查實例,而非自我審查。
+
+## 6.10 端到端案例研究:合約擷取服務
+
+上述技巧唯有組合在一起才有意義。以下是一個完整、真實的服務,把雜亂的上傳合約變成經驗證的結構化資料——正是 Domain 4 要你能推理的設計。它在單一管線中操演了**角色提示、XML 標籤、少樣本、思維鏈、`tool_use` schema、預填、驗證/重試與自我修正**。
+
+### 需求
+
+- 接受異質的合約文件(不同廠商、版面、引用風格)。
+- 擷取一個固定結構:`parties`、`effective_date`、`total_value`、`currency`、`line_items`、`termination_notice_days`。
+- **絕不杜撰**文件中沒有的值——缺漏的欄位必須回傳 `null`,而非發明。
+- 輸出必須是**schema 合規的 JSON**,可直接插入資料庫(無語法錯誤、無前言)。
+- 抓出常見的真實世界缺陷:文件**陳述的**總額與**各項目之和**不一致,並把這些改道送人工審查,而非予以信任。
+- 高量且無人值守——執行階段不做訪談/釐清迴圈。
+
+### 架構
+
+兩層:一個**機率性**的擷取層(提示技巧)與一個**確定性**的驗證層(程式碼),兩者之間夾著有上限的重試。
+
+```mermaid
+flowchart TD
+    Doc([上傳的合約]) --> Build[建構提示<br/>角色 + XML 標籤 + 少樣本]
+    Build --> Call[呼叫 Claude<br/>開啟 thinking + 強制 extract 工具]
+    Call --> Pre[預填助理回合<br/>開頭大括號]
+    Pre --> Json[tool_use.input<br/>結構化 JSON]
+    Json --> Schema{schema 有效?<br/>Pydantic 結構}
+    Schema -->|no| RetryA[帶錯誤重試]
+    Schema -->|yes| Sem{語意正常?<br/>stated 等於 sum}
+    Sem -->|conflict| Review([人工審查佇列])
+    Sem -->|absent or external| RetryB[重試一次後 null]
+    Sem -->|ok| Store([寫入資料庫])
+    RetryA -. 有上限的重試 .-> Call
+    RetryB -. 有上限的重試 .-> Call
+```
+
+模型掌管擷取;**由程式碼(而非提示文字)掌管保證**(schema 合規、stated-vs-sum 檢查、重試上限)。這與考試在第 3 章測試的「機率性 vs 確定性」是同一個切分,套用在結構化輸出上。
+
+### 實作
+
+**1) 提示中的角色 + XML 標籤 + 少樣本**,並加上正規化規則讓數值一致:
+
+```python
+SYSTEM = (
+    "You are a senior contracts attorney. You are precise, you cite only "
+    "values present in the document, and you NEVER guess a value that is "
+    "absent — you return null for it."
+)
+
+FEWSHOT = """
+<example>
+<contract>Term: 90 days written notice. Fee: USD 12,000.</contract>
+<result>{"termination_notice_days": 90, "total_value": 12000, "currency": "USD"}</result>
+</example>
+<example>
+<contract>This agreement may be ended by either party.</contract>
+<result>{"termination_notice_days": null, "total_value": null, "currency": null}</result>
+</example>
+"""
+
+NORMALIZE = """
+Normalization: dates as ISO 8601 (YYYY-MM-DD); currency as amount + ISO code;
+notice periods as an integer number of days. If a field is not stated, use null.
+"""
+
+def build_prompt(doc_text: str) -> str:
+    return (
+        f"{NORMALIZE}\n"
+        f"Examples:\n{FEWSHOT}\n"
+        "Think step by step inside <scratchpad>, reconcile the stated total "
+        "against the sum of line items, then call extract_contract.\n"
+        f"<contract>\n{doc_text}\n</contract>"
+    )
+```
+
+注意那個**反面範例**(一份沒有通知期的合約 → `null` 欄位):它教會模型**不要杜撰**,正是需求所要求的。
+
+**2) 以 `tool_use` 強制擷取 schema**(語法保證),並讓模型先推理:
+
+```python
+extract_contract = {
+    "name": "extract_contract",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "parties": {"type": "array", "items": {"type": "string"}},
+            "effective_date": {"type": ["string", "null"]},
+            "stated_total": {"type": ["number", "null"]},
+            "calculated_total": {"type": ["number", "null"]},
+            "currency": {"type": ["string", "null"], "enum": ["USD", "EUR", "GBP", None]},
+            "line_items": {
+                "type": "array",
+                "items": {"type": "object",
+                          "properties": {"name": {"type": "string"},
+                                         "price": {"type": "number"}},
+                          "required": ["name", "price"]}
+            },
+            "termination_notice_days": {"type": ["integer", "null"]},
+            "conflict_detected": {"type": "boolean"}
+        },
+        "required": ["parties", "line_items", "conflict_detected"]
+    }
+}
+
+resp = client.messages.create(
+    model="claude-...",
+    system=SYSTEM,
+    thinking={"type": "enabled", "budget_tokens": 1024},   # 用 CoT 做對帳
+    tools=[extract_contract],
+    tool_choice={"type": "tool", "name": "extract_contract"},  # 強制 -> 總是結構化
+    messages=[{"role": "user", "content": build_prompt(doc_text)}],
+)
+data = next(b.input for b in resp.content if b.type == "tool_use")
+```
+
+schema 把可為 null 的欄位明確標出(`["number", "null"]`),讓缺漏資料回傳 `null` 而非杜撰的數字,並且為自我修正(§6.9)**同時**擷取 `stated_total` 與 `calculated_total`。
+
+> 當要擷取**自由文字** JSON 而非用工具時(例如快速的非工具路徑),用 `{` 預填助理回合以強制物件並去掉任何「Here is the JSON」前言——然後解析 `"{" + completion`。
+
+**3) 確定性驗證 + 有上限的帶回饋重試**(保證住在這裡,不在提示裡):
+
+```python
+from pydantic import BaseModel, model_validator
+
+class Contract(BaseModel):
+    stated_total: float | None
+    calculated_total: float | None
+    conflict_detected: bool
+    # ... other fields ...
+
+    @model_validator(mode="after")
+    def totals_must_reconcile(self):
+        s, c = self.stated_total, self.calculated_total
+        if s is not None and c is not None and abs(s - c) > 0.01:
+            # tool_use 抓不到的語意錯誤
+            object.__setattr__(self, "conflict_detected", True)
+        return self
+
+def extract(doc_text, max_retries=2):
+    err = None
+    for _ in range(max_retries + 1):
+        data = call_claude(doc_text, prior_error=err)   # 把錯誤帶進提示
+        try:
+            c = Contract(**data)
+        except ValidationError as e:
+            err = str(e)                                 # 結構錯誤 -> 帶著它重試
+            continue
+        if c.conflict_detected:
+            route_to_human_review(c); return c           # stated != sum -> 送審,不予信任
+        return c                                          # 乾淨 -> 入庫
+    return None                                           # 達上限後放棄(缺漏/外部)
+```
+
+### 執行軌跡
+
+一份陳述總額($150)與其各項目($145)不一致的合約:
+
+```mermaid
+sequenceDiagram
+    actor Up as 上傳者
+    participant Svc as 擷取服務
+    participant Cl as Claude
+    participant Val as Pydantic 驗證器
+    participant Hu as 審查佇列
+    Up->>Svc: contract.pdf 文字
+    Svc->>Cl: 提示(角色 + XML + 少樣本,強制工具,開啟思考)
+    Cl->>Cl: 草稿區:各項目之和 = 145,陳述 = 150
+    Cl-->>Svc: tool_use {stated 150, calculated 145, conflict_detected true}
+    Svc->>Val: 驗證結構與語意
+    Val-->>Svc: schema 正常,conflict_detected 維持為 true
+    Svc->>Hu: 把案件改道送人工審查
+    Hu-->>Up: 「總額不符,已標記待確認」
+```
+
+模型在**草稿區**做了算術(思維鏈),寫下了兩個總額(自我修正),schema 保證了 JSON 可解析(`tool_use`),而**程式碼**——而非提示指令——做出了送人工的決定。沒有任何單一技巧能獨力抓到這一點。
+
+### 驗證
+
+- **不杜撰測試:**餵入一份缺通知期的合約;斷言 `termination_notice_days is None`(反面少樣本範例 + 可為 null 的 schema 必須成立)。
+- **語法測試:**讓 1,000 份文件通過強制工具;斷言**零**次 `json` 解析失敗(這正是 `tool_use` 所保證的)。
+- **語意測試:**餵入一份 stated ≠ sum 的合約;斷言它落入**審查佇列**,而非資料庫。
+- **重試上限測試:**餵入一份缺資料、且該資料只在外部附件中的合約;斷言它在 `max_retries` 後停止並回傳 `null`,而非無止盡迴圈。
+
+### 常見陷阱
+
+- 指望 `tool_use` 抓到總額不符——它保證**語法**,不保證**語意**;對帳必須是程式碼(§6.6、§6.8)。
+- 把每個欄位都設為 `required`,以致模型為了滿足 schema 而杜撰通知期或幣別(§6.6)。
+- 在資料缺漏或在未提供的附件中時無止盡重試——為重試設上限(§6.8)。
+- 把「stated 必須等於 sum」規則只放進提示並祈禱——它是確定性檢查,所以該放進驗證器(§6.8),這呼應第 3 章的 hooks 對提示。
+- 把 `<scratchpad>` 推理混進你要解析的 JSON——讓推理(思考區塊／草稿區)與機器讀取的輸出分開(§6.4)。
+
+## 6.11 考試重點 — 關鍵整理
+
+| 概念 | 考試考什麼 |
+|---|---|
+| 少樣本提示 | 對格式不一致／模糊邊界情況最有效的修正;2–4 個帶理由的範例,並納入反面範例(§6.1)。 |
+| 明確判準 | 用可列舉的標記/忽略規則 + 嚴重程度範例取代「保守一點」;停用吵雜的類別,而非讓整個審查器品質下降(§6.2)。 |
+| XML 標籤／角色 | 標籤把指令與不可信資料分開(緩解注入);角色住在**系統**提示——兩者皆為機率性(§6.3)。 |
+| CoT／擴展思考 | 困難多步驟任務準確度的槓桿;讓推理軌跡與解析的輸出分開(§6.4)。 |
+| 預填 | 藉由寫下回應的開頭 token 來約束回應(強制 JSON/陣列、去掉前言);讀取結果時把預填補回去(§6.5)。 |
+| `tool_use` + JSON Schema | 保證 schema 合規的語法,**而非**語意;`tool_choice` 的 `auto` vs `any` vs 強制;可為 null 的欄位防止杜撰;enum + 「other」以利擴充(§6.6)。 |
+| 鏈接／訪談 | 每檔遍歷 + 整合遍歷勝過一個巨型提示(注意力稀釋);可預測管線用鏈接,浮現式子任務用動態分解(§6.7)。 |
+| 驗證 + 重試 | 帶**具體**錯誤重試對格式/結構/算術有效;資料缺漏/外部時無用——為重試設上限(§6.8)。 |
+| 自我修正 | 擷取 `stated` **與** `calculated` + `conflict_detected`;對細微問題,獨立審查實例優於自我審查(§6.9)。 |
+
+> **對應 Domain 4(20%)。** 貫穿全章的主線:提示技巧提高正確行為的**機率**,而 `tool_use` schema 保證**語法**、程式碼端驗證保證**語意**。如果你能建構並捍衛上面的合約擷取服務——針對每種失敗模式選對技巧,並清楚確定性的界線落在哪裡——你就掌握了這個領域的核心。
 
 # 第 7 章:Message Batches API
 
 > 文件:[Message Batches](https://platform.claude.com/docs/en/build-with-claude/message-batches)
 
-## 7.1 概觀
+Message Batches API 用**延遲換取成本與規模**:你把一大批彼此獨立的請求交給 Anthropic,自己離開,稍後再以**半價**取回答案。本章屬於 **Domain 5 — 上下文管理與可靠性(佔考試 15%)**,這個領域要你在負載下維持大型系統的正確與經濟——而每當考題情境出現「離線」「隔夜」「數萬份文件」或「降低推論帳單」時,它就是標準答案。讀完你應能判斷*何時*該批次處理、正確驅動*非同步生命週期*,並設計一個*有韌性*的大型任務:
 
-Message Batches API 讓你提交多批請求進行非同步處理:
+- **什麼是 Batches API**(§7.1)— 非同步模型、50% 折扣、24 小時視窗,以及它*不*做什麼。
+- **批次 vs 即時**(§7.2)— 考試會考的判斷規則,圍繞「誰在等待結果」來框定。
+- **`custom_id` 關聯**(§7.3)— 為何結果是亂序回傳,以及如何把結果重新對回輸入。
+- **submit → poll → retrieve 生命週期**(§7.4)— 三個呼叫,以及之間的各種狀態。
+- **失敗處理與 SLA 規劃**(§7.5–§7.6)— 部分失敗、選擇性重送,以及從期限往回推算。
+
+§7.7 接著從頭到尾建構一個完整的離線文件分類管線,§7.8 則濃縮考試重點。
+
+## 7.1 概觀:什麼是 Batches API
+
+Message Batches API 讓你提交一批彼此獨立的 Messages API 請求進行**非同步**處理。你不必保持連線開啟;你提交、收到一個 batch ID,然後輪詢直到批次完成——屆時再串流取出結果。
 
 | 屬性 | 值 |
 |---|---|
-| 節省成本 | 相較同步呼叫節省 **50%** |
-| 處理時間視窗 | 最長 **24 小時**(無延遲 SLA 保證) |
-| 多輪工具呼叫 | **不支援**(一個請求 = 一個回應) |
-| 關聯對應 | 以 `custom_id` 欄位連結請求與回應 |
+| 成本 | 相較同步呼叫,輸入*與*輸出 token 皆享 **50% 折扣** |
+| 處理時間視窗 | 多數批次在 **1 小時**內完成;硬性上限為 **24 小時**(無單一請求延遲 SLA) |
+| 批次大小 | 最多 **100,000 個請求**或 **256 MB**,以先達到者為準 |
+| 結果保留 | 結果在批次建立後可取用 **29 天** |
+| 關聯對應 | 每個請求帶一個 `custom_id`;結果以它為鍵,且**亂序**回傳 |
+| 功能完整性 | Messages API 的**所有**功能在批次內都可用——工具、視覺、系統提示、**prompt caching**、結構化輸出 |
+| 多輪工具呼叫 | **不支援**——一個請求產生一個回應;批次內沒有代理迴圈 |
+
+**為何存在——經濟性。**半價 token 是頭條。對於處理 50,000 張發票、或重新分類一整年支援工單的任務,50% 折扣往往就是「我們每晚都跑」與「我們根本不跑」之間的差別。成本套用在*整個*批次的 token 用量,所以任務越大越重複,省得越多——而且因為 prompt caching 在批次內同樣有效,跨數千個請求共享的系統提示,可以在 50% 之上再對快取前綴疊加約 90% 的折扣。
+
+**代價——沒有延遲保證。**「最長 24 小時」是上限,不是目標。多數批次遠早於此完成,但你無法*承諾*完成時間,因此這個 API 不適合任何有人正在等待的工作。這個單一特性,正是所有關於批次處理的考題的核心。
+
+**陷阱——把批次當成聊天。**批次請求是單次的:模型收到訊息後回傳一個回應。若你在批次請求裡放工具、而模型發出 `tool_use`,沒有任何東西會去執行它並把結果餵回——批次不會迴圈。批次用於*無狀態、單輪*的工作(分類、擷取、摘要、評分、增補),而非多步代理。若你的任務需要代理迴圈,它屬於同步 Messages API(第 3 章),不在此處。
+
+**考試角度。**預期會出一題基本盤:給你一個特性——「便宜 50%」「結果亂序」「無 SLA」「一個請求一個回應」——問這描述的是哪個 API。誘答幾乎總是同步 Messages API。錨定在*非同步 + 折扣 + 無延遲保證*。
 
 ## 7.2 何時使用批次 API 與同步 API
+
+判斷規則是一個問題:**是否有某個東西——某個真人或某個下游同步系統——正被阻擋、等待這個結果?**若是,使用同步 Messages API。若結果只是*終究*會用到(早上前、週報時、任務跑完時),就批次處理並拿折扣。
+
+```mermaid
+flowchart TD
+    A[新的推論工作負載] --> B{有人正被阻擋<br/>等待結果嗎?}
+    B -->|是,某個使用者或即時系統| C[同步 Messages API<br/>全價,即時]
+    B -->|否,終究才需要| D{獨立的單輪<br/>請求?}
+    D -->|否,需要代理迴圈| C
+    D -->|是| E{大量或<br/>對成本敏感?}
+    E -->|是| F[Batch API<br/>5 折,最長 24h]
+    E -->|介於兩者| G[兩者皆可——<br/>量變大就用批次]
+```
 
 | 任務 | API | 原因 |
 |---|---|---|
 | 合併前 PR 檢查 | **同步** | 開發者正在等待;24 小時無法接受 |
+| 互動式程式碼審查 | **同步** | 編輯器中需要即時回應 |
+| 即時客服對話 | **同步** | 使用者正在即時讀取回覆 |
 | 隔夜技術債報告 | **批次** | 結果在早上前需要即可;節省 50% |
-| 每週安全稽核 | **批次** | 不緊急;節省 50% |
-| 互動式程式碼審查 | **同步** | 需要即時回應 |
-| 處理 10,000 份文件 | **批次** | 大量處理;節省幅度可觀 |
+| 每週安全稽核 | **批次** | 不緊急;依排程執行;節省 50% |
+| 分類 10,000 份文件 | **批次** | 大量、離線、無人等待;節省幅度可觀 |
+| 每晚增補 CRM 資料表 | **批次** | 排程、量大、可容忍延遲 |
 
-## 7.3 使用 `custom_id`
+**為何「誰在等待」是正確的判斷軸。**量本身不能決定——你*可以*跑 10,000 個同步呼叫,也*可以*只批次一個請求。讓批次正確的,是 (a) 對延遲的容忍與 (b) 請求的獨立性兩者的組合。與單一使用者的即時對話違反 (a);多輪代理違反 (b)。凡是兩者都通過的,就是批次候選,而到那一步,50% 折扣讓批次成為預設,而非例外。
+
+**陷阱——為省錢而把延遲敏感的工作批次化。**折扣會誘使團隊把使用者正在等待的東西丟去批次。一個*通常*10 分鐘完成的批次,在佇列很深時*終究*會跑 20 小時,而那一個糟糕的日子就是一次生產事故。絕不要把面向真人的路徑放上批次 API,無論它平常回得多快。
+
+**陷阱——為了「簡單」而把龐大的離線任務走同步。**鏡像反向的錯誤。把 50,000 份文件用同步呼叫跑,付雙倍價錢還猛撞速率限制;批次 API 正是*為*這種形狀而建,而折扣是你拒收的免費資源。
+
+**考試角度。**這類題目幾乎都是分類任務:一串工作負載,各自標上 Batch 或 Synchronous。用「誰在等待 / 是不是迴圈」的測試逐一判定。刻意刁鑽的列是 (1) 一個量大但仍屬互動的任務——維持同步——以及 (2) 一個量小但純離線的任務——批次仍然可以,折扣連小任務也適用。
+
+## 7.3 用 `custom_id` 關聯請求與結果
+
+批次裡的每個請求都帶一個你指派的 `custom_id`。它是輸入與其結果之間*唯一*的連結,因為**批次結果是亂序回傳**——API 不保證結果 #1 對應到請求 #1。
 
 ```json
 {
   "custom_id": "doc-invoice-2024-001",
   "params": {
-    "model": "claude-sonnet-4-6",
+    "model": "claude-haiku-4-5",
     "max_tokens": 1024,
-    "messages": [{"role": "user", "content": "從以下內容擷取資料:..."}]
+    "messages": [{"role": "user", "content": "Extract data from: ..."}]
   }
 }
 ```
 
 `custom_id` 讓你能夠:
-- 將結果連結回原始文件
-- 失敗時,只重新提交失敗的文件
-- 避免重新處理已成功的文件
 
-## 7.4 處理批次中的失敗
+- **把每個結果重新對回它的來源**文件、紀錄或資料列——靠鍵,絕不靠位置。
+- **只重送失敗項**——找出失敗的 `custom_id`,只用那些建一個較小的新批次。
+- **避免重複處理已成功項**——已成功的 `custom_id` 就是完成了;你絕不會為它付兩次。
+- **讓任務具備冪等性**——穩定、確定性的 `custom_id`(例如由文件主鍵衍生)代表重跑會產生相同的鍵,因此你可以去重並安全重試。
 
-1. 提交一批 100 份文件
-2. 95 份成功;5 份失敗(超出上下文限制)
-3. 以 `custom_id` 找出失敗項
-4. 修改策略(例如,將長文件切分成多個區塊)
-5. 只重新提交 5 份失敗的文件
+**為何不保證順序。**100,000 個請求的批次會在 Anthropic 的機群上平行處理;請求完成的時間各不相同。把結果處理建立在陣列索引上,是最常見的批次錯誤——只要有一個請求重排或失敗,它就會默默地把每一筆紀錄貼錯標籤。
 
-## 7.5 SLA 規劃
+**陷阱——不唯一或位置性的 `custom_id`。**`custom_id` 在批次內必須唯一。重複使用它(或用像 `"0"`、`"1"` 這種純迴圈索引、再拿去和你的輸入清單做位置比對)會摧毀你唯一可靠的關聯。請從你領域中有意義且唯一的東西衍生:`invoice-2024-001`、`ticket-558823`、`user-4471-enrich`。
 
-若你需要在 30 小時內取得結果,而批次 API 最長可能耗時 24 小時:
-- 提交時間視窗:30 - 24 = **6 小時**
-- 批次最晚必須在期限前 24 小時提交
-- 若需頻繁提交,切分成 4 小時的時間視窗
+**考試角度。**情境描述結果回來時對不上、或問「你怎麼知道哪個答案屬於哪份文件?」答案永遠是:以 `custom_id` 為鍵;絕不依賴順序。
 
----
+## 7.4 批次生命週期:Submit → Poll → Retrieve
+
+一個批次會經過三個操作與一小組狀態。你**建立**它,**輪詢**它的 `processing_status` 直到抵達 `ended`,然後**串流取出結果**。
+
+```mermaid
+flowchart TD
+    A[建立請求<br/>每個帶唯一的 custom_id] --> B[batches.create<br/>回傳 batch id + 狀態 in_progress]
+    B --> C[batches.retrieve id<br/>讀取 processing_status]
+    C --> D{processing_status?}
+    D -->|in_progress| E[等待,然後再次輪詢]
+    E --> C
+    D -->|ended| F[batches.results id<br/>串流每一個結果]
+    F --> G{每項 result.type?}
+    G -->|succeeded| H[讀取 result.message.content<br/>以 custom_id 存放]
+    G -->|errored / expired / canceled| I[記下 custom_id<br/>留待重送]
+```
+
+**三個呼叫(Python SDK)。**這裡與 `build_practical_test_html.py` 無關——這是真實 API:
+
+```python
+import anthropic
+from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+from anthropic.types.messages.batch_create_params import Request
+
+client = anthropic.Anthropic()
+
+#-- Step 1 - create: wrap each request as Request(custom_id, params)
+batch = client.messages.batches.create(
+    requests=[
+        Request(
+            custom_id="doc-invoice-2024-001",
+            params=MessageCreateParamsNonStreaming(
+                model="claude-haiku-4-5",
+                max_tokens=1024,
+                messages=[{"role": "user", "content": "Extract data from: ..."}],
+            ),
+        ),
+        # ... up to 100,000 of them
+    ]
+)
+```
+
+```python
+import time
+
+#-- Step 2 - poll: retrieve the batch and check processing_status until "ended"
+while True:
+    batch = client.messages.batches.retrieve(batch.id)
+    if batch.processing_status == "ended":
+        break
+    # request_counts tracks live progress: processing / succeeded / errored
+    time.sleep(60)
+```
+
+```python
+#-- Step 3 - retrieve: stream results; they arrive in ANY order, so key by custom_id
+results = {}
+for result in client.messages.batches.results(batch.id):
+    if result.result.type == "succeeded":
+        msg = result.result.message
+        results[result.custom_id] = next(
+            (b.text for b in msg.content if b.type == "text"), ""
+        )
+    else:
+        results[result.custom_id] = None  # errored / expired / canceled
+```
+
+**真正重要的狀態:**
+
+- **`processing_status`**(批次物件上)在工作執行時為 `in_progress`,當每個請求都抵達終態結果時為 `ended`。`ended`**不**代表「全部成功」——它代表「沒有更多工作要做」。一個取消請求會讓它經過 `canceling`。
+- **`request_counts`**(`processing`、`succeeded`、`errored`……)是你輪詢時的即時進度錶——對日誌與儀表板很有用。
+- **`result.result.type`**(每項)是 `succeeded`、`errored`、`canceled` 或 `expired` 之一。只有 `succeeded` 會帶 `result.message`;其餘帶錯誤/狀態細節。
+
+**為何用輪詢而非整批串流。**沒有任何開啟的連線握著你的批次——它在伺服器端跑數分鐘到數小時。你以合理間隔輪詢 `retrieve`(每 30–60 秒綽綽有餘;緊迫的迴圈只是浪費呼叫),只有當 `processing_status == "ended"` 時才拉取結果。結果可存活 **29 天**,所以批次一結束你不必急著取。
+
+**陷阱——在 `ended` 之前取結果,或讀取非 `succeeded` 項的 message。**在批次結束前不要呼叫 `results()`,而且在伸手拿 `result.message` 前永遠先依 `result.type` 分支——`errored` 或 `expired` 的項目沒有 message,無條件讀取 `result.message.content` 會丟出例外。
+
+**考試角度。**預期會考辨識生命週期的正確順序(create → 輪詢 status → 取結果)、知道 `ended` ≠「全部成功」,以及知道結果可持久保留 29 天(所以你不必在批次完成的那一刻就同步處理它們)。
+
+## 7.5 處理批次中的失敗
+
+在同一個批次內,個別請求可以彼此獨立地失敗。整個批次**不會**因為少數請求失敗而失敗——它會抵達 `ended`,而每個結果各自告訴你它的命運。復原模式是**以 `custom_id` 找出、修正原因、只重送失敗項。**
+
+```mermaid
+flowchart TD
+    A[提交 100 份文件的批次] --> B[批次結束<br/>95 成功,5 errored]
+    B --> C[串流結果,<br/>收集失敗的 custom_id]
+    C --> D{為何失敗?}
+    D -->|超出上下文限制| E[將長文件切塊,<br/>再重送那 5 份]
+    D -->|暫時性伺服器錯誤| F[原樣重送那 5 份]
+    E --> G[只含失敗項的<br/>新小批次]
+    F --> G
+    G --> H[將新結果<br/>與 95 個成功合併]
+```
+
+具體走一遍:
+
+1. 提交一批 100 份文件。
+2. 批次結束:95 份成功,5 份失敗(例如各自超出了上下文視窗)。
+3. 串流結果,收集那 5 個失敗的 `custom_id`(`result.type != "succeeded"` 的那些)。
+4. 為那 5 份改變策略——例如把每份長文件切成多塊,或加以裁剪。
+5. **只**把那 5 份當成新批次重送,再把它們的結果與原本的 95 個合併。
+
+**區分失敗類型——它們需要不同的修法。**`errored` 結果帶一個錯誤類型。**驗證/`invalid_request` 錯誤**(請求格式不對、文件超出上下文限制)若原樣重送會以相同方式再次失敗——你必須先*修正請求*。**暫時性伺服器錯誤**原樣重送是安全的。**`expired`** 結果代表批次在那個請求被處理前撞上了 24 小時上限——重送它(並考慮用較小的批次,讓視窗不再是變數)。盲目重試一個驗證失敗只會再燒掉一個批次;盲目*不*重試一個暫時性失敗則丟掉了好工作。
+
+**為何部分失敗是特性而非缺陷。**因為成功項無論失敗與否都會被計費並交付,你絕不會為了救回 5 份壞文件而重做 95 份好文件。`custom_id` 為鍵讓「把重試結果合併回來」這一步輕而易舉:那 5 個新結果在相同的鍵下塞回同一個字典。
+
+**陷阱——任何失敗就重跑整個批次。**這會為 95 個成功項再付一次錢,而這正是基於 `custom_id` 的選擇性重送所要防止的浪費。只重送失敗項。
+
+**陷阱——忽略錯誤子類型。**把每個失敗都當成「重試」會在驗證錯誤上無限迴圈;把每個失敗都當成「放棄」會丟失可復原的那些。讀取錯誤類型並據此分流。
+
+**考試角度。**範本情境是「提交 100、部分失敗」——預期答案是*以 `custom_id` 找出失敗、處理根本原因、只重送那些*,而支撐細節是*區分驗證失敗(先修)與暫時性失敗(原樣重試)*。這是把 Domain 5 的錯誤傳遞概念(結構化、逐項的失敗脈絡)套用到批次任務上。
+
+## 7.6 SLA 規劃:從期限往回推算
+
+因為批次視窗是「最長 24 小時」,任何真實期限都必須從它往回規劃。規則:**你的提交期限 = 你的結果期限 − 24 小時。**
+
+若你需要在 **30 小時**內取得結果,而批次最長可能耗時 **24** 小時:
+
+- 提交時間視窗:30 − 24 = **6 小時**。你最晚必須在從現在算起 6 小時內提交。
+- 等價地說,批次最晚必須在你需要其輸出的那一刻**至少 24 小時之前**提交。
+- 對於持續湧入的工作,不要累積成一個巨大的日終批次——按節奏切成較小的批次(例如每 4 小時一次),讓任何單一項目都不會等上完整的 24 小時視窗,也讓晚到的項目仍能趕上期限。
+
+**為何大小與節奏會與視窗交互作用。**一個 100,000 請求的批次和一個 500 請求的批次共用同一個 24 小時上限,但小的那個幾乎總是遠早完成。把龐大任務拆成數個較小批次,既能平滑你的進度可見性(各自獨立結束),也能在某個批次過期時縮小波及範圍——你重跑一個切片,而非一整天。
+
+**陷阱——以*典型*完成時間來規劃。**「它通常 20 分鐘」不是你能承諾的期限。SLA 計算永遠用 **24 小時上限**。為最壞情況、而非平均值,預留緩衝。
+
+**陷阱——對串流輸入用單一日終巨批。**若你收集一整天的文件、在晚上 11 點為早上 8 點的期限提交,你只有 9 小時緩衝,而且每份文件都等了一整天。頻繁的較小批次讓每個項目的計時很短,並讓你保持在 SLA 內。
+
+**考試角度。**計時題給你一個結果期限,問最晚的安全提交時間,或正確的批次節奏。對 24 小時計算:*最晚提交 = 期限 − 24h*;對持續輸入,*切成固定視窗*讓任何項目都不會吃滿上限。
+
+## 7.7 端到端案例研究:離線文件分類管線
+
+上述元件唯有組裝成真實任務才有意義。以下是一個完整、可容忍延遲的管線,正是 Domain 5 要你推理的形狀——一個對大型文件集的隔夜分類與增補執行,為成本與韌性而建。
+
+### 需求
+
+- 每晚,**分類並標記 50,000 張支援工單**(類別、優先級、產品區塊),並把標籤寫回資料倉儲。
+- 結果在**早上 8:00** 的分析刷新前需要——隔夜**無人等待**。
+- **成本要緊**:50,000 張工單是龐大且重複的任務;團隊希望推論帳單最小化。
+- 工作是**單輪且獨立的**——每張工單各自分類;沒有對話,也沒有工具迴圈。
+- 管線必須**有韌性**:少數過大或暫時性失敗的工單,不可拖垮整個執行或迫使完整重處理。
+
+### 架構
+
+```mermaid
+flowchart TD
+    Q[每晚工單佇列<br/>50,000 張工單] --> R[建立請求<br/>custom_id = 工單 id<br/>共享且快取的系統提示]
+    R --> S[batches.create]
+    S --> P[輪詢 processing_status<br/>每 60 秒直到 ended]
+    P --> G[串流結果<br/>每個結果以 custom_id 為鍵]
+    G --> OK[succeeded<br/>把標籤寫入倉儲]
+    G --> BAD[errored 或 expired<br/>收集失敗 id]
+    BAD --> FIX[切塊過大工單;<br/>只重送失敗項]
+    FIX --> S
+    OK --> DONE[倉儲就緒<br/>在 8 點刷新前]
+```
+
+這個任務是**提交一次然後輪詢**,而非保持開啟;模型用 **Haiku 4.5**,因為分類簡單又便宜;一段**共享、快取的系統提示**搭在每個請求上;而失敗是以 `custom_id`**重新對回並重送**,而非重跑整個批次。
+
+### 實作
+
+用每張工單一個穩定的 `custom_id`,以及一段標記了 prompt caching 的*共享*系統提示來建立批次——快取前綴只付一次,並對全部 50,000 個請求以約 0.1× 讀取,疊加在批次的 50% 折扣之上:
+
+```python
+import anthropic
+from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+from anthropic.types.messages.batch_create_params import Request
+
+client = anthropic.Anthropic()
+
+#-- Shared, cacheable instructions - identical across every request in the batch
+TAGGING_SYSTEM = [
+    {"type": "text", "text": "You are a support-ticket classifier. Return JSON only."},
+    {
+        "type": "text",
+        "text": TAXONOMY_AND_FEWSHOTS,            # large, stable, reused by all
+        "cache_control": {"type": "ephemeral"},   # cached prefix, ~0.1x on reads
+    },
+]
+
+requests = [
+    Request(
+        custom_id=f"ticket-{t['id']}",            # stable key, derived from the PK
+        params=MessageCreateParamsNonStreaming(
+            model="claude-haiku-4-5",             # cheap + fast: right tier for classification
+            max_tokens=256,                        # tags are short; small cap controls cost
+            system=TAGGING_SYSTEM,
+            messages=[{"role": "user", "content": t["body"]}],
+        ),
+    )
+    for t in nightly_tickets                       # up to 100,000 per batch
+]
+
+batch = client.messages.batches.create(requests=requests)
+```
+
+以平緩的間隔輪詢,然後串流結果,把成功與失敗分開——完全以 `custom_id` 為鍵:
+
+```python
+import time
+
+while True:
+    batch = client.messages.batches.retrieve(batch.id)
+    if batch.processing_status == "ended":        # ended != all-succeeded
+        break
+    time.sleep(60)
+
+tags, failed_ids = {}, []
+for result in client.messages.batches.results(batch.id):
+    if result.result.type == "succeeded":
+        msg = result.result.message
+        tags[result.custom_id] = next((b.text for b in msg.content if b.type == "text"), "")
+    else:
+        failed_ids.append(result.custom_id)       # errored / expired / canceled
+
+write_tags_to_warehouse(tags)                      # 49,990 good rows land immediately
+```
+
+只重送失敗項,並在修正其原因之後——絕不重送整個批次:
+
+```python
+if failed_ids:
+    retry_requests = [
+        Request(
+            custom_id=fid,
+            params=MessageCreateParamsNonStreaming(
+                model="claude-haiku-4-5",
+                max_tokens=256,
+                system=TAGGING_SYSTEM,
+                messages=[{"role": "user", "content": chunk_if_oversized(ticket_body(fid))}],
+            ),
+        )
+        for fid in failed_ids
+    ]
+    retry_batch = client.messages.batches.create(requests=retry_requests)
+    # poll + merge retry_batch results back into `tags` under the same custom_ids
+```
+
+### 執行軌跡
+
+```mermaid
+sequenceDiagram
+    actor Cron as 每晚任務
+    participant API as Batches API
+    participant DW as 資料倉儲
+    Cron->>API: batches.create(50,000 requests)
+    API-->>Cron: batch id, processing_status in_progress
+    loop 每 60 秒
+        Cron->>API: batches.retrieve(id)
+        API-->>Cron: in_progress (succeeded 41,200 / processing 8,800)
+    end
+    API-->>Cron: processing_status ended (49,990 ok / 10 errored)
+    Cron->>API: batches.results(id)
+    API-->>Cron: results keyed by custom_id, unordered
+    Cron->>DW: 寫入 49,990 個標籤
+    Cron->>API: batches.create(10 failures, chunked)
+    API-->>Cron: ended, 10 ok
+    Cron->>DW: 在 8 點前合併最後 10 個標籤
+```
+
+注意這個執行*從不*阻擋在連線上,*從不*為那 49,990 個成功項*重複付費*,並提早數小時清掉期限——24 小時上限從未接近,因為這個任務在規劃時就以緩衝來決定大小與排程。
+
+### 驗證
+
+- **成本檢查:**確認批次的明細以同步的約 50% 計費,且大多數請求的 `usage.cache_read_input_tokens` 非零——證明共享系統提示有被快取。若快取讀取為零,代表某個逐請求的差異(時間戳、未排序的欄位)正在使前綴失效。
+- **關聯檢查:**斷言每一筆倉儲列都是以 `custom_id`、而非結果位置為鍵——在測試中把結果串流重新排序,確認標籤仍落在正確的工單上。
+- **韌性檢查:**注入一張過大的工單;確認批次仍抵達 `ended`、那張壞工單以失敗 `custom_id` 浮現,且只有它(而非其餘 49,999 張)被重送。
+- **SLA 檢查:**確認提交發生在早上 8 點相依事件的 ≥ 24 小時之前,或節奏讓每個項目都保持在視窗內。
+
+### 常見陷阱
+
+- 為了「簡單」把這個放上同步 API——為一個無人等待的任務付雙倍價、還對速率限制施壓(§7.2)。
+- 用陣列索引、而非 `custom_id` 把結果對回工單——只要有一個重排或失敗,就默默把工單貼錯標籤(§7.3)。
+- 10 個失敗就重跑全部 50,000,而非以 `custom_id` 重送那 10 個(§7.5)。
+- 不先檢查 `result.type` 就讀取 `result.message`——在 errored 的項目上會丟出例外(§7.4)。
+- 以*典型*完成時間、而非 24 小時上限來規劃早上 8 點的期限(§7.6)。
+
+## 7.8 考試重點 — 關鍵整理
+
+| 概念 | 考試考什麼 |
+|---|---|
+| 什麼是批次 | 非同步、**便宜 50%**、最長 **24h**(無延遲 SLA)、一個請求 → 一個回應、結果保留 **29 天**(§7.1)。 |
+| 批次 vs 同步 | 以**誰在等待**與**是不是迴圈**判斷:即時/互動/代理 → 同步;離線 + 獨立 + 大量 → 批次(§7.2)。 |
+| `custom_id` | 結果**亂序**回傳;以 `custom_id`、絕不以位置關聯——也能做選擇性重試與冪等(§7.3)。 |
+| 生命週期 | **create → 輪詢 `processing_status` 直到 `ended` → 串流 `results`**;`ended` ≠ 全部成功;依 `result.type` 分支(§7.4)。 |
+| 失敗處理 | 以 `custom_id` 找出失敗,**修正原因、只重送那些**;區分驗證(先修)與暫時性(原樣重試)(§7.5)。 |
+| SLA 規劃 | 最晚提交 = **期限 − 24h**;把持續輸入切成固定視窗,讓任何項目都不吃滿上限(§7.6)。 |
+
+> **對應 Domain 5(15%)。**如果你能建構並捍衛上面的每晚分類管線——批次與即時的取捨判斷、submit/poll/retrieve 生命週期、`custom_id` 關聯、選擇性失敗復原,以及 24 小時 SLA 計算——你就掌握了這個領域所考的成本與可靠性核心,外加一個平台事實:Batches 僅限第一方(以及 Claude Platform on AWS),不在 Amazon Bedrock 或 Vertex AI 上。
 
 # 第 8 章:任務分解策略
 
+> 文件:[Subagents](https://platform.claude.com/docs/en/agent-sdk/subagents) | [Sessions](https://platform.claude.com/docs/en/agent-sdk/sessions)
+
+分解,是把*一個*複雜請求拆成*恰當*子任務集合的能力——並且懂得何時該維持為單一任務。它是第 3 章代理機制的編排對應面:第 3 章建構了協調者與 `Task` 工具;本章則決定協調者該把*什麼*交給那些子代理,以及*依什麼順序*交付。本章對應 **Domain 1 — 代理架構與編排(佔考試 27%)**,具體是目標 **1.6 複雜工作流程的任務分解策略**,並倚賴 1.2–1.3 的多代理與上下文傳遞技能。
+
+考試把分解當成一連串*判斷取捨*來考,而非單一演算法。讀完本章,你應能一眼選對策略:
+
+- **固定管線/提示鏈接**(§8.1)— 可預測、事先已知的步驟。
+- **動態自適應分解**(§8.2)— 子任務由你所發現的事物產生。
+- **循序 vs 平行**(§8.3)— 何時子任務可並行,何時相依關係禁止並行。
+- **多遍審查(先扇出再整合)**(§8.4)— 把大型產物逐單元拆開,再做跨單元的一遍。
+- **何時*不要*分解**(§8.5)— 考試最愛探問的過度分解失效模式。
+
+§8.6 以一個端到端的**多代理研究系統**把全章串起來,§8.7 則濃縮考試重點。
+
 ## 8.1 固定管線(提示鏈接)
 
-每個步驟都事先定義:
+固定管線(又稱*提示鏈接*)事先把步驟順序寫死。每一階段的輸出成為下一階段的輸入:
 
+```mermaid
+flowchart TD
+    Doc[原始文件] --> Meta[擷取中繼資料]
+    Meta --> Data[擷取結構化資料]
+    Data --> Val{驗證通過?}
+    Val -->|否| Fix[修復或拒絕]
+    Val -->|是| Enrich[以參考資料加值擴充]
+    Enrich --> Out[最終結構化輸出]
+    Fix --> Out
 ```
-文件 -> 中繼資料擷取 -> 資料擷取 -> 驗證 -> 加值擴充 -> 最終輸出
-```
+
+每個方塊都是一次獨立、聚焦的模型呼叫(或一個確定性步驟)。因為結構永不改變,你可以隔離測試每一階段、快取中間結果,並事先推算成本。
+
+**為何要拆成鏈,而不在單一提示裡一次做完?** 每個步驟都拿到模型的全副注意力與一條狹窄指令,因此每個子步驟的準確度上升。你也在每階段之後得到天然的檢查點——驗證可以在壞輸出*汙染*加值擴充之前就把它擋下。
 
 **何時使用:**
-- 任務結構可預測(審查總是遵循相同範本)
-- 所有步驟事先已知
-- 你需要穩定性與可重現性
+- 任務結構可預測(例如發票或審查解析總是遵循相同範本)。
+- 所有步驟事先已知,且順序永不取決於資料。
+- 你需要穩定性、可重現性與逐階段的可觀測性。
+
+**陷阱:**
+- **現實一變就脆。** 若某些文件需要額外步驟,*固定*管線無法臨時加一步——這就是該轉向 §8.2 的訊號。
+- **錯誤傳播。** 沒有驗證閘,一筆壞擷取會悄悄往下游流。務必在相互餵食的階段之間放一道檢查。
+- **對瑣碎工作過度鏈接。** 三個各只做一件小事的階段,平白增加三段往返延遲;把它們合併(見 §8.5)。
+
+**考試角度:** 「可預測、每次都同一範本」→ 固定管線/提示鏈接。誘答選項通常會是動態分解(錯,因為範圍事先完全已知)。
 
 ## 8.2 動態自適應分解
 
-子任務會根據中間結果產生:
+在動態計畫裡,子任務是**由中間結果產生**的——你無法在開始前列舉它們,因為下一步取決於上一步發現了什麼:
 
+```mermaid
+flowchart TD
+    Goal[目標:為遺留程式庫加上測試] --> Map[盤點結構<br/>Glob 與 Grep]
+    Map --> Found[發現:3 個模組無測試,<br/>2 個僅部分覆蓋]
+    Found --> Prio[排定優先順序:先做付款模組<br/>風險最高]
+    Prio --> Work[開始撰寫測試]
+    Work --> Disc{發現隱藏的<br/>相依性?}
+    Disc -->|是| Adapt[插入新子任務:<br/>為外部 API 加 mock]
+    Disc -->|否| Next[繼續下一個模組]
+    Adapt --> Next
 ```
-1. "Add tests for a legacy codebase"
-2. -> 首先:盤點結構(Glob、Grep)
-3. -> 發現:3 個模組沒有測試,2 個僅有部分覆蓋
-4. -> 排定優先順序:從付款模組開始(高風險)
-5. -> 進行中:發現對某個外部 API 的相依性
-6. -> 調整:在撰寫測試前先為該外部 API 加入 mock
-```
+
+計畫是個活物:代理先盤點地形,形成一個排序後的計畫,然後在發現開始前無從得知的事物時(此處是一個外部 API 相依性,迫使新增「加 mock」子任務)**修訂該計畫**。
+
+**為何這更難——也更強大。** 固定管線假設你對步驟全知。開放式工作並不給你這份全知:你必須讓代理在證據到來時擴展計畫。這裡的紀律是*先盤點再投入*——先探索結構,再依風險排序,而不是一頭栽進看到的第一個檔案。
 
 **何時使用:**
-- 開放式的調查型任務
-- 當完整範圍在一開始未知時
-- 當每一步都取決於前一步的結果時
+- 開放式的調查型任務(除錯、稽核、「找出 X 為何很慢」)。
+- 開始時完整範圍未知。
+- 每一步的*輸出*決定下一步是否*存在*。
 
-## 8.3 多遍程式碼審查
+**陷阱:**
+- **沒有退出條件。** 一個不斷生成子任務的計畫永遠不會結束。用目標與品質標準錨定它(「每個模組都有 ≥1 個測試就停」)。
+- **過於急切地調整。** 每遇小驚奇就重新規劃會反覆抖動。當一項發現*改變了工作的結構*時才重新規劃,而非為了表面細節。
+- **跨步驟掉了線索。** 因為較後的子任務相依於較早的發現,那些發現必須明確地往前帶(第 3 章 §3.4 的上下文傳遞規則)。
 
-對於包含 10 個以上檔案的 pull request:
+**考試角度:** 「範圍事先未知/每步取決於上一步」→ 動態自適應分解。留意「先盤點結構,再建立排序後的計畫」——這個措辭就是線索。
 
+## 8.3 循序 vs 平行分解
+
+有了子任務後,下一個決策是*順序*:它們能並行,還是相依關係迫使它們循序?這正是分解與第 3 章 §3.4 平行生成能力(單一協調者回合裡的多個 `Task` 呼叫會同時執行)交會之處。
+
+```mermaid
+flowchart TD
+    Start[已識別子任務] --> Q{任務 B 是否需要<br/>任務 A 的輸出?}
+    Q -->|否,彼此獨立| Par[平行生成<br/>單一回合多個 Task 呼叫]
+    Q -->|是,B 相依於 A| Seq[循序執行<br/>把 A 結果傳入 B]
+    Par --> Agg[彙整結果]
+    Seq --> Agg
+    Agg --> Done[驗證後的結果]
 ```
-Pass 1(逐檔):分析 auth.ts -> 列出局部問題
-Pass 1(逐檔):分析 database.ts -> 列出局部問題
-Pass 1(逐檔):分析 routes.ts -> 列出局部問題
-...
-Pass 2(整合):分析檔案之間的關聯
-  -> 跨檔問題:型別不一致、循環相依
+
+**規則由相依性決定,而非偏好。** 獨立的子任務(搜尋主題 X、搜尋主題 Y、搜尋主題 Z)應平行扇出——更快,且結果互不影響。相依的子任務(擷取 schema,*然後*據以驗證資料)必須循序,因為同時執行會讓驗證器拿不到任何輸入。
+
+**為何平行並非免費。** 平行子代理各自消耗 token 與一個隔離的上下文視窗;三個就夠卻生成十個,既浪費預算,也讓彙整更吵雜。為了*獨立覆蓋*才平行化,不要當成預設值。
+
+**常見的相依形態:**
+- **扇出/扇入(map-reduce):** N 個獨立子任務平行,再一個彙整步驟(這就是 §8.4 的審查模式與 §8.6 的研究模式)。
+- **線性鏈:** A → B → C,各自消耗前一個結果(這就是 §8.1)。
+- **菱形:** A → {B、C 平行} → D——在共用的設定步驟之後分岔,再重新合流。
+
+**陷阱:**
+- **把真正的相依拿去平行化**,會產生一個輸入缺漏而執行的子代理,進而失敗或產生幻覺。
+- **把獨立工作拿去循序**,則白白損失效能——三段串列搜尋,其實一個平行回合就夠。
+- **忘了彙整必須等待。** 扇入步驟相依於*所有*扇出子任務;協調者必須在綜整前收齊每一個結果。
+
+**考試角度:** 題目常把相依性藏在敘述裡。問:「B 需要 A 的輸出嗎?」是 → 循序;否 → 平行。「分配研究覆蓋以減少重複」是平行扇出的提示。
+
+## 8.4 多遍審查(先扇出,再整合)
+
+大型產物——一個動到 14 個檔案的 pull request——是扇出再整合的經典案例。第一遍隔離分析每個單元(可平行化);第二遍跨單元推理,*無法*平行化,因為它需要每一份第一遍的結果:
+
+```mermaid
+flowchart TD
+    PR[Pull request:14 個檔案] --> P1a[Pass 1:分析 auth.ts<br/>局部問題]
+    PR --> P1b[Pass 1:分析 database.ts<br/>局部問題]
+    PR --> P1c[Pass 1:分析 routes.ts<br/>局部問題]
+    P1a --> P2[Pass 2:整合遍<br/>跨檔推理]
+    P1b --> P2
+    P1c --> P2
+    P2 --> Cross[跨檔問題:<br/>型別不一致、循環相依]
 ```
 
 **為什麼一次掃過 14 個檔案不好:**
-- 注意力稀釋:對某些檔案做了深入分析,對其他檔案則流於表面
-- 註解不一致:某個模式在一個檔案被標記,卻在另一個檔案被放行
-- 漏掉錯誤:明顯的錯誤因認知過載而被略過
+- **注意力稀釋:** 被迫一次握住全部 14 個檔案時,模型對某些檔案分析得深、對其他則流於淺。
+- **註解不一致:** 某個模式在一個檔案被標記,卻在另一個檔案被放行,因為模型從未在同一套準則下並排看到它們。
+- **漏掉錯誤:** 明顯的錯誤因認知過載而被略過。
 
----
+**為何兩遍能修好它。** 第一遍讓每個檔案在同一套準則下拿到模型的全副注意力(一致性)。第二遍存在的唯一目的,是抓出逐檔分析在結構上抓不到的東西:跨模組的型別不一致、循環相依、某個函式在一個檔案被刪卻仍在另一個檔案被呼叫。整合遍是個相依(循序)步驟——它消耗所有第一遍的輸出,因此它就是 §8.3 的扇入。
+
+**陷阱:**
+- **跳過第二遍。** 逐檔審查*永遠*找不到跨檔錯誤;沒有整合,你就會把循環相依出貨。
+- **讓第一遍跨檔推理。** 那會重新引入注意力稀釋;讓每個第一遍子代理只聚焦於一個檔案。
+- **無上限地扇出。** 一次 200 個檔案本身就是過載;分批處理,再彙整各批摘要。
+
+**考試角度:** 「10 個以上檔案的 PR」、「既深入又一致的審查」→ 逐檔遍加上一個*獨立的*跨檔整合遍。錯誤答案是「在單一提示裡審查所有檔案」。
+
+## 8.5 何時不要分解
+
+分解有其代價:每個子代理都是一個隔離的上下文視窗,必須明確簡報(第 3 章 §3.4),外加一段往返與一個彙整步驟。**過度分解**——拆了本不需拆的工作——是考試刻意要考的失效模式。
+
+```mermaid
+flowchart TD
+    Task[傳入的任務] --> Q1{有多個獨立面向<br/>或屬大型產物?}
+    Q1 -->|否| Single[用單一聚焦代理完成<br/>不分解]
+    Q1 -->|是| Q2{子任務需要各自的<br/>上下文或工具?}
+    Q2 -->|否| Single
+    Q2 -->|是| Decomp[分解為子代理]
+```
+
+**不要分解,當:**
+- 任務**小或單一面向**——單檔審查或單次查詢。此處的協調者 + 子代理只增加延遲與簡報負擔,毫無收益。
+- **子任務緊密耦合**,且不斷需要彼此的中間狀態。拆開它們會逼你透過協調者來回搬運上下文,比起放在同一個上下文裡,既較慢也較有耗損。
+- **額外開銷超過效益**——三個瑣碎步驟,單一提示就能準確處理。
+
+**為何考試在意這點。** 目標 1.2 明確點名「**協調者過度狹窄分解的風險**」。把一個內聚任務碎成微型子任務的協調者,會失去讓任務變得可解的共享上下文,而彙整反倒成了難題。這裡考的技能是節制:為了*獨立覆蓋*或*注意力隔離*才分解,而非條件反射地分解。
+
+**陷阱:**
+- **為了顯得高明而分解。** 正確答案有時就是「一個代理、一條提示」。
+- **切碎共享上下文。** 若每個子任務都需要同一份大型文件,你就得付出代價重新簡報每個子代理——不如把它留在同一個上下文裡。
+
+**考試角度:** 當題目描述一個*小或緊密耦合*的任務,卻提供一個繁複的多代理拆分時,那個繁複選項通常就是陷阱。優先選擇能滿足需求的最簡設計。
+
+## 8.6 端到端案例研究:多代理研究系統
+
+上述策略唯有在真實限制下組合起來才有意義。以下是一個完整的研究助理——正是考試的 **Multi-Agent Research System(多代理研究系統)** 情境要你能推理的系統。它演練了本章*每一個*決策:固定 vs 動態、平行 vs 循序、扇出/扇入,以及 §8.5 的節制。
+
+### 需求
+
+- 用一份附引用、已綜整的報告,回答一個寬廣的研究問題(例如:*「比較三家託管 Kubernetes 服務的安全態勢」*)。
+- 在子主題之間**分配覆蓋**,讓兩個子代理永不研究同一件事(減少重複——目標 1.2)。
+- 獨立的子主題應**平行**研究;綜整必須等待**全部**子主題(一個相依性)。
+- 若綜整揭露一個**缺口**(某子主題證據稀薄或互相矛盾),協調者必須**自適應地**生成一個額外的針對性搜尋——而非盲目重跑全部。
+- **不要**過度分解:單一、簡單的事實問題,應直接回答,不動用整套機器。
+
+### 架構
+
+```mermaid
+flowchart TD
+    User([使用者問題]) --> Coord[協調者]
+    Coord --> Plan{單一事實的<br/>簡單問題?}
+    Plan -->|是| Direct[直接回答<br/>不分解]
+    Plan -->|否| Split[分解為<br/>獨立子主題]
+    Split --> R1[研究子代理 A<br/>子主題 1]
+    Split --> R2[研究子代理 B<br/>子主題 2]
+    Split --> R3[研究子代理 C<br/>子主題 3]
+    R1 -. 僅回傳發現 .-> Synth[綜整步驟<br/>扇入:需要所有結果]
+    R2 -. 僅回傳發現 .-> Synth
+    R3 -. 僅回傳發現 .-> Synth
+    Synth --> Gap{發現覆蓋缺口<br/>或衝突?}
+    Gap -->|是| Extra[自適應:生成一個<br/>針對性的後續搜尋]
+    Gap -->|否| Report[附引用的最終報告]
+    Extra --> Synth
+```
+
+協調者先套用 §8.5(別分解瑣碎問題)。對真正的問題,它把獨立子主題**平行扇出**(§8.3),再跑一個**相依的**綜整(§8.4 扇入),只有在綜整暴露缺口時才**自適應**(§8.2)——一個有界的精修迴圈,而非開放式的。
+
+### 實作
+
+定義協調者與一個最小權限的研究子代理(沿用第 3 章的機制):
+
+```python
+coordinator = AgentDefinition(
+    name="research_coordinator",
+    description="Splits a research question into non-overlapping subtopics, "
+                "runs them in parallel, synthesizes, and fills gaps.",
+    system_prompt=(
+        "Decompose the question into independent subtopics that do not overlap. "
+        "If the question is a single simple fact, answer it directly without subagents. "
+        "Spawn one Task per subtopic in a single turn so they run in parallel. "
+        "After synthesis, if a subtopic has thin or conflicting evidence, spawn ONE "
+        "targeted follow-up search; otherwise produce the cited report. "
+        "Judge by coverage and citation quality, not by number of subagents."
+    ),
+    allowed_tools=["Task"],   # 協調者只負責編排
+)
+
+researcher = AgentDefinition(
+    name="researcher",
+    description="Researches exactly one subtopic and returns cited findings.",
+    system_prompt="Research the assigned subtopic only. Return findings with sources.",
+    allowed_tools=["web_search", "fetch_url"],   # 最小權限:沒有 Task,無法再分解
+)
+```
+
+在**單一協調者回合**裡扇出獨立子主題,讓它們並行執行——並把完整上下文明確傳給每個子代理,因為子代理什麼都不繼承(第 3 章 §3.4):
+
+```python
+# 一次協調者回合送出三個平行 Task,每個都完整簡報:
+Task(researcher, prompt="Subtopic: EKS security posture.\n"
+                        "Cover: IAM integration, network policy, CVE response.\n"
+                        "Return: bullet findings, each with a source URL.")
+Task(researcher, prompt="Subtopic: GKE security posture.\n...")
+Task(researcher, prompt="Subtopic: AKS security posture.\n...")
+# 三者同時執行;彼此看不到對方的上下文。
+```
+
+綜整 + 缺口檢查是個**循序、相依**的步驟——它必須先收齊*每一個*研究者結果:
+
+```python
+def synthesize(findings: list) -> Report:
+    report = merge_and_cite(findings)
+    gap = find_thin_or_conflicting_subtopic(report)   # 有界的自適應觸發
+    if gap:
+        more = Task(researcher, prompt=f"Targeted follow-up on: {gap}. ...")
+        report = merge_and_cite(findings + [more])
+    return report
+```
+
+### 執行軌跡
+
+```mermaid
+sequenceDiagram
+    actor U as 使用者
+    participant Co as 協調者
+    participant A as 研究者 A (EKS)
+    participant B as 研究者 B (GKE)
+    participant C as 研究者 C (AKS)
+    U->>Co: 比較 EKS、GKE、AKS 的安全性
+    Co->>Co: 不是單一事實,分解為 3 個子主題
+    par 平行扇出
+        Co->>A: Task(子主題:EKS,完整簡報)
+        Co->>B: Task(子主題:GKE,完整簡報)
+        Co->>C: Task(子主題:AKS,完整簡報)
+    end
+    A-->>Co: EKS 發現 + 來源
+    B-->>Co: GKE 發現 + 來源
+    C-->>Co: AKS 發現 + 來源
+    Co->>Co: 綜整 - AKS 證據稀薄
+    Co->>C: Task(針對性後續:AKS 網路政策)
+    C-->>Co: 額外的 AKS 發現
+    Co-->>U: 附引用的比較報告
+```
+
+請注意三個章節概念同時出現:**平行 `par` 區塊**是 §8.3 的扇出;**綜整等待全部三個**結果(扇入相依);而單一的**針對性後續**是有界的 §8.2 自適應——不是盲目重跑所有子主題。
+
+### 驗證
+
+- **無重複測試:** 檢視三個 Task 提示,斷言其子主題互不相交——證明協調者分配了覆蓋(目標 1.2)而非重疊。
+- **平行性測試:** 斷言三個研究 Task 都在*單一*協調者回合送出(並行),而非三個串列回合。
+- **相依性測試:** 斷言綜整只在三個結果全部回傳後才執行——拿掉其中一個,綜整就必須阻塞,證明扇入相依。
+- **節制測試:** 餵入一個單一簡單事實(「EKS 最新版本是什麼?」),斷言協調者直接回答、**零**子代理(§8.5)。
+- **有界自適應測試:** 模擬一個稀薄子主題,斷言剛好觸發**一個**後續 Task——而非完整重跑。
+
+### 常見陷阱
+
+- **子主題重疊**,讓兩個子代理研究同一件事——浪費 token,且發現互相矛盾(違反「減少重複」)。
+- **串列搜尋**,其實一個平行回合就夠——白白損失延遲(§8.3)。
+- **在所有結果回傳前就綜整**——報告漏掉尚未完成的那個子代理(扇入損壞)。
+- **為單一缺口重跑每個子主題**,而非一個針對性後續——無界、昂貴的自適應(§8.2)。
+- **把瑣碎問題丟進整套管線分解**——過度分解(§8.5)。
+- **忘了簡報每個子代理**——隔離的上下文意味著未簡報的研究者產不出任何有用結果(第 3 章 §3.4)。
+
+## 8.7 考試重點 — 關鍵整理
+
+| 概念 | 考試考什麼 |
+|---|---|
+| 固定管線(提示鏈接) | 可預測、同範本、所有步驟事先已知的工作 → 把固定階段鏈接起來並加上驗證閘(§8.1)。 |
+| 動態自適應分解 | 開放式/範圍未知、每步取決於上一步 → 先盤點結構,再建立並修訂排序後的計畫(§8.2)。 |
+| 循序 vs 平行 | 依相依性決定:「B 需要 A 的輸出嗎?」否 → 平行扇出;是 → 循序(§8.3)。 |
+| 扇出/扇入 | 獨立子任務平行,再一個相依於全部結果的彙整(§8.3、§8.4)。 |
+| 多遍審查 | 10 個以上檔案的 PR → 逐檔遍求一致,加上一個*獨立的*跨檔整合遍以抓循環相依/型別不符(§8.4)。 |
+| 何時不要分解 | 小、單一面向或緊密耦合的工作 → 單一聚焦代理;過度分解會失去共享上下文(§8.5)。 |
+| 分配覆蓋 | 協調者必須切分子主題以減少重複;子代理不繼承任何上下文,必須簡報(§8.6)。 |
+
+> **對應 Domain 1(27%),目標 1.6。** 如果你能選對固定 vs 動態、平行 vs 循序,以及——最關鍵的——*何時不要分解*,並能捍衛上面的研究系統,你就掌握了權重最高考試領域中,分解的那一半。
 
 # 第 9 章:升級與人在迴路(Human-in-the-Loop)
 
+> 文件:[Agent SDK Hooks](https://platform.claude.com/docs/en/agent-sdk/hooks) | [Subagents](https://platform.claude.com/docs/en/agent-sdk/subagents) | [Sessions](https://platform.claude.com/docs/en/agent-sdk/sessions)
+
+自主代理唯有在知道自身能力邊界、並能在到達邊界時乾淨地交接時,才是安全的。升級——暫停自主、把決策交給真人——正是讓代理在情況超出其應獨自裁量範圍時,仍守在政策之內的控制機制。本章主要對應 **Domain 1 — 代理架構與編排(佔考試 27%)**,具體是 *1.4 帶強制執行與交接模式的多步驟工作流*;同時也對應 **Domain 5 — 上下文管理與可靠性(佔 15%)**,具體是 *5.2 升級模式* 與 *5.5 人工監督與信心校準*。考試在此考的是判斷力,而非冷知識:它會給你一個臨界案例,問代理應該自行解決、追問、還是升級——以及升級是「如何」被強制執行的。
+
+讀完你應能掌握五件事,並把它們組裝成可上線的人在迴路系統:
+
+- **升級觸發條件**(§9.1)— 哪些訊號可靠地表示「停下並交接」,以及哪些訊號誘人卻錯誤。
+- **升級模式**(§9.2)— 立即升級 vs. 先嘗試 vs. 細緻處理(同理 → 解決 → 升級)。
+- **結構化交接**(§9.3)— 真人需要一份自成一體的封包,因為他們看不到逐字記錄。
+- **信心校準與人工監督**(§9.4)— 把低信心的工作路由到審查,並稽核其餘的高信心部分。
+- **確定性強制執行**(§9.5)— 用 hook(而非僥倖)讓升級真的發生。
+
+§9.6 接著從頭到尾建構一個完整的**高金額付款核准代理**——觸發條件、由 hook 強制執行的核准關卡、結構化交接,以及真人決定後的恢復——§9.7 則濃縮考試重點。
+
 ## 9.1 何時升級至真人
 
-**升級觸發條件(明確規則):**
+升級是一個路由決策:這通電話該由「誰」來下判斷,代理還是人?考試獎勵的能力,是能從一段簡短情境中辨識出觸發條件,並**立即且正確地**採取行動,而不過度調查或猜測。
 
-| 情境 | 動作 |
-|---|---|
-| 客戶明確要求「幫我找主管」 | 立即升級;不要嘗試自行解決 |
-| 政策未涵蓋該請求 | 升級(例如政策未規範時的競品比價折扣) |
-| 代理無法取得進展 | 在嘗試合理次數後升級 |
-| 超過門檻的金融操作 | 升級(最好透過 hook 強制執行,而非靠提示) |
-| 搜尋客戶時出現多筆相符結果 | 要求提供額外的識別資訊;不要猜測 |
+**升級觸發條件(明確、可靠的規則):**
+
+| 情境 | 動作 | 為何這是正確的判斷 |
+|---|---|---|
+| 客戶明確要求「幫我找主管」 | 立即升級;不要嘗試自行解決 | 明確的找真人請求是硬訊號。繼續「幫忙」會凌駕客戶已表明的選擇,並侵蝕信任。 |
+| 政策未涵蓋該請求 | 升級(例如政策未規範時的競品比價折扣) | 代理無權自行發明政策。政策沉默/模糊時,該決策必須由真人承擔。 |
+| 代理無法取得進展 | 在嘗試*合理*次數後升級 | 無限迴圈會燒掉 token 並惹惱使用者;有上限的若干次實際嘗試後再交接,才是契約。 |
+| 超過門檻的金融/不可逆操作 | 升級(用 **hook** 強制執行,而非靠提示) | 金錢與不可逆動作需要的是*保證*,而非 >90% 的傾向。見 §9.5。 |
+| 搜尋客戶時出現多筆相符結果 | 要求提供額外的識別資訊;不要猜測 | 對錯誤的紀錄採取行動,是資料完整性與隱私事故。先釐清身分。 |
+
+**陷阱——過度熱心的解題者。** 最常見的錯誤答案,會把明確的「我要找主管」當成需要*說服客戶打消念頭*的事。在考試裡,明確的找真人請求是**立即**升級,不再進一步調查。(見 *5.2 技能*:「對明確的找真人請求立即執行,不另作調查。」)
 
 **哪些不是可靠的觸發條件:**
 
-| 不可靠的方法 | 為何會失效 |
-|---|---|
-| 情緒分析 | 客戶情緒與案件複雜度並不相關 |
-| 模型自評信心(1–10) | 模型可能自信地犯錯;校準很差 |
-| 自動分類器 | 過度設計;可能需要你沒有的訓練資料 |
+| 不可靠的方法 | 為何會失效 | 改用什麼做法 |
+|---|---|---|
+| 情緒分析 | 客戶情緒與案件複雜度並不相關;冷靜的客戶可能有超出政策的案件,而憤怒的客戶可能只是小問題 | 觸發點放在*事實*(明確請求、政策缺口、門檻),而非語氣 |
+| 模型自評信心(1–10) | 模型可能**自信地犯錯**;口頭信心校準很差,且容易被措辭操弄 | 使用對照標註資料、經過校準的*實測*欄位層級分數(§9.4),而非模型自己編的數字 |
+| (外掛的)自動分類器 | 過度設計;需要你未必有的訓練資料,還多了一種失效模式 | 先用明確規則 + few-shot 範例;只有在規則確實無法表達該政策時,才加入機器學習 |
+
+> **考試角度。** 一個常見的干擾選項是「用情緒分析決定何時升級」。它之所以錯,有一個*原則性*理由——情緒不等於複雜度。把升級錨定在具體、可檢核的條件上。
 
 ## 9.2 升級模式
 
-**立即升級:**
+知道*該不該*升級只是答案的一半;考試也會考互動的*形態*。共有三種模式,選錯就是會被扣分的錯誤。
+
+```mermaid
+flowchart TD
+    In[客戶訊息] --> Q1{明確要求<br/>找真人?}
+    Q1 -->|是| Esc[立即升級<br/>不再嘗試]
+    Q1 -->|否| Q2{在代理範圍<br/>與政策內?}
+    Q2 -->|否, 政策缺口| Esc
+    Q2 -->|是| Try[嘗試解決<br/>提供具體選項]
+    Try --> Q3{客戶滿意<br/>或重申找真人?}
+    Q3 -->|重申找真人| Esc
+    Q3 -->|滿意| Done[解決並結案]
+```
+
+**立即升級**——明確請求會短路一切:
 
 ```
 Customer: "I want to speak to a manager"
@@ -2198,7 +3584,7 @@ Agent: [立即呼叫 escalate_to_human]
 NOT: "I can help with your issue, let me..."
 ```
 
-**嘗試解決後再升級:**
+**嘗試解決後再升級**——請求在範圍內,所以先試,若方案未被接受再交接:
 
 ```
 Customer: "My refrigerator broke two days after purchase"
@@ -2206,7 +3592,7 @@ Agent: [查看訂單,提供保固更換]
 若客戶不滿意 -> 升級
 ```
 
-**細緻的升級(同理 → 解決 → 客戶重申時升級):**
+**細緻的升級(同理 → 解決 → 客戶重申時升級)**——這是最常被考的模式,因為天真的答案會太早升級:
 
 ```
 Customer: "This is outrageous, I'm very unhappy with the quality!"
@@ -2216,9 +3602,9 @@ Customer: "No, I want to talk to someone!"
 Agent: [客戶再次堅持 -> 立即升級]
 ```
 
-關鍵原則:先同理對方的情緒,接著提出具體的解決方案,只有在客戶重申想找真人時才升級。不要在客戶第一次表達不滿時就升級(那與要求找主管並不相同)。
+**關鍵原則:** 先同理對方的情緒,接著提出*具體*的解決方案,只有在客戶重申想找真人時才升級。不要在客戶第一次表達不滿時就升級——發洩與要求找主管並不相同。太早升級會丟掉首次接觸解決率(客服情境的目標是 80%+);太晚升級——在客戶已明確要求找真人之後——則凌駕了客戶。
 
-**政策缺口的升級:**
+**政策缺口的升級**——代理絕不可即興行使它沒有的權限:
 
 ```
 Customer: "Competitor X has this item 30% cheaper—give me a discount"
@@ -2226,7 +3612,11 @@ Policy: 僅涵蓋自家網站上的價格調整
 Agent: [升級 — 政策未涵蓋競品比價]
 ```
 
+> **陷阱。** 把政策*缺口*當成政策*拒絕*。代理不該說「不,我們不做這個」(它無權決定),**也不該**自行發明折扣(超出政策)。正確做法是把這個例外升級給能夠承擔它的人。
+
 ## 9.3 結構化交接協定
+
+接手升級的真人**看不到對話逐字記錄**——他們只看得到代理交給他們的內容。因此交接封包必須*完整、自成一體且結構化*。這與把上下文傳給子代理是同一種紀律(第 3 章,§3.4):凡是你沒有明確納入的,接收方都不會繼承。
 
 升級時,代理應將結構化摘要傳遞給真人:
 
@@ -2250,22 +3640,235 @@ Agent: [升級 — 政策未涵蓋競品比價]
 
 真人操作員無法存取完整的對話逐字記錄——他們只看得到這份摘要。因此它必須完整且自成一體。
 
+**怎樣才算好的交接(以及考試會檢查什麼):**
+
+- **識別碼**(`customer_id`、`order_id`),讓真人不必重新詢問就能行動。
+- **根因與 actions_taken**,讓真人不必重做代理已完成的工作——即使跨越交接,這正是保住首次接觸解決率的關鍵。
+- **一個 recommended_action**——代理已經做了功課;把它的建議呈現出來,讓真人確認而非重新調查。
+- **一個明確的 escalation_reason**——這同時成為「為何自主停止」的稽核紀錄。
+
+> **陷阱——有損的交接。** 像「客戶不開心,請協助」這樣的摘要,會逼真人從零開始,讓代理失去意義。把**交易性事實**——識別碼、金額、日期——逐字保留;這些正是漸進式摘要傾向模糊掉的值(Domain 5,*5.1*)。把它們放進結構化封包,而非埋在散文裡。
+
 ## 9.4 信心校準與人工監督
+
+並非每個人在迴路的決策都是即時的對話交接。在高量管線中(**結構化資料擷取**情境),迴路是*統計性*的:多數項目自動處理,而經校準的少數會路由到人工審查。考試在此考兩個概念——**經校準的欄位層級信心**與**分層稽核**——並警告不要只信一個整體數字。
 
 對於資料擷取系統:
 
-1. **欄位層級信心分數:** 模型為每個擷取出的欄位輸出一個信心分數
-2. **校準:** 使用已標註的驗證集來調整門檻值
+1. **欄位層級信心分數:** 模型為*每個*擷取出的欄位輸出一個信心分數,而非整份文件一個分數——日期可以很確定,而手寫的總額未必。
+2. **校準:** 使用已標註的驗證集來調整門檻值,讓「0.9 信心」真的對應到約 90% 的實測準確度(這正是*校準*的意思——也是為何 §9.1 中模型自評的 1–10 不算校準)。
 3. **路由:**
    - 高信心 + 穩定準確度 -> 自動化處理
    - 低信心或來源不明確 -> 人工審查
 
-**分層隨機抽樣:**
-- 即使是高信心的擷取結果,也要定期稽核一份樣本
-- 整體 97% 的準確度可能掩蓋了某種特定文件類型 40% 的錯誤
-- 依文件類型與欄位分析準確度,而不只是看整體
+```mermaid
+flowchart TD
+    Doc[擷取出的欄位<br/>加上信心] --> T{信心高於<br/>校準門檻?}
+    T -->|是| Auto[自動處理]
+    T -->|否| Review[路由到人工審查]
+    Auto --> Sample{{分層隨機<br/>抽樣}}
+    Sample -. 稽核一份切片 .-> QA[依類型與欄位<br/>檢查準確度]
+    Review --> QA
+    QA -. 發現漂移 .-> Recal[重新校準門檻]
+```
 
----
+**分層隨機抽樣:**
+
+- 即使是高信心的擷取結果,也要定期稽核一份樣本——信心是估計而非保證,且新的文件版面會造成無聲的漂移。
+- 整體 97% 的準確度可能掩蓋了某種特定文件類型 40% 的錯誤——良好的多數掩蓋了壞掉的少數。
+- **依文件類型與欄位**分析準確度,而不只是看整體;正是這種分層,才能讓隱藏的 40% 浮現。
+
+> **考試角度。** 當題目報出單一的頭條準確度(「我們的擷取器有 97% 準確度,上線吧」),預期的批評是:*整體*數字可能掩蓋一個失敗的區段。修正方式是分層抽樣與分區段分析,*在*信任自動化*之前*——而非盲目地調高全域門檻。
+
+## 9.5 確定性升級:Hooks 與提示指令
+
+升級觸發條件可以放在兩個非常不同的地方,而這個區別是本章最可能被考的單一重點。你可以*請求*模型升級(提示指令),也可以在程式碼中*強制*升級(hook)。兩者不可互換。
+
+**提示指令**(「若金額超過 $10,000,升級給真人核准」)是**機率性**的:模型大多數時候會遵守,但「大多數時候」不是你能擺在稽核員面前的控制。**hook**(`PreToolUse`)會在工具呼叫執行前攔截它,並**確定性地**改道——模型無法繞過程式碼。
+
+```python
+# 機率性:模型通常會遵循的指引
+# (適用於軟性偏好;不適用於金錢/不可逆動作)
+system_prompt = "If a transfer is over $10,000, escalate to a human for approval."
+
+# 確定性:模型無法繞過的 hook
+@hook("PreToolUse")
+def require_approval_over_limit(tool_call):
+    if tool_call.name == "execute_transfer" and tool_call.args["amount"] > 10_000:
+        # 是程式碼,不是建議:改道至核准關卡。
+        return redirect(to="request_human_approval", reason="amount_over_limit")
+    return allow(tool_call)
+```
+
+| 屬性 | Hooks | 提示指令 |
+|---|---|---|
+| 保證 | **確定性**(100%) | **機率性**(>90%,並非 100%) |
+| 由誰強制 | 代理執行環境中的程式碼 | 模型的遵循度 |
+| 何時使用 | 關鍵業務規則、金融/不可逆操作、合規關卡 | 一般偏好、語氣、建議、格式設定 |
+| 範例 | 阻擋/改道任何 > $10,000 的轉帳 | 「在升級前先嘗試解決」 |
+| 失效模式 | 對該規則本身沒有(它總會觸發) | 在邊界措辭、長上下文、對抗式輸入下無聲漏失 |
+
+**規則:** 當失敗會造成財務、法律或安全後果時,升級必須是 **hook**,而非提示。提示是用來處理它周邊那些軟性、可恢復的偏好(「展現同理心」「先提供替代方案」)。這呼應第 3 章的 hooks 與提示原則;在這裡,*被強制的事物*就是人工核准關卡本身。
+
+> **考試角度。** 一道經典題:「政策規定超過 $10k 的轉帳需要主管核准——這條規則該放哪?」被評分的答案是 hook/前置條件,並以*確定性*為理由。「放進系統提示」是那個聽起來合理、卻會在正式環境失敗的干擾選項。
+
+## 9.6 端到端案例研究:高金額付款核准代理
+
+上述元件唯有組合在一起才有意義。以下是一個完整、真實的人在迴路系統——一個能動用資金的付款助理,但**必須**讓真人核准任何大額付款,核准關卡以確定性方式強制執行,且工作流能在真人決定後*恢復*。這是一個與第 3 章退款代理不同的問題:在那裡,hook *阻擋*了一個超限動作;在這裡,hook *開啟一個核准關卡,代理暫停、等待真人裁決,然後繼續*——這是真正的人在迴路,而不只是停下。
+
+### 需求
+
+- 讓內部操作員以自然語言請求對外付款(「付發票 INV-4471,$14,200 給 Acme Ltd」)。
+- 查詢收款方與發票(唯讀工具)。
+- **硬性規則:** 任何**達到或超過 $10,000** 的轉帳,在執行前都需要**明確的真人核准**——沒有例外,不交由模型裁量。
+- 核准必須是真正的暫停:代理發出一個結構化核准請求,**等待**,只有在核准的裁決下才執行;遭拒則取消並說明。
+- 其他方面有效的低於門檻轉帳(< $10,000)可以自動執行。
+- 當收款方查詢回傳多筆相符結果時,升級(不要猜測)。
+
+### 架構
+
+```mermaid
+flowchart TD
+    Op([操作員]) --> Coord[付款協調者]
+    Coord -->|Task| Lookup[子代理 收款方與發票<br/>get_payee, lookup_invoice]
+    Lookup --> Multi{多筆收款方<br/>相符?}
+    Multi -->|是| Disamb[請操作員<br/>提供識別資訊]
+    Multi -->|否| Coord
+    Coord --> Transfer[execute_transfer]
+    Transfer --> Gate{{PreToolUse hook<br/>金額達到或超過 10000?}}
+    Gate -->|是| Approve[request_human_approval<br/>暫停並等待]
+    Gate -->|否| Exec[執行轉帳]
+    Approve --> Human([核准者])
+    Human -->|核准| Exec
+    Human -->|拒絕| Cancel[取消並說明]
+```
+
+協調者掌管編排;查詢子代理是最小權限(它能讀取收款方與發票,但**無法動用資金**);**由 hook(而非提示文字)強制執行核准關卡**,因為漏掉一個關卡就是無法挽回的財務事件。
+
+### 實作
+
+定義協調者與一個最小權限的查詢子代理:
+
+```python
+coordinator = AgentDefinition(
+    name="payments_coordinator",
+    description="Prepares and submits outbound payments; routes large transfers for human approval.",
+    system_prompt=(
+        "You help an operator pay invoices. Look up the payee and invoice, "
+        "confirm the amount, then call execute_transfer. "
+        "Be empathetic and explain delays, but never promise a payment you have not executed."
+    ),
+    allowed_tools=["Task", "execute_transfer", "request_human_approval"],
+)
+
+payee_lookup = AgentDefinition(
+    name="payee_lookup",
+    description="Reads payee and invoice records. Read-only.",
+    system_prompt="Return the payee and invoice details as structured data. If multiple payees match, return all candidates.",
+    allowed_tools=["get_payee", "lookup_invoice"],   # 最小權限:無法動用資金
+)
+```
+
+用 `PreToolUse` hook 確定性地強制執行 $10,000 核准關卡——這正是考試要你答對的關鍵。注意它並不*阻擋*工作流;它*改道*進入一個人工核准步驟:
+
+```python
+APPROVAL_LIMIT = 10_000
+
+@hook("PreToolUse")
+def require_approval_over_limit(tool_call):
+    if tool_call.name == "execute_transfer" and tool_call.args["amount"] >= APPROVAL_LIMIT:
+        # 模型無法繞過這條規則;它是程式碼,不是建議。
+        return redirect(
+            to="request_human_approval",
+            reason="amount_over_limit",
+            payload=build_handoff(tool_call.args),   # 結構化、自成一體
+        )
+    return allow(tool_call)
+```
+
+建立核准者會看到的結構化交接封包(他們看不到逐字記錄——§9.3):
+
+```python
+def build_handoff(args):
+    return {
+        "payee_id": args["payee_id"],
+        "payee_name": args["payee_name"],
+        "invoice_id": args["invoice_id"],
+        "amount": args["amount"],
+        "actions_taken": [
+            "Verified payee via get_payee",
+            "Matched invoice via lookup_invoice",
+        ],
+        "recommended_action": "Approve transfer",
+        "escalation_reason": "Transfer at or above the $10,000 approval limit",
+    }
+```
+
+在真人決定後恢復。代理在關卡處暫停;裁決重新進入迴圈,決定下一個工具呼叫:
+
+```python
+def on_approval_verdict(verdict, case):
+    if verdict.approved:
+        # 恢復具名 session,讓迴圈繼續往執行推進。
+        resume_session(case.session_id, message=f"Approval granted by {verdict.approver}; proceed.")
+    else:
+        cancel_transfer(case)  # 不要執行;向操作員說明
+```
+
+### 執行軌跡
+
+```mermaid
+sequenceDiagram
+    actor Op as 操作員
+    participant Co as 協調者
+    participant L as 查詢子代理
+    participant Gate as PreToolUse hook
+    participant Hu as 核准者
+    Op->>Co: 「付發票 INV-4471,14200 給 Acme」
+    Co->>L: Task(上下文:發票 INV-4471 + 收款方)
+    L-->>Co: 收款方 Acme,發票有效,金額 14200
+    Co->>Gate: execute_transfer(amount=14200)
+    Gate->>Gate: 14200 >= 10000,改道至核准
+    Gate->>Hu: request_human_approval(交接封包)
+    Note over Co,Hu: 代理暫停 — 等待裁決
+    Hu-->>Co: 經主管核准
+    Co->>Co: 恢復 session,推進至執行
+    Co-->>Op: 「14200 給 Acme 的轉帳已於核准後執行。」
+```
+
+注意協調者*原本打算*直接轉帳;而 **hook 確定性地把它改道**進入人工關卡,代理**暫停**,只有在核准的裁決下才繼續執行。若只用提示指令(「超過 $10k 的轉帳要升級」),模型大約 90% 的時候會遵守——而那十分之一的漏失,就是一筆無法召回的電匯。
+
+### 驗證
+
+- **確定性測試:** 連續送出 100 筆 $10,000 的轉帳,斷言出現 100 次核准請求與**零次**自動執行。只靠提示的設計會漏;hook 設計必須 100%。
+- **邊界測試:** 斷言 `$9,999.99` 自動執行、`$10,000.00` 路由到核准——把 `>=` 與 `>` 的邊界弄對(這裡的差一錯誤就是一個合規漏洞)。
+- **恢復測試:** 核准一個暫停中的案件,斷言剛好一次 `execute_transfer`;拒絕另一個,斷言**沒有**轉帳且有清楚的操作員說明。
+- **交接完整性測試:** 斷言核准封包包含收款方、發票、金額與理由,且沒有任何「請見對話」之類的指涉(核准者沒有逐字記錄——§9.3)。
+- **最小權限測試:** 斷言 `payee_lookup` 子代理無法呼叫 `execute_transfer`。
+- **釐清身分測試:** 當 `get_payee` 回傳兩筆相符時,斷言代理會要求提供識別資訊,而不是付給其中任何一方(§9.1)。
+
+### 常見陷阱
+
+- 把 $10,000 規則放進系統提示而非 hook——機率性,沒有保證(§9.5)。
+- 把關卡當成硬性*停止*而非*暫停再恢復*:真正的人在迴路必須在核准後繼續,而不是走到死路(§9.6 恢復步驟)。
+- 有損的交接(「大額付款,請核准」),會逼核准者重新調查,因為他們看不到逐字記錄(§9.3)。
+- 因操作員對延遲的*不耐*而升級,而非因*金額*而升級——語氣不是觸發條件(§9.1)。
+- 在查詢結果模糊時猜測收款方,而不是要求提供識別資訊(§9.1)。
+- 把「付款已送出」這類助理文字當成完成訊號,而不是 `stop_reason == "end_turn"`(第 3 章,§3.1)。
+
+## 9.7 考試重點 — 關鍵整理
+
+| 概念 | 考試考什麼 |
+|---|---|
+| 可靠的觸發條件 | 依*事實*升級——明確的找真人請求、政策缺口、無法推進、超過門檻、相符結果模糊——而非依情緒或自評信心(§9.1)。 |
+| 立即 vs. 細緻 | 明確的「幫我找真人」要**立即**升級;範圍內的抱怨則遵循同理 → 解決 → 重申時升級(§9.2)。 |
+| 政策缺口 | 沉默/模糊的政策應升級,而非拒絕,也非即興發明(§9.1–9.2)。 |
+| 結構化交接 | 真人只看得到封包,看不到逐字記錄——把它做得完整,含識別碼、已採取的動作、建議與理由(§9.3)。 |
+| 信心校準 | 使用對照標註資料、經校準的*欄位層級*分數;整體準確度可能掩蓋一個失敗的區段——用分層抽樣稽核(§9.4)。 |
+| Hooks 與提示 | 金融/不可逆的升級關卡必須是**確定性 hook**,而非提示指令(§9.5)。 |
+| 人在迴路,而非只是停下 | 真正的核准關卡會**暫停、等待裁決並恢復**——它不會讓工作流走到死路(§9.6)。 |
+
+> **對應 Domain 1(27%)與 Domain 5(15%)。** 如果你能建構並捍衛上面的付款核准代理——正確的觸發條件、對的升級模式、自成一體的交接、經校準的路由,以及一個會暫停並恢復的確定性核准關卡——你就掌握了這兩個領域所考的人在迴路核心。
 
 # 第 10 章:多代理系統中的錯誤處理
 
