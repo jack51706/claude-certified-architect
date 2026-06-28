@@ -2387,6 +2387,7 @@ session = client.beta.sessions.create(
 - **基本元件**(複習)—— **Tools**(模型叫用的動作)、**Resources**(唯讀脈絡資料)、**Prompts**(可重用範本)。MCP 是開放的 JSON-RPC 2.0 標準 ——「AI 的 USB-C」。
 - **傳輸** —— **stdio**(本機子行程)與 **Streamable HTTP**(POST + SSE)是兩種標準;舊的純 SSE 傳輸已棄用。
 - **授權** —— HTTP 伺服器用 OAuth 2.0;stdio 用環境變數憑證。
+- **企業託管授權(Enterprise-Managed Authorization, EMA)** —— 一項**穩定版** MCP 擴充(2026 年 6 月 18 日),透過組織的身分提供者(SSO)集中治理 MCP 存取:管理員為組織啟用某伺服器後,使用者即依既有的群組/角色自動取得存取權 —— 不需逐人 OAuth 同意畫面,且撤銷即時又集中(將使用者移出 IdP 群組 → 各處存取權立即消失)。首發身分提供者為 Okta;支援的伺服器包含 Asana、Atlassian、Canva、Figma、Linear 與 Supabase。來源:[Enterprise-Managed Authorization](https://modelcontextprotocol.io/extensions/auth/enterprise-managed-authorization)。
 - **MCP connector(Messages API)** —— 讓 Claude 直接在伺服器端呼叫**遠端** MCP 伺服器、不需本機用戶端:傳 `mcp_servers: [{type:"url", name, url}]` **並**附對應的 `tools: [{type:"mcp_toolset", mcp_server_name}]`。Beta `mcp-client-2025-11-20`。(兩半都要 —— 只給 `mcp_servers` 會被拒。)
 - **Managed Agents 的憑證** —— MCP 驗證透過 **vaults**(第 24 章)提供,不放在 agent 的 `mcp_servers` 區塊;Anthropic 以 URL 比對憑證並自動更新 OAuth。
 - **Claude Code** —— `claude mcp add/list/remove`、`.mcp.json`(專案)vs `~/.claude.json`(使用者)、`/mcp` 做工作階段內 OAuth,以及 **MCP tool search** 延遲載入工具以節省上下文。
