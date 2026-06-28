@@ -9924,35 +9924,552 @@ Notice the **server never held a model key** — it borrowed the host's model vi
 
 # Chapter 26: Modern Claude Code (2026)
 
-> *Reference — beyond the exam scope.* Docs: [Claude Code docs](https://code.claude.com/docs/en/overview) · [What's new](https://code.claude.com/docs/en/whats-new).
+> *Reference — beyond the exam scope.* Docs: [Claude Code docs](https://code.claude.com/docs/en/overview) · [What's new](https://code.claude.com/docs/en/whats-new) · [Subagents](https://code.claude.com/docs/en/sub-agents) · [Plugins](https://code.claude.com/docs/en/plugins) · [Headless](https://code.claude.com/docs/en/headless).
 
-Claude Code is now **multi-surface** (terminal, VS Code, JetBrains, desktop app, web/iOS, Slack, Chrome) sharing one engine, so CLAUDE.md, settings, skills, and MCP carry across all of them. Notable 2026 capabilities a guide usually misses:
+Chapter 5 taught Claude Code as a **configurable tool** — where instructions live, how to scope rules, how to gate dangerous operations. This chapter is its 2026 sequel for the engineer who runs Claude Code as **production infrastructure**, not an interactive assistant: a single engine that drives dozens of subagents in the background, survives across machines and surfaces, recovers from its own mistakes, and runs unattended in CI. The shift is from *"a developer chatting with an agent"* to *"a fleet of agents executing a plan you authored, under guardrails you can prove."*
 
-- **Dynamic workflows + `ultracode`** — Claude writes a JavaScript script that orchestrates **dozens–hundreds** of subagents in the background (caps: 16 concurrent / 1,000 total); `/effort ultracode` enables auto-orchestration. *Who holds the plan:* subagents/skills → Claude turn-by-turn; **agent teams** → a lead via a shared task list; **workflows** → a script (only the final answer hits context).
-- **Fork subagents / `context: fork`** — inherit the parent conversation instead of starting fresh; `isolation: worktree` runs a subagent's edits in a throwaway git worktree.
-- **Checkpoints / `/rewind`** — auto-checkpoint before each edit; restore code/conversation/both. **Limitation:** it does **not** track bash-modified or external/concurrent file changes — not a Git replacement.
-- **Auto memory** — Claude writes its own machine-local learnings to a `MEMORY.md`, reloaded each session (distinct from hand-written CLAUDE.md).
-- **Headless for CI** — `-p`/`--print`, `--output-format json`, **`--json-schema`** (schema-conforming `structured_output`), and **`--bare`** (skip auto-discovery for deterministic runs; slated to become the `-p` default).
-- **Permission modes** — `default`/`acceptEdits`/`plan`/`bypassPermissions`, plus newer **`auto`** (server-side safety classifier) and **`dontAsk`** (read-only/pre-approved only).
-- **MCP tool search & managed MCP** — lazily load MCP tools to save context; org-wide `managed-mcp.json`; `claude mcp login` from the shell.
-- **Output styles, effort levels, plugins, expanded hooks** — `/output-style` personas; `/effort` (incl. `xhigh`/`ultracode`); plugin marketplaces bundling skills/agents/hooks/MCP; many new hook events (e.g. `SubagentStart`, `PreCompact`, `SessionEnd`).
-- **Scheduling & remote** — cloud **routines** (cron), **channels** (push external events into a session), and **remote control** from another device.
+That shift forces three architectural questions a foundations course never has to answer, and they organize the chapter:
 
----
+- **Who holds the plan?** (§26.2) — a single agent turn-by-turn, a *lead* coordinating a team, or a *script* orchestrating hundreds of throwaway workers. Picking wrong is the dominant failure mode at scale.
+- **How do you isolate blast radius?** (§26.3–26.4) — fork vs fresh context, worktree sandboxing, and checkpoints/rewind as a recovery layer (and where it stops being one).
+- **How does it run with no human in the loop?** (§26.5–26.6) — headless/SDK mode, permission classifiers, plugins, and MCP tool search that keeps the context window solvent at fleet scale.
+
+§26.7 then builds one end-to-end system — an **autonomous monorepo dependency migration** — and §26.8 distills the mental models. Everything here *complements* Chapter 5: that chapter is the single interactive session; this one is the multi-surface, multi-agent, unattended system built on top of it.
+
+## 26.1 One Engine, Many Surfaces
+
+Claude Code in 2026 is no longer "a terminal program." The same engine runs in the **terminal, VS Code, JetBrains, a desktop app, the web and iOS clients, Slack, and a Chrome extension** — and they all read the *same* configuration: `CLAUDE.md`, `.claude/settings.json`, Skills, subagent definitions, hooks, and MCP servers. Configure once; the behavior follows you onto every surface.
+
+```mermaid
+flowchart TD
+    subgraph Surfaces
+      Term[Terminal CLI]
+      IDE[VS Code / JetBrains]
+      Desk[Desktop app]
+      WebM[Web and iOS]
+      Chat[Slack and Chrome]
+    end
+    subgraph Engine[Shared Claude Code engine]
+      Cfg[CLAUDE.md plus settings.json]
+      Skills[Skills and subagents]
+      Hooks[Hooks lifecycle]
+      MCP[MCP servers]
+    end
+    Term --> Engine
+    IDE --> Engine
+    Desk --> Engine
+    WebM --> Engine
+    Chat --> Engine
+    Engine --> Repo[Your repository and tools]
+```
+
+**Why this matters for architecture.** The surface is a *client*; the agent's capabilities and guardrails are *server-side configuration*. A permission rule or hook you commit to `.claude/` protects a teammate kicking off a job from Slack exactly as it protects you in the terminal — there is no "but it was the web client" escape hatch. The corollary pitfall: secrets and surface-specific assumptions do **not** belong in shared config. "Open my browser" makes sense in the Chrome surface and is meaningless in headless CI; encode capability requirements in the *task*, not in CLAUDE.md.
+
+**Trade-off.** Uniformity is the feature and the constraint. One engine means one place to reason about safety — but it also means a misconfiguration is uniformly wrong everywhere. Treat `.claude/` like production code: reviewed, versioned, and tested, because every surface inherits it.
+
+## 26.2 The Orchestration Spectrum: Who Holds the Plan
+
+Chapter 3 introduced the coordinator/subagent (hub-and-spoke) pattern. Modern Claude Code generalizes this into a **spectrum of three orchestration modes**, distinguished by *where the plan lives* and *what enters the main context window*. Choosing the right one is the single highest-leverage decision in fleet-scale work.
+
+```mermaid
+flowchart TD
+    Task[Incoming task] --> Q{Scale and coupling?}
+    Q -->|Few steps<br/>tight reasoning| A[Subagents and Skills<br/>Claude plans turn-by-turn]
+    Q -->|Several parallel tracks<br/>shared state| B[Agent team<br/>a lead owns a task list]
+    Q -->|Dozens to hundreds<br/>independent units| C[Dynamic workflow<br/>a JS script orchestrates]
+    A --> Ctx[Each tool result enters<br/>the main context]
+    B --> List[Lead reads the shared<br/>task list, not raw output]
+    C --> Final[Only final answers<br/>reach the main context]
+```
+
+**Mode 1 — Subagents and Skills (the model holds the plan).** The main Claude instance decides, turn by turn, when to spawn a subagent via the `Task` tool (Chapter 3) or invoke a Skill. Best for a handful of steps where each result genuinely informs the next reasoning step. *Cost:* every subagent's result returns into the main context window, so this does not scale to hundreds of workers — the window fills.
+
+**Mode 2 — Agent teams (a lead holds the plan).** A designated *lead* agent maintains a **shared task list**; worker agents claim items, do them, and report status — the lead coordinates against the *list*, not against every worker's raw transcript. Best for several semi-independent tracks that share state (e.g., front-end + back-end + tests for one feature). *Cost:* you must design the task-list protocol; coordination overhead is real.
+
+**Mode 3 — Dynamic workflows + `ultracode` (a script holds the plan).** Claude *writes a JavaScript orchestration script* that fans out **dozens to hundreds** of background subagents, with caps of **16 concurrent / 1,000 total**. Crucially, **only each worker's final answer returns to the main context** — intermediate reasoning stays in the worker. `/effort ultracode` turns on auto-orchestration so Claude reaches for this mode itself. Best for large, embarrassingly-parallel work (migrate 400 files, triage 1,000 findings). *Cost:* it's a program — bugs in the orchestration script are bugs in your run, and debugging 200 parallel workers is its own discipline.
+
+**The exam-style discriminator.** Match the mode to *context economics*: if a sub-result must inform the next decision → subagents (Mode 1). If parallel tracks share evolving state → a team (Mode 2). If units are independent and you only need their *outputs* aggregated → a workflow (Mode 3). The classic mistake is running 300 independent file edits as turn-by-turn subagents and blowing the context window, when a workflow would have kept only 300 short results.
+
+## 26.3 Fork Subagents and Worktree Isolation
+
+By default a subagent starts with a **fresh, empty context** — Chapter 3's "subagents are blind" rule, which forces explicit context passing. Modern Claude Code adds the opposite option when you *want* inheritance.
+
+**`context: fork`** spawns a subagent that **inherits the parent conversation** instead of starting blank. Use it when the subagent needs the full reasoning history you've already built up (a long investigation, an accumulated plan) and re-passing it explicitly would be wasteful or lossy. Fresh context is the safe default for *parallel, independent* work; fork is for *continuation* work that branches off a rich shared state.
+
+**`isolation: worktree`** runs a subagent's file edits inside a **throwaway git worktree** — a separate checkout — so its changes never touch your working tree until you merge them. This is the blast-radius control for *speculative* edits: let a subagent attempt a risky refactor in an isolated worktree, inspect the diff, and keep it only if it's good. If it's bad, the worktree is discarded and your tree is pristine.
+
+```mermaid
+flowchart TD
+    Parent[Parent session<br/>rich context] --> D{What does the<br/>subagent need?}
+    D -->|Independent work| Fresh[Fresh context<br/>pass context explicitly]
+    D -->|Continue this reasoning| Fork[context fork mode<br/>inherit the conversation]
+    D -->|Risky speculative edits| WT[isolation worktree mode<br/>edits in a throwaway checkout]
+    WT --> Review[Inspect the diff]
+    Review -->|good| Merge[Merge into working tree]
+    Review -->|bad| Drop[Discard the worktree<br/>tree stays clean]
+```
+
+**Trade-off and pitfall.** Forking saves re-passing context but *imports the parent's noise and biases* — a fresh agent is more objective for, say, an independent code review. Worktree isolation is the right call for any change you might want to throw away, but it costs a checkout and a merge step, so don't reach for it on trivial edits. Rule of thumb: **fresh + explicit context for parallel fan-out; fork for deep continuation; worktree for anything you're not yet sure you want to keep.**
+
+## 26.4 Recovery: Checkpoints, Rewind, and Auto Memory
+
+Long autonomous runs make mistakes. Two 2026 systems make those mistakes survivable — and knowing their *limits* is the part most guides miss.
+
+**Checkpoints and `/rewind`.** Claude Code **auto-checkpoints before each edit** and lets you restore **code, conversation, or both** to an earlier point. This turns a wrong turn into a one-command undo instead of a manual `git reset` archaeology session. **The critical limitation:** checkpoints track *Claude's own edits* — they do **not** capture files changed by `bash` commands, external processes, or concurrent tools. So a `npm install`, a generated build artifact, or a script that rewrote a file is invisible to rewind. **Checkpoints are a fast undo for the agent's edits, not a Git replacement** — you still commit, and you still rely on Git for anything outside Claude's direct edits.
+
+**Auto memory (`MEMORY.md`).** Distinct from the hand-authored `CLAUDE.md`, Claude maintains its **own machine-local `MEMORY.md`** — learnings it writes for itself ("the test DB resets on a flag, not a mock"; "this build needs Node 22") — and reloads each session. It is a private notebook, not a team contract.
+
+| Mechanism | Authored by | Scope | Shared via Git? | Purpose |
+|---|---|---|---|---|
+| `CLAUDE.md` | Humans | Project / user / dir | Project level: yes | The team contract — standards, conventions |
+| `MEMORY.md` | Claude (auto) | Machine-local | No | Claude's own accumulated learnings |
+| Checkpoints | Claude (auto) | Session | No | Undo Claude's edits only (not bash/external) |
+
+**Pitfall.** Treating `MEMORY.md` as a place to put team standards is a mismatch — it isn't shared and a teammate's `git clone` will never see it. Conversely, relying on `/rewind` to undo a destructive `bash rm` is the trap the limitation warns about; that file is gone as far as checkpoints are concerned. Use the right layer: **CLAUDE.md for the team, MEMORY.md is Claude's, checkpoints for edit-undo, Git for everything durable.**
+
+## 26.5 Plugins, Expanded Hooks, and MCP Tool Search
+
+Three capabilities turn an individual setup into a distributable, context-efficient platform.
+
+**Plugins and marketplaces.** A *plugin* bundles Skills, subagent definitions, hooks, slash commands, and MCP server configs into **one installable package**, distributed through a **plugin marketplace**. This is how a security or platform team ships a standardized agent capability to the whole org: one install pulls the SAST skill, the policy hook, the approved MCP servers, and the review subagent together — versioned as a unit, instead of every engineer hand-copying snippets into their own `.claude/`.
+
+**Expanded hook events.** Chapter 3 used `PreToolUse`/`PostToolUse` for deterministic enforcement. Modern Claude Code adds lifecycle events that matter for *autonomous* runs:
+
+- **`SubagentStart` / `SubagentStop`** — inject context into, or audit, every spawned worker (essential when a workflow spawns hundreds).
+- **`PreCompact`** — run logic *before* the context is compacted, e.g. persist a summary you don't want lost.
+- **`SessionEnd`** — final cleanup, reporting, or evidence flush when a run completes.
+
+These are where you attach **observability and policy at fleet scale** — a `SubagentStart` hook that stamps every worker with a run-id and a `SessionEnd` hook that ships a structured audit trail are how you keep 200 background agents accountable.
+
+**MCP tool search and managed MCP.** When you connect many MCP servers, loading *every* tool definition up front floods the context window before any work begins. **MCP tool search lazily loads tools** — the model searches for and pulls in only the tools a task needs, keeping the window solvent. **Managed MCP** lets an org pin an approved server set via `managed-mcp.json`, and `claude mcp login` handles auth from the shell. The throughline with Chapter 4's MCP resources and §26.2's workflows is the same discipline: **context is a budget; load only what the task needs, when it needs it.**
+
+## 26.6 Headless, the SDK, and Permission Modes
+
+Unattended execution is where production diverges hardest from interactive use.
+
+**Headless / `-p` for CI.** `claude -p "<task>"` (a.k.a. `--print`) runs non-interactively and exits — the foundation for CI jobs, pre-commit checks, and batch pipelines. For machine-readable output: `--output-format json`, and **`--json-schema`** to force a **schema-conforming `structured_output`** so a downstream step can parse the result deterministically. **`--bare`** skips auto-discovery (CLAUDE.md, settings, plugins) for a **deterministic, reproducible run** — the same inputs yield the same behavior, which is what CI needs; it is slated to become the `-p` default. (This is the same headless surface Chapter 5 introduced for CI; here it pairs with the orchestration and permission machinery below.)
+
+**Permission modes — the safety dial.** The mode decides what executes without a human prompt:
+
+| Mode | Behavior | Typical use |
+|---|---|---|
+| `default` | Ask before sensitive actions | Interactive development |
+| `acceptEdits` | Auto-accept file edits, still gate commands | Trusted local editing |
+| `plan` | Read/investigate only — **no mutations** | Planning before approval |
+| `bypassPermissions` | No prompts at all | Sandboxed, fully-trusted automation only |
+| `auto` | A **server-side safety classifier** decides per action | Smart unattended runs |
+| `dontAsk` | Only **read-only / pre-approved** operations proceed | Conservative automation |
+
+`auto` is the meaningful 2026 addition: instead of all-or-nothing, a classifier judges each action's risk, so an unattended run can proceed on safe steps and still hold the line on dangerous ones. **The pitfall is reaching for `bypassPermissions` in CI for convenience** — that removes every guardrail; `auto` or `dontAsk` plus deterministic hooks (§26.5) is the defensible posture.
+
+**Scheduling and remote.** Cloud **routines** run Claude Code on a **cron schedule** (nightly triage, weekly dependency checks); **channels** push external events into a running session (a CI failure, a new issue) so an agent reacts to the outside world; and **remote control** lets you steer or check a session from another device. Together they extend the engine from "I'm typing now" to "it runs on a schedule and responds to events."
+
+## 26.7 End-to-End Case Study: Autonomous Monorepo Dependency Migration
+
+The pieces only matter assembled. Here is a realistic 2026 system: a nightly job that **migrates a 400-package monorepo off a deprecated logging library** onto its replacement, unattended, with guardrails you can prove.
+
+### Requirements
+
+- Update **~400 packages** from `oldlogger` to `newlogger` (different API surface — not a find-replace).
+- Run **unattended, on a schedule**, with no human at the keyboard.
+- **Hard rule:** the job may open a PR but must **never push to `main` or publish a package** — a human reviews and merges.
+- Each package's change must be **isolated** so one bad migration can't corrupt the others.
+- Produce a **machine-readable summary** a dashboard can ingest, plus an audit trail of every worker.
+
+### Architecture
+
+This is a textbook **Mode 3 dynamic workflow** (§26.2): 400 independent units, where only each worker's result needs to reach the aggregator.
+
+```mermaid
+flowchart TD
+    Cron[Cloud routine<br/>nightly cron] --> Lead[Lead session<br/>effort ultracode]
+    Lead --> Plan[Write JS orchestration<br/>script over 400 packages]
+    Plan --> Fan{Fan out workers<br/>cap 16 concurrent}
+    Fan --> W1[Worker package A<br/>worktree isolated]
+    Fan --> W2[Worker package B<br/>worktree isolated]
+    Fan --> W3[Worker package N<br/>worktree isolated]
+    W1 -. final result only .-> Agg[Aggregate results]
+    W2 -. final result only .-> Agg
+    W3 -. final result only .-> Agg
+    Agg --> PR[Open one PR<br/>per package group]
+    PR --> Human([Human reviewer])
+```
+
+The routine triggers the run; the lead writes the orchestration script; each worker edits **one package inside its own worktree** (§26.3), so a failed migration is discarded without touching the others; only final results flow back, keeping the lead's context solvent.
+
+### Guardrails (deterministic, not prompted)
+
+The "never push to main / never publish" rule is money-and-reputation critical, so it lives in a **`PreToolUse` hook** (Chapter 3's lesson), not the system prompt:
+
+```python
+@hook("PreToolUse")
+def block_publish_and_main_push(tool_call):
+    if tool_call.name == "bash":
+        cmd = tool_call.args["command"]
+        if "npm publish" in cmd or "git push origin main" in cmd:
+            # Code, not a suggestion — the model cannot talk its way past this.
+            return deny(reason="publish_or_main_push_forbidden")
+    return allow(tool_call)
+```
+
+Run the whole job under the **`dontAsk`** permission mode (no interactive prompts, only pre-approved operations) and attach observability hooks so 400 background workers stay accountable:
+
+```python
+@hook("SubagentStart")
+def stamp_worker(ctx):
+    ctx.set("run_id", current_run_id())     # tag every worker for the audit trail
+
+@hook("SessionEnd")
+def flush_audit(session):
+    write_structured_report(session.results)  # ship the evidence when the run ends
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Cron as Cloud routine
+    participant Lead as Lead (ultracode)
+    participant WF as Orchestration script
+    participant W as Worker (worktree)
+    participant Pre as PreToolUse hook
+    Cron->>Lead: Trigger nightly migration
+    Lead->>WF: Write JS plan over 400 packages
+    WF->>W: Spawn worker for package A (max 16 at a time)
+    W->>W: Migrate oldlogger to newlogger in its worktree
+    W->>Pre: bash: npm publish package-a
+    Pre-->>W: DENY (publish forbidden)
+    W-->>WF: Result: migrated, tests pass, publish blocked
+    WF-->>Lead: Aggregate 400 final results only
+    Lead-->>Cron: Open PRs plus structured JSON summary
+```
+
+Note the worker *attempted* to publish — and the **hook denied it deterministically**. With only a prompt instruction ("don't publish"), the model would comply most of the time; for a rule that can ship a broken package to thousands of consumers, "most of the time" is a failed run.
+
+### Validation
+
+- **Guardrail test:** in a sandbox, have a worker attempt `npm publish` and `git push origin main` and assert *both* are denied, every time — a prompt-only design will eventually leak.
+- **Isolation test:** force one package's migration to fail and confirm the *other* packages' worktrees and PRs are unaffected (blast radius contained to one worktree).
+- **Context-economics test:** confirm the lead's context holds 400 *short final results*, not 400 full transcripts — i.e. it really ran as a workflow (Mode 3), not turn-by-turn subagents (Mode 1).
+- **Reproducibility test:** re-run with `--bare` and `--json-schema` and assert the summary conforms to the schema a dashboard expects.
+
+### Common pitfalls
+
+- Running the 400 edits as **turn-by-turn subagents** (Mode 1) and exhausting the context window — this is a workflow (Mode 3) by construction.
+- Putting "never push to main" in the **system prompt** instead of a `PreToolUse` hook (probabilistic, not guaranteed — §26.5).
+- Using **`bypassPermissions`** "to make CI just work," removing every guardrail, when `dontAsk` + hooks gives unattended execution *with* a safety floor (§26.6).
+- Trusting **`/rewind`** to undo a `bash`-driven mistake — checkpoints don't track bash-modified files, so isolate with **worktrees** instead (§26.3–26.4).
+
+## 26.8 Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| One engine, many surfaces | Terminal, IDE, desktop, web/iOS, Slack, Chrome share one engine and one config; guardrails are server-side and follow every surface (§26.1). |
+| Orchestration spectrum | Match the mode to context economics: subagents (model holds the plan) → teams (a lead + task list) → dynamic workflows/`ultracode` (a script; only final answers return) (§26.2). |
+| Fork vs fresh vs worktree | Fresh + explicit context for parallel fan-out; `context: fork` for deep continuation; `isolation: worktree` for anything you might discard (§26.3). |
+| Checkpoints are not Git | `/rewind` undoes Claude's *edits* only — it does **not** track bash/external file changes; keep using Git (§26.4). |
+| Memory layers | `CLAUDE.md` = team contract (shared); `MEMORY.md` = Claude's own machine-local notebook (not shared) (§26.4). |
+| Plugins + expanded hooks | Plugins ship Skills/agents/hooks/MCP as one versioned unit; `SubagentStart`/`PreCompact`/`SessionEnd` add fleet-scale observability and policy (§26.5). |
+| Context is a budget | MCP tool search and managed MCP lazily load only the tools a task needs, keeping the window solvent at scale (§26.5). |
+| Unattended safety | Headless `-p` + `--json-schema` + `--bare` for deterministic CI; prefer the `auto` classifier or `dontAsk` over `bypassPermissions`, and back rules with hooks (§26.6). |
+
+> **Beyond the foundations exam.** Chapter 5 is the single interactive session; this chapter is the production system on top of it — a fleet of agents that holds a plan, isolates blast radius, recovers from mistakes, and runs unattended under guardrails you can prove. If you can design and defend the migration job in §26.7, you understand modern Claude Code as infrastructure.
 
 # Chapter 27: Evals for Agents
 
 > *Reference — beyond the exam scope, but essential in practice.* Docs: [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents).
 
-You can't improve (or safely ship) what you don't measure. Evals are the test suite for agents.
+You cannot improve — or safely ship — what you do not measure. For a single prompt you can eyeball the output; for a **production agent** that plans, calls tools, spawns subagents, and runs for dozens of turns, "eyeballing" does not scale and does not catch regressions. **Evals are the test suite for agents**: a repeatable harness that runs the agent against representative tasks and scores both *what* it produced and *how* it got there.
 
-- **Three grader types** — **code** (deterministic checks: did the file compile? does the JSON validate?), **model-based** ("LLM-as-judge" for open-ended quality against a rubric), and **human** (the gold standard for ambiguous cases; use it to calibrate the others).
-- **Grade outcomes *and* trajectories** — not just "was the final answer right," but "did it take a sensible path" (which tools, in what order, how many turns). A right answer via a broken path will break on the next task.
-- **Handle non-determinism** — agents vary run to run; use **pass@k** (does it succeed within k attempts?) and run multiple trials rather than judging a single run.
-- **Realistic tasks** — evaluate on representative, end-to-end tasks (ideally from production traffic), not toy prompts.
-- **Why it pays off** — a solid eval set lets you upgrade models in days, catch regressions before they reach users, and tune `effort`/prompts/tools with evidence instead of vibes. Without evals, bugs surface in production.
+This chapter is the measurement layer behind the generator–evaluator loop (Chapter 16) and the verification step in a harness (Chapter 15). Without it, every model swap, prompt edit, or tool change is a blind bet; with it, you upgrade models in days, catch regressions before users do, and tune `effort`/prompts/tools with evidence instead of vibes. We cover six things you should be able to build and defend:
 
-This is the measurement layer behind the generator–evaluator loop (Chapter 16) and the verification step in a harness (Chapter 15).
+- **The three grader types** (§27.1) — code, model-based, and human, and when each is the right tool.
+- **Trajectory vs final-answer evaluation** (§27.2) — why a right answer via a broken path is a latent bug.
+- **LLM-as-judge done right** (§27.3) — rubrics, calibration, and the bias traps that silently inflate scores.
+- **Golden sets and regression suites** (§27.4) — the curated tasks that turn "it feels better" into a number.
+- **Metrics and CI gating** (§27.5) — pass@k, non-determinism, and pass/fail gates that block bad deploys.
+- **Eval-driven iteration** (§27.6) — the flywheel that turns failures into new test cases.
+
+§27.7 then builds a complete eval suite for a code-migration agent end-to-end, and §27.8 distills the key takeaways.
+
+## 27.1 The Three Grader Types
+
+Every eval reduces to one question — *was this run good?* — answered by one of three graders. They trade off cost, scalability, and the kind of quality they can judge.
+
+```mermaid
+flowchart TD
+    R[Agent run<br/>final answer + trajectory] --> Q{What are we grading?}
+    Q -->|Verifiable fact| C[Code grader<br/>compiles, tests pass, JSON valid]
+    Q -->|Open-ended quality| M[Model grader<br/>LLM-as-judge vs rubric]
+    Q -->|Ambiguous or high-stakes| H[Human grader<br/>expert review]
+    C --> S[Score and aggregate]
+    M --> S
+    H --> S
+    H -. calibrates .-> M
+```
+
+**Code graders** are deterministic checks: did the file compile, do the unit tests pass, does the output validate against a JSON schema, does the diff apply cleanly, is the SQL syntactically valid? Use them wherever "correct" is mechanically checkable. They are fast, free, and 100% reproducible — **prefer them whenever a task can be made verifiable.** Pitfall: they only measure what you can express as code, so they say nothing about tone, helpfulness, or whether the reasoning was sound.
+
+**Model-based graders ("LLM-as-judge")** score open-ended quality against a rubric — was the summary faithful, was the explanation clear, did the answer address the question? They scale to thousands of cases and judge things code cannot. Trade-off: a judge is itself a probabilistic model and brings its own biases (§27.3), so an uncalibrated judge can be confidently wrong.
+
+**Human graders** are the gold standard for ambiguous, subjective, or high-stakes cases. Their real job in a mature pipeline is **calibration**: you don't have humans grade every run (too slow, too expensive) — you have them label a sample, then verify that your code/model graders agree with the humans. If judge and human disagree, the judge — not the human — is wrong, and you fix the rubric.
+
+> **Rule of thumb:** make the task verifiable and use a code grader; if you can't, use a model grader and calibrate it against humans; reserve human grading for calibration and the genuinely subjective tail.
+
+## 27.2 Trajectory vs Final-Answer Evaluation
+
+The most common eval mistake is grading only the **final answer**. For agents that is necessary but not sufficient, because the *path* matters:
+
+- A correct answer reached by calling the wrong tools, in the wrong order, after 40 turns of flailing is a **latent failure** — it will break on the next task, blow your latency budget, or cost 10x in tokens.
+- A wrong answer reached by a *sensible* path is often a one-line fix (a tool returned bad data); a wrong answer from a *broken* path is a design problem.
+
+So evaluate two layers:
+
+| Layer | Question | Example checks |
+|---|---|---|
+| **Final-answer (outcome)** | Is the end result correct/useful? | Tests pass; summary is faithful; refund amount is right |
+| **Trajectory (process)** | Was the path sensible and efficient? | Right tools chosen; no redundant calls; turn count within budget; no policy-violating actions attempted; recovered from the one transient error |
+
+Trajectory evals catch the failures outcome evals miss: an agent that *guesses* the answer without reading the file, one that loops on the same failing command, one that tries a forbidden action and only gets blocked by a hook (§3.5). **Pitfall:** over-specifying the trajectory turns the eval into a brittle script — if you assert the *exact* tool sequence, every legitimate strategy change fails the test. Assert *properties* of the path (these tools were used, this forbidden action was never attempted, turns ≤ N), not a verbatim transcript.
+
+## 27.3 LLM-as-Judge Done Right
+
+A model grader is only as trustworthy as its rubric and its calibration. Three practices separate a useful judge from a number-generator.
+
+**1. Give the judge a concrete rubric, not "rate 1–10."** Vague scales produce noisy, unreproducible scores. Decompose quality into explicit, checkable criteria and prefer pass/fail or a short ordinal scale per criterion:
+
+```
+Score the agent's answer against the reference. For EACH criterion, output pass/fail + one-line reason:
+  - faithful:    every claim is supported by the retrieved sources (no fabrication)
+  - complete:    addresses all parts of the user's question
+  - grounded:    cites the specific source for each factual claim
+  - safe:        attempts no action outside the stated scope
+Then output an overall verdict: PASS only if faithful AND safe are both pass.
+```
+
+**2. Force reasoning before the verdict, and make it structured.** Have the judge explain *why* before it scores (this is just chain-of-thought for grading), and return a parseable object so CI can gate on it:
+
+```python
+class JudgeVerdict(BaseModel):
+    faithful: bool
+    complete: bool
+    grounded: bool
+    safe: bool
+    reasoning: str          # filled BEFORE the booleans in the prompt ordering
+    verdict: Literal["PASS", "FAIL"]
+```
+
+**3. Defend against judge bias** — these inflate scores silently and are the difference between an eval you can trust and one you can't:
+
+```mermaid
+flowchart TD
+    B[LLM-as-judge biases] --> P[Position bias<br/>favors first option shown]
+    B --> V[Verbosity bias<br/>longer equals better]
+    B --> N[Self-enhancement bias<br/>prefers its own model family]
+    B --> L[Leniency drift<br/>says pass when unsure]
+    P --> Mp[Randomize option order<br/>per case]
+    V --> Mv[Strip length cues<br/>score on rubric only]
+    N --> Mn[Judge with a DIFFERENT<br/>model than the agent]
+    L --> Ml[Require evidence per criterion<br/>plus human-calibrated threshold]
+```
+
+- **Position / order bias** — when comparing two outputs, a judge favors whichever it sees first. Mitigation: randomize order per case, or run both orderings and require agreement.
+- **Verbosity bias** — judges rate longer answers higher regardless of correctness. Mitigation: rubric-only scoring; don't let length leak in.
+- **Self-enhancement bias** — a judge prefers outputs from its own model family. Mitigation: **never judge an agent with the same model that produced the answer** when you can avoid it; use a different (often stronger) model as judge.
+- **Leniency / sycophancy drift** — judges default to "pass" when uncertain. Mitigation: demand per-criterion evidence and set the PASS threshold against human-labeled data, not intuition.
+
+**The non-negotiable:** before you trust a judge, measure its **agreement with human labels** on a calibration set. If they don't agree, the judge is miscalibrated — fix the rubric and re-measure; do not ship scores from an unvalidated judge.
+
+## 27.4 Golden Sets and Regression Suites
+
+An eval set is only as good as its tasks. Two curated collections do most of the work.
+
+**Golden set** — a hand-curated set of representative tasks with known-good reference outputs (or accept/reject criteria). It defines "good" for your agent. Keys to a useful golden set:
+
+- **Realistic and end-to-end** — draw from **production traffic** where possible, not toy prompts. The eval must look like what users actually send, including the messy, ambiguous, multi-step ones.
+- **Cover the distribution** — include the easy majority *and* the hard tail (edge cases, adversarial inputs, ambiguous requests, the failure modes you've seen).
+- **Stable references** — pin reference outputs or criteria so a passing run today still passes tomorrow unless the agent genuinely changed.
+
+**Regression suite** — a frozen set that must never get worse. The discipline that makes this a flywheel: **every production bug becomes a permanent regression case.** When the agent fails in the wild, you (1) reproduce it as a minimal task, (2) add it to the suite with the correct expected behavior, (3) fix the agent, (4) confirm the case now passes. The bug can never silently return.
+
+```mermaid
+flowchart TD
+    Prod[Production failure observed] --> Repro[Reproduce as a minimal task]
+    Repro --> Add[Add to regression suite<br/>with expected behavior]
+    Add --> Fix[Fix prompt, tool, or model]
+    Fix --> Run[Re-run full eval suite]
+    Run --> G{All cases pass?}
+    G -->|no| Fix
+    G -->|yes| Ship[Ship and keep the case forever]
+```
+
+**Pitfall — overfitting to the eval set.** If you tune the agent until it aces a *fixed, fully visible* set, you've optimized for the test, not the task. Defenses: keep a **held-out** slice you never tune against, refresh the set from new production traffic periodically, and watch for the eval score rising while user complaints don't fall.
+
+## 27.5 Metrics and CI Gating
+
+Agents are **non-deterministic** — the same input can produce different runs (tool ordering, sampling, transient errors). Judging a single run is therefore noisy. Two ideas make scoring honest, and one makes it enforceable.
+
+**Run multiple trials.** Execute each task k times and report a distribution, not a point. The headline metric for agents is **pass@k** — *does the agent succeed within k attempts?* — which captures "can it get there if it tries a few times." Track the complement too: a task that passes at k=3 but fails at k=1 is *flaky*, and flakiness is itself a defect worth a separate metric. Useful companions: **pass^k** (succeeds on *all* k tries — a reliability bar), success rate, p50/p95 turn count and token cost, and time-to-completion.
+
+**Gate CI on the suite.** Wire the eval suite into the pipeline so a regression cannot merge. A typical gate:
+
+```yaml
+# CI eval gate (pseudocode)
+- run: python run_evals.py --suite regression --k 3 --out results.json
+- run: |
+    pass_rate = results.passed / results.total
+    assert pass_rate >= 0.95          # absolute floor
+    assert pass_rate >= baseline.pass_rate - 0.02   # no regression vs main
+    assert results.p95_turns <= 25    # trajectory budget, not just outcome
+```
+
+Gate on **outcome and trajectory** (the p95-turns line above), and gate **relative to a baseline**, not only an absolute floor — a change that quietly drops pass rate from 0.97 to 0.95 still passes an absolute 0.95 floor but should fail the no-regression check. **Pitfall:** flaky evals that fail randomly train the team to ignore the gate; fix flakiness (raise k, stabilize references, isolate external deps) rather than disabling the check.
+
+## 27.6 Eval-Driven Iteration
+
+Evals are not a one-time gate before launch; they are the **steering wheel** for ongoing development. The loop mirrors the generator–evaluator pattern of Chapter 16, but applied to the *agent's lifecycle* rather than a single task:
+
+1. **Run** the agent against the suite.
+2. **Score** with code + model graders; sample human review on the boundary.
+3. **Triage** failures into buckets (bad tool data, prompt ambiguity, model limitation, missing capability).
+4. **Change one thing** — prompt, tool, model, or `effort` — to address the biggest bucket.
+5. **Re-run** and compare against the baseline; keep the change only if the metric improves with no regression.
+6. **Promote** every newly discovered failure into the regression suite (§27.4).
+
+This is what lets you **upgrade models in days**: when a new model ships, you point the suite at it and read off pass@k, cost, and p95 latency deltas — an evidence-based decision instead of a guess. It is also how you choose `effort` levels, compare prompt variants, and decide whether a new tool actually helps. **The discipline:** change one variable at a time and let the eval — not intuition — decide.
+
+## 27.7 End-to-End Case Study: An Eval Suite for a Code-Migration Agent
+
+The pieces above only matter when they fit together. Here is a complete eval suite for a realistic, high-stakes agent — one that migrates a Python service from `requests` to `httpx` across a repository, editing code, running tests, and opening a PR.
+
+### Requirements
+
+- The agent takes a repository and a migration spec and produces a branch with the changes.
+- **Verifiable outcome:** after migration, the project must still build and its existing test suite must pass.
+- **Sensible trajectory:** it should read files before editing them, run tests before opening a PR, and never touch files outside the migration scope.
+- **Open-ended quality:** the PR description must accurately summarize what changed and call out anything risky.
+- Runs are non-deterministic, and the agent must gate the team's CI — so the eval must be reproducible and produce a hard pass/fail.
+
+### Eval architecture
+
+```mermaid
+flowchart TD
+    Tasks[Golden plus regression tasks<br/>frozen repos and specs] --> Runner[Eval runner<br/>k trials per task]
+    Runner --> Traj[Trajectory record<br/>tools, order, turns]
+    Runner --> Out[Final output<br/>branch and diff and PR text]
+    Out --> Code[Code graders<br/>build passes and tests pass]
+    Traj --> Tcheck[Trajectory checks<br/>read before edit and in scope]
+    Out --> Judge[LLM-as-judge<br/>PR description quality]
+    Code --> Agg[Aggregate to pass at k]
+    Tcheck --> Agg
+    Judge --> Agg
+    Agg --> Gate{Meets gate?}
+    Gate -->|yes| Merge[Allow merge]
+    Gate -->|no| Block[Block and triage]
+```
+
+The runner replays each frozen task k times; **code graders** decide the objective outcome (build + tests), **trajectory checks** assert process properties, and an **LLM-as-judge** scores the one genuinely open-ended artifact (the PR prose). Results aggregate to pass@k and feed a hard CI gate.
+
+### Implementation
+
+Define the graders. Code graders own the verifiable outcome — these are the source of truth:
+
+```python
+def grade_outcome(run) -> dict:
+    return {
+        "builds":      run.exit_code("uv build") == 0,
+        "tests_pass":  run.exit_code("pytest -q") == 0,
+        "no_requests": "import requests" not in run.diff_added_lines(),  # migration actually happened
+    }
+```
+
+Trajectory checks assert *properties* of the path, never an exact transcript (§27.2):
+
+```python
+def grade_trajectory(trace) -> dict:
+    edited = trace.files_edited()
+    return {
+        "read_before_edit": all(trace.read_before_edit(f) for f in edited),
+        "in_scope":         all(f in trace.allowed_paths for f in edited),
+        "tested_before_pr": trace.index_of("run_tests") < trace.index_of("open_pr"),
+        "within_budget":    trace.turn_count <= 25,
+    }
+```
+
+The LLM-as-judge scores only the PR description, with a concrete rubric and — critically — **a different model than the agent**, plus randomized comparison order to fight the §27.3 biases:
+
+```python
+def grade_pr_text(pr_text, diff) -> JudgeVerdict:
+    return judge(
+        model="claude-sonnet-4-6",          # NOT the model that wrote the PR -> avoids self-enhancement bias
+        rubric=PR_RUBRIC,                    # faithful / complete / flags-risk, each pass/fail
+        inputs={"pr_text": pr_text, "diff": diff},
+        randomize_option_order=True,
+    )
+```
+
+Aggregate to pass@k and gate (§27.5). A task PASSES a trial only if outcome **and** trajectory **and** judge all pass:
+
+```python
+def passed(task) -> bool:
+    trials = [run_agent(task) for _ in range(K)]            # K trials -> non-determinism
+    def ok(r):
+        return (all(grade_outcome(r).values())
+                and all(grade_trajectory(r.trace).values())
+                and grade_pr_text(r.pr_text, r.diff).verdict == "PASS")
+    return any(ok(r) for r in trials)                       # pass@k
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Dev as Engineer
+    participant CI as CI pipeline
+    participant Run as Eval runner
+    participant Ag as Migration agent
+    participant Cg as Code graders
+    participant J as LLM judge
+    Dev->>CI: open PR changing the agent prompt
+    CI->>Run: run regression suite, k equals 3
+    Run->>Ag: task migrate-service-A, trial 1
+    Ag-->>Run: branch, diff, PR text, trajectory
+    Run->>Cg: build and tests on the branch
+    Cg-->>Run: build pass, tests pass
+    Run->>J: score PR description vs rubric
+    J-->>Run: verdict PASS, faithful and flags-risk both pass
+    Run-->>CI: pass at 3 equals 0.94, p95 turns equals 22
+    CI-->>Dev: gate FAILED, 0.94 below baseline 0.97, blocked
+```
+
+Notice the gate **failed even though tests passed**: the new prompt dropped pass@3 from 0.97 to 0.94 — a regression the no-regression check caught that an absolute 0.95 floor alone would have missed. The engineer triages, fixes, and the failing tasks become permanent regression cases.
+
+### Validation
+
+- **Judge-calibration test:** on a human-labeled sample of PR descriptions, assert the judge agrees with humans ≥ 90%; if not, the rubric — not the human label — is wrong (§27.3).
+- **Anti-overfit test:** keep a held-out task slice the team never tunes against; if held-out pass@k diverges from the visible set, you're overfitting the eval (§27.4).
+- **Flakiness test:** a task passing at k=3 but failing at k=1 is flagged flaky and triaged, not silently accepted (§27.5).
+- **Regression test:** every production failure must appear as a frozen case that now passes (§27.4).
+
+### Common pitfalls
+
+- Grading only the final diff and skipping trajectory — the agent that edits out-of-scope files still "passes" the build (§27.2).
+- Judging the PR text with the same model that wrote it — self-enhancement bias inflates the score (§27.3).
+- Gating on an absolute floor only — a quiet drop from 0.97 to 0.95 slips through; gate against the baseline too (§27.5).
+- Tuning until the visible set is perfect — you optimized the test, not the agent (§27.4).
+
+## 27.8 Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| Three grader types | Code (verifiable), model (open-ended, calibrate it), human (gold standard, for calibration) — prefer code whenever a task can be made checkable (§27.1). |
+| Trajectory vs final answer | Grade the path *and* the outcome; assert path *properties*, not a verbatim tool sequence (§27.2). |
+| LLM-as-judge | Concrete rubric, reasoning-before-verdict, a *different* model than the agent, and bias mitigation; validate against human labels before trusting it (§27.3). |
+| Golden + regression sets | Realistic end-to-end tasks from production traffic; every production bug becomes a permanent regression case; keep a held-out slice (§27.4). |
+| Metrics + CI gating | Agents are non-deterministic — run k trials, report **pass@k**, and gate CI on outcome *and* trajectory *and* against a baseline, not just an absolute floor (§27.5). |
+| Eval-driven iteration | Change one variable at a time; let the eval decide; this is what lets you upgrade models in days with evidence, not vibes (§27.6). |
+
+> **The measurement layer for everything else.** Evals are how the harness (Chapter 15) verifies work and how the generator–evaluator loop (Chapter 16) knows when to stop. An agent you cannot measure is an agent you cannot safely improve or ship.
 
 ---
 
@@ -9960,7 +10477,21 @@ This is the measurement layer behind the generator–evaluator loop (Chapter 16)
 
 > *Reference — the exam treats model comparison as out-of-scope; this is for real builds.* Docs: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview) · query live via the [Models API](https://platform.claude.com/docs/en/api/models).
 
-Current models (mid-2026):
+The foundations exam tells you *how* to wire an agent — the loop, hooks, MCP, evals. It deliberately stays silent on *which model* sits behind each call, because the lineup moves faster than any exam can. But the moment you run an agent in production, model selection becomes one of the highest-leverage decisions you make: it sets your per-request cost, your tail latency, and the ceiling on what the agent can actually do. A multi-agent system that calls one model for everything is almost always either over-paying (a flagship reasoning model classifying tickets) or under-delivering (a fast cheap model attempting a system migration). This chapter is about engineering that decision deliberately.
+
+By the end you should be able to:
+
+- **Read the 2026 lineup** (§28.1) — the four families, their price/context/output envelopes, and what each is *for*.
+- **Choose a model per task** (§28.2) — a decision procedure driven by task complexity, latency budget, and the cost of being wrong.
+- **Route a workload across tiers** (§28.3) — a cheap classifier in front of expensive models, and the tiered coordinator/subagent pattern.
+- **Drive cost down without losing quality** (§28.4) — prompt caching, the Batch API, output discipline, and the 1M-context trade-off.
+- **Manage IDs, upgrades, and downgrades safely** (§28.5) — pinned snapshots, the Models API, and how to migrate without a 2 a.m. incident.
+
+§28.6 then builds an end-to-end **tiered customer-intelligence pipeline** that routes one stream of work across Haiku, Sonnet, and Opus, and §28.7 distills the engineering rules.
+
+## 28.1 The 2026 Lineup
+
+Four model families are in active service. They differ on three axes that matter to an engineer — **intelligence** (how hard a task it can complete reliably), **cost** (input/output $ per million tokens, abbreviated MTok), and **envelope** (context window in, max output out):
 
 | Model | API ID | Context | Max output | Input / Output ($/MTok) | Use for |
 |---|---|---|---|---|---|
@@ -9969,12 +10500,258 @@ Current models (mid-2026):
 | **Claude Sonnet 4.6** | `claude-sonnet-4-6` | 1M | 128K | $3 / $15 | Best speed/intelligence balance; high-volume |
 | **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | Fast, cheap, simple/latency-critical tasks |
 
-- **Choosing:** start at **Opus 4.8** for complex work; **Sonnet 4.6** for the volume/cost sweet spot; **Haiku 4.5** for speed/cost; **Fable 5** only when you need the absolute ceiling (premium price).
-- **Model IDs are pinned snapshots.** From the 4.6 generation on, IDs are dateless but still pinned (e.g. `claude-opus-4-8`); older ones resolve via dated aliases.
-- **Legacy (still active):** Opus 4.7/4.6, Sonnet 4.5, Opus 4.5. **Deprecated:** Opus 4.1 (retires 2026-08-05). Migrate off retiring models.
-- **Don't hardcode assumptions** — query the **Models API** (`max_input_tokens`, `max_tokens`, `capabilities`) at runtime to discover context windows and feature support, since the lineup changes.
+Read this as a ladder, not a menu. Each rung roughly doubles price for a step up in capability, so the engineering question is never "what is the best model" — it is "what is the **cheapest** rung that clears this task's bar with margin to spare."
 
----
+**The four families in one line each:**
+
+- **Haiku 4.5** — the workhorse for high-volume, well-specified, latency-sensitive work: classification, extraction, routing, formatting, and *cheap subagents* in a larger system. Note the smaller envelope — 200K context, 64K output — which is plenty for these jobs but rules it out for whole-repository reasoning.
+- **Sonnet 4.6** — the default for production at scale. It carries the same 1M-context / 128K-output envelope as the flagships at a fraction of the price, which is why most user-facing agents and high-throughput pipelines should *start* here, not at Opus.
+- **Opus 4.8** — the flagship Opus, and the right default when the task is genuinely complex or agentic: multi-step planning, hard code, long-horizon autonomous loops, nuanced judgment. You pay ~1.7× Sonnet on output; you buy reliability on tasks Sonnet would only *sometimes* get right.
+- **Fable 5** — the absolute ceiling, for the hardest reasoning and longest-horizon work. At $10/$50 it is twice Opus on output, so reserve it for the small slice of tasks where Opus measurably under-delivers; using it as a default is the single most common way to burn budget for no gain.
+
+**Why "intelligence per dollar" beats "most intelligent."** A model that is 10% more accurate but 2× the cost is a *bad* trade for a task the cheaper tier already passes at 99%; it is an *excellent* trade for a task the cheaper tier fails at 60%. The whole chapter is about locating that crossover for each workload rather than guessing.
+
+## 28.2 Choosing a Model per Task
+
+Selection is a function of three inputs, in priority order:
+
+1. **Task complexity / cost of being wrong** — how hard is the reasoning, and what does a wrong answer cost? Mislabeling a support ticket is cheap and recoverable; a botched database migration is not.
+2. **Latency budget** — is a human waiting on the first token (chat, autocomplete), or is this a background job (nightly batch, async pipeline) where seconds don't matter?
+3. **Volume / unit economics** — at 10 requests/day price is noise; at 10M/day the gap between $1 and $5 per MTok is the difference between a viable product and a closed one.
+
+The procedure: **start at the lowest plausible rung, measure against an eval set, and climb only when the data says so.**
+
+```mermaid
+flowchart TD
+    A[Incoming task] --> B{Complex reasoning<br/>or long-horizon agentic?}
+    B -->|no, well specified| C{Latency critical<br/>or very high volume?}
+    C -->|yes| D[Haiku 4.5<br/>fast and cheap]
+    C -->|no| E[Sonnet 4.6<br/>balanced default]
+    B -->|yes| F{Does Sonnet pass<br/>your eval set?}
+    F -->|yes| E
+    F -->|no| G[Opus 4.8<br/>flagship default]
+    G --> H{Still failing on the<br/>hardest cases?}
+    H -->|yes| I[Fable 5<br/>absolute ceiling]
+    H -->|no| G
+```
+
+**How to read the tree.** The default path lands on **Sonnet 4.6** — that is deliberate. You move *down* to Haiku only when the task is simple *and* you need speed or scale; you move *up* to Opus only when an eval set proves Sonnet leaves quality on the table; you reach **Fable 5** only at the very top, for the residual cases Opus still misses.
+
+**Pitfalls this tree exists to prevent:**
+
+- **Defaulting to the flagship "to be safe."** This is the most expensive mistake in the chapter. If Haiku passes ticket-classification at 99.2% against your labeled set, running Opus there buys 0.3 points of accuracy for 5× the input cost and 5× the output cost — pure waste at volume.
+- **Reaching for a cheaper model on a task that needs judgment.** The inverse error: using Haiku for nuanced policy reasoning or multi-file refactoring, where it fails silently and ships wrong answers that look confident. Cheap is only cheap if it's *correct*.
+- **Choosing by vibes instead of an eval.** "It felt smarter" is not a selection criterion. The defensible answer to "why this model" is always a number: accuracy/pass-rate on a representative eval set at a measured cost-per-task (this is the Chapter on evals, applied).
+- **Forgetting the envelope.** Haiku's 200K context / 64K output is ample for classification but cannot hold a large repository or emit a long document — a capability limit no amount of prompting fixes. Match the envelope to the job before you compare price.
+
+## 28.3 Routing a Workload Across Tiers
+
+Most real systems are not one task; they are a *mix*. The cost win comes from **not paying flagship prices for the 80% of traffic that is easy.** Two patterns do almost all the work.
+
+### Pattern A — Cheap router in front of expensive models
+
+A small, fast model triages each request and dispatches it to the right tier. The router itself is cheap (Haiku), so the overhead is negligible; the savings come from keeping easy traffic off Opus.
+
+```mermaid
+flowchart TD
+    U[User request] --> R[Router<br/>Haiku 4.5 classifier]
+    R -->|simple FAQ| H[Haiku 4.5<br/>answer directly]
+    R -->|standard task| S[Sonnet 4.6<br/>handle end to end]
+    R -->|complex or high stakes| O[Opus 4.8<br/>deep reasoning]
+    H --> Z[Response]
+    S --> Z
+    O --> Z
+    R -. low confidence .-> O
+```
+
+The router's job is *classification, not solving* — so it must be cheap and fast, and it must **fail upward**: when the router is unsure, route to the stronger model, never the weaker one. Misrouting a hard case to Haiku produces a confident wrong answer (expensive to clean up); misrouting an easy case to Opus merely overspends on that one request. The asymmetry tells you which way to bias.
+
+### Pattern B — Tiered multi-agent: strong coordinator, cheap subagents
+
+This builds directly on the hub-and-spoke topology from Chapter 3, but assigns a *model per role*. The coordinator does the hard, irreversible reasoning — decomposition, validation, final synthesis — so it runs **Opus 4.8**. The subagents do narrow, well-specified work (fetch a page, extract fields, summarize one document), so they run **Haiku 4.5**. You concentrate spend where judgment lives and economize everywhere else.
+
+```mermaid
+flowchart TD
+    U[User request] --> C[Coordinator<br/>Opus 4.8 — plan and validate]
+    C -->|Task: fetch| S1[Subagent<br/>Haiku 4.5]
+    C -->|Task: extract| S2[Subagent<br/>Haiku 4.5]
+    C -->|Task: summarize| S3[Subagent<br/>Haiku 4.5]
+    S1 -. result .-> C
+    S2 -. result .-> C
+    S3 -. result .-> C
+    C --> R[Synthesized, validated answer]
+```
+
+**Why this is the right default for multi-agent cost control:** the coordinator runs *once* per request but makes the decisions that are expensive to get wrong; the subagents may run five or ten times in parallel but each does a task a cheap model handles at near-flagship quality. Inverting this — a cheap coordinator delegating to expensive subagents — is an anti-pattern: you've put the cheap model in charge of the irreversible decisions and paid a premium for the easy ones.
+
+**Trade-offs and pitfalls:**
+
+- **Routing adds a hop.** The router call costs tokens and latency. It pays for itself only when the traffic mix is genuinely skewed (lots of easy requests). For a low-volume agent where almost everything is hard, skip routing and just run Sonnet or Opus directly — a router there is over-engineering.
+- **Mixed models mean mixed behavior.** Haiku and Opus phrase, format, and refuse differently. If outputs from different tiers are concatenated or compared, normalize them (a `PostToolUse`-style step) so downstream code isn't surprised by tier-dependent formatting.
+- **A wrong tier boundary silently degrades quality.** If the router sends too much to Haiku, accuracy drops without an error being raised. Monitor per-tier pass-rate, not just aggregate latency, so a drifting boundary is visible.
+
+## 28.4 Driving Cost Down Without Losing Quality
+
+Picking the right tier is the big lever; these four reduce the bill *within* a tier, often by more than the gap between tiers.
+
+- **Prompt caching.** Cache the stable prefix — system prompt, tool definitions, long few-shot examples, a reused document. Cache **reads cost ~0.1× of base input price**; **writes ~1.25×** — so a large reused preamble pays for itself within a couple of requests. Keep stable content first and volatile content last (render order is `tools` → `system` → `messages`); a timestamp or per-request ID in the system prompt silently invalidates the whole cache. Verify with `usage.cache_read_input_tokens` — if it stays zero across requests that *should* share a prefix, a silent invalidator is at work.
+- **Batch API — 50% off.** Any work that isn't latency-sensitive (nightly enrichment, bulk classification, eval runs, back-catalog processing) belongs on the **Batch API at half price**. The trade is latency, not quality: same model, same envelope, asynchronous return. For a background pipeline this is free money.
+- **Output discipline.** Output is **5× the price of input on every tier**, so a rambling response costs more than the prompt that asked for it. A tight `max_tokens` and a system prompt that demands concise, structured output cut the expensive half of the bill directly. Asking for JSON instead of prose is both cheaper and more reliable to parse.
+- **Don't buy context you don't use.** The 1M-context envelope (Sonnet/Opus/Fable) is a capability, not a target. Stuffing an entire knowledge base into every prompt to "give the model everything" inflates input cost on *every* call and can *degrade* quality by burying the relevant facts. Retrieve the few relevant chunks instead — cheaper and usually more accurate. Reserve true 1M-context fills for tasks that genuinely need whole-corpus reasoning, and cache the fixed part when you do.
+
+```mermaid
+flowchart TD
+    A[Per-request cost too high] --> B{Latency-sensitive?}
+    B -->|no| C[Move to Batch API<br/>50 percent off]
+    B -->|yes| D{Large stable prefix<br/>reused across calls?}
+    D -->|yes| E[Add prompt caching<br/>reads about 0.1x]
+    D -->|no| F{Output long or<br/>unbounded?}
+    F -->|yes| G[Tighten max_tokens<br/>demand structured output]
+    F -->|no| H[Re-check the tier<br/>maybe drop to Sonnet or Haiku]
+```
+
+**The order matters:** exhaust the free wins (batch, caching, output discipline) *before* downgrading the model, because they cut cost without touching quality. Downgrading the tier is the last lever, and the only one that risks accuracy — so it must be gated by an eval.
+
+## 28.5 IDs, Upgrades, and Downgrades
+
+Model selection is not a one-time decision; the lineup changes under you, and how you encode the choice determines whether an upgrade is a config flip or an outage.
+
+- **IDs are exact, pinned snapshots — never construct them.** `model` is an exact string, not a fuzzy alias you decorate. From the 4.6 generation on, IDs are *dateless but still pinned* (e.g. `claude-opus-4-8`); older models resolve via dated aliases. A typo (`claude-sonnet-4.6`) or an invented date suffix (`claude-opus-4-8-20260114`) returns **404 `not_found_error`**. Pin the model in one config constant, not scattered across the codebase.
+- **Discover capabilities at runtime, don't hardcode them.** Context windows, output caps, and feature support move with the lineup. Query the **Models API** (`GET /v1/models/{id}` → `max_input_tokens`, `max_tokens`, `capabilities`) rather than baking "200K" or "128K" into your code. This is what lets a downstream service adapt when you swap tiers.
+- **Legacy and deprecation.** Older models stay active for a while — Opus 4.7/4.6, Sonnet 4.5, Opus 4.5 are still callable — but deprecated ones retire on a date (e.g. Opus 4.1 retires 2026-08-05). Track retirement dates and migrate *before* the cutoff, not after the 404s start.
+- **Upgrade and downgrade deliberately, behind an eval.** "Upgrade" (Sonnet→Opus) when quality metrics on real traffic miss target on hard cases; "downgrade" (Opus→Sonnet, Sonnet→Haiku) when an eval shows the cheaper tier now matches quality — newer cheap models often clear bars that needed a flagship a generation ago. Never flip a production model blind: run the candidate against your eval set, compare pass-rate *and* cost-per-task, then change the one config constant.
+
+```mermaid
+flowchart TD
+    A[Considering a model change] --> B{Direction?}
+    B -->|upgrade for quality| C[Run candidate on eval set]
+    B -->|downgrade for cost| C
+    C --> D{Pass-rate meets target?}
+    D -->|no| E[Keep current model]
+    D -->|yes| F{Cost-per-task acceptable?}
+    F -->|no| E
+    F -->|yes| G[Flip the single config constant<br/>and monitor]
+```
+
+## 28.6 End-to-End Case Study: A Tiered Customer-Intelligence Pipeline
+
+The patterns above only matter when they fit together under a real budget. Here is a complete system that routes one stream of inbound customer messages across all three working tiers, paying flagship prices only where they earn their keep.
+
+### Requirements
+
+- Ingest a high-volume stream of inbound messages (support tickets, sales enquiries, feedback) — tens of thousands per day.
+- **Triage** every message into a category and urgency, fast and cheap (a human or queue is waiting).
+- **Resolve** standard requests end-to-end with a customer-facing reply.
+- **Escalate** complex or high-stakes cases (contract disputes, security reports, churn risk) to deep reasoning, and draft a researched response.
+- A separate **nightly** job enriches the day's archive (sentiment, themes, trend report) — not latency-sensitive.
+- Keep blended cost per message low without letting accuracy on the hard 10% slip.
+
+### Architecture — a model per tier
+
+```mermaid
+flowchart TD
+    M[Inbound message stream] --> T[Triage<br/>Haiku 4.5 classifier]
+    T -->|simple FAQ| FA[Haiku 4.5<br/>direct answer]
+    T -->|standard request| RS[Sonnet 4.6<br/>resolve end to end]
+    T -->|complex or high stakes| CO[Coordinator<br/>Opus 4.8]
+    CO -->|Task: pull history| SA1[Subagent<br/>Haiku 4.5]
+    CO -->|Task: search policy| SA2[Subagent<br/>Haiku 4.5]
+    SA1 -. result .-> CO
+    SA2 -. result .-> CO
+    CO --> DR[Drafted, validated reply]
+    FA --> OUT[Outbound reply]
+    RS --> OUT
+    DR --> OUT
+    M -. archived .-> NB[Nightly Batch API<br/>Sonnet 4.6 at 50 percent off]
+```
+
+Each rung is matched to its job: **Haiku** triages and answers FAQs (cheap, fast, simple); **Sonnet** resolves the standard bulk (balanced default); **Opus** coordinates the hard cases and validates the draft, delegating the *fetching* to **Haiku subagents** so flagship tokens are spent only on judgment; the **nightly archive** runs on the **Batch API at half price** because nothing is waiting.
+
+### Implementation
+
+Pin every model in one config block, so a tier change is a one-line edit and never a constructed ID:
+
+```python
+MODELS = {
+    "triage":      "claude-haiku-4-5",   # cheap, fast classification
+    "faq":         "claude-haiku-4-5",   # simple direct answers
+    "standard":    "claude-sonnet-4-6",  # balanced default for the bulk
+    "coordinator": "claude-opus-4-8",    # hard reasoning + validation
+    "subagent":    "claude-haiku-4-5",   # narrow fetch/extract under the coordinator
+    "nightly":     "claude-sonnet-4-6",  # quality enrichment, run via Batch API
+}
+```
+
+The router classifies cheaply and **fails upward** — low confidence goes to the stronger tier, never the weaker one:
+
+```python
+def route(message) -> str:
+    result = classify(message, model=MODELS["triage"])   # Haiku: category + confidence
+    if result.category == "faq":
+        return "faq"
+    if result.complex or result.high_stakes or result.confidence < 0.7:
+        return "coordinator"          # bias to Opus when unsure — cost of a wrong cheap answer is higher
+    return "standard"
+```
+
+Cache the stable prefix on the high-volume Sonnet path so the reused system prompt and policy text are billed at ~0.1× after the first call:
+
+```python
+resolve(
+    message,
+    model=MODELS["standard"],
+    system=[{"type": "text", "text": POLICY_PREAMBLE,
+             "cache_control": {"type": "ephemeral"}}],   # stable prefix -> cache read ~0.1x
+)
+```
+
+### Execution trace — one hard case
+
+```mermaid
+sequenceDiagram
+    actor Cust as Customer
+    participant T as Triage (Haiku)
+    participant Co as Coordinator (Opus)
+    participant Sub as Subagent (Haiku)
+    Cust->>T: "Your API leaked my key — I want this escalated"
+    T->>T: classify -> high_stakes, confidence 0.55
+    T->>Co: route up (security + low confidence)
+    Co->>Sub: Task(context: account id, fetch incident history)
+    Sub-->>Co: prior tickets + affected key scope
+    Co->>Co: reason over policy, draft researched reply
+    Co-->>Cust: validated escalation with next steps
+```
+
+Notice the triage model did **not** try to solve the security report — it recognized "high stakes + low confidence" and routed *up*. The expensive Opus reasoning ran only on this hard message; the Haiku subagent did the cheap fetching underneath it. The 80% of traffic that never reached this path was resolved on Haiku and Sonnet at a fraction of the cost.
+
+### Validation
+
+- **Cost test:** compute blended cost-per-message and confirm it sits near the Sonnet/Haiku floor, not the Opus ceiling — if it drifts up, too much traffic is escalating; inspect the router boundary.
+- **Quality test:** track *per-tier* pass-rate on a labeled eval set, not just aggregate. A drop on the Haiku tier means the triage boundary is sending it work it can't handle — tighten the threshold, don't blame the model.
+- **Fail-upward test:** feed deliberately ambiguous hard cases and assert they land on the coordinator, never on Haiku. The router must never send a high-stakes case to the cheap tier.
+- **Batch test:** confirm the nightly job runs on the Batch API (50% off) and that nothing latency-sensitive was accidentally routed there.
+
+### Common pitfalls
+
+- Running the whole pipeline on Opus "for quality" — blended cost explodes for a fraction of a point of accuracy the cheaper tiers already deliver (§28.2).
+- A router that fails *downward* (defaults to Haiku when unsure), shipping confident wrong answers on the hard cases (§28.3).
+- A cheap coordinator delegating to expensive subagents — judgment on the wrong model, premium prices on the easy parts (§28.3).
+- Putting the nightly enrichment on the synchronous API at full price when it has no latency requirement (§28.4).
+- Hardcoding `claude-opus-4-8-20260114` or `"200K"` instead of pinning the dateless ID and querying the Models API — a 404 or a stale assumption waiting to happen (§28.5).
+
+## 28.7 Engineering Focus — Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| The ladder, not the menu | Each tier ~2× the last; pick the **cheapest rung that clears the task with margin**, not the most capable (§28.1). |
+| Selection procedure | Drive by complexity → latency → volume; **start low, climb only when an eval set says so** (§28.2). |
+| Default to Sonnet | Sonnet 4.6 is the production default; move *down* to Haiku for simple/fast/high-volume, *up* to Opus only when quality demands it (§28.2). |
+| Route the mix | A cheap Haiku router in front of expensive tiers; it must **fail upward** when unsure (§28.3). |
+| Tiered multi-agent | Strong coordinator (Opus) + cheap subagents (Haiku); never invert it (§28.3). |
+| Cost levers before downgrades | Caching (~0.1× reads), Batch API (50% off), tight `max_tokens` cut cost *without* touching quality — do these first (§28.4). |
+| IDs and migration | Pin exact dateless IDs, never construct date suffixes (404); query the **Models API** for limits; upgrade/downgrade behind an eval (§28.5). |
+
+> **Beyond the foundations exam.** The exam won't ask you to compare models, but production will — every day, on every request. Master the ladder, the fail-upward router, and the tiered coordinator, and you turn model choice from a guess into an engineered, measurable, and continuously optimizable part of the system.
 
 # Examples of Exam Questions with Explanations
 
