@@ -9714,6 +9714,7 @@ sequenceDiagram
 - **Resource Indicators(RFC 8707)是強制的。** 用戶端必須把每個 token 綁到*此*伺服器的識別碼(`resource`),伺服器則必須拒絕 **audience** 不是自己的 token。這擋住**混淆代理人 / token 直通(passthrough)**攻擊:為伺服器 A 簽發的 token 不得被重放到伺服器 B。絕不接受未檢查 audience 的 bearer token。
 - **伺服器負責驗證;它從不轉發。** 一個常見錯誤是 MCP 伺服器拿了用戶端的 token,直接轉手丟給下游 API。把傳入 token 當作*呼叫者的身分驗證*,然後用伺服器自己的憑證(或適當降權的 token)去做下游呼叫。
 - **在 Managed Agents 裡,你不必自己手寫這套。** 依第 24 章,MCP 驗證透過 **vaults** 提供:Anthropic 以 **URL** 把儲存的憑證比對到伺服器,並**自動更新 OAuth**。你*不*把密鑰放進 agent 的 `mcp_servers` 區塊。在 Claude Code 中對應的是 `/mcp`(工作階段內授權)或 `claude mcp login`。
+- **企業託管授權(Enterprise-Managed Authorization, EMA)** —— 一項**穩定版** MCP 擴充(2026 年 6 月 18 日),透過組織的身分提供者(SSO)集中治理 MCP 存取:管理員為組織啟用某伺服器後,使用者即依既有的群組/角色自動取得存取權 —— 不需逐人 OAuth 同意畫面,且撤銷即時又集中(將使用者移出 IdP 群組 → 各處存取權立即消失)。首發身分提供者為 Okta;支援的伺服器包含 Asana、Atlassian、Canva、Figma、Linear 與 Supabase。來源:[Enterprise-Managed Authorization](https://modelcontextprotocol.io/extensions/auth/enterprise-managed-authorization)。
 
 ## 25.4 Sampling —— 伺服器請用戶端思考
 
