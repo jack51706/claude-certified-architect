@@ -12704,6 +12704,7 @@ Anthropic 的代理式編碼工具——可在終端機、IDE 與雲端執行；
 | **Skills** | 以資料夾為基礎（`SKILL.md`）、漸進揭露的任務專長；預建（xlsx/docx/pptx/pdf）＋透過 Skills API 自訂。 | [skills](https://platform.claude.com/docs/en/agents-and-tools/skills) |
 | **上下文管理** | **壓縮（Compaction）**（接近上限時摘要）與**上下文編輯**（清除過時的工具結果/思考），用於長時間執行。 | [compaction](https://platform.claude.com/docs/en/build-with-claude/compaction) |
 | **記憶工具** | `memory_20250818`——Claude 讀寫 `/memories` 目錄並跨工作階段保存（後端由你負責）。 | [memory-tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool) |
+| **驗證** | 靜態 API key（`sk-ant-…`），或 **Workload Identity Federation（WIF，工作負載身分聯合，2026 年正式上線）**——工作負載在 `POST /v1/oauth/token` 以自有身分供應商（AWS、GCP、Microsoft Entra ID、GitHub Actions、Kubernetes、SPIFFE、Okta）簽發的短期 OIDC JWT，換取一個以**服務帳號**身分運作、僅數分鐘有效且受範圍限制的 Anthropic token。沒有需要產生、輪替或可能外洩的靜態密鑰；涵蓋所有端點、各 SDK 與 Claude Code。 | [workload-identity-federation](https://platform.claude.com/docs/en/manage-claude/workload-identity-federation) |
 
 ---
 

@@ -229,5 +229,8 @@
     "def_zh": "代理的測試套件:以程式碼/模型/人評分者在真實任務上評測,評結果與軌跡;用 pass@k。" },
   { "term": "pass@k", "zh": "pass@k", "tag": "Reliability",
     "def_en": "An eval metric for non-deterministic agents: does it succeed within k attempts? Run multiple trials rather than judging one.",
-    "def_zh": "不確定性代理的評測指標:k 次嘗試內是否成功?跑多次而非只看單次。" }
+    "def_zh": "不確定性代理的評測指標:k 次嘗試內是否成功?跑多次而非只看單次。" },
+  { "term": "Workload Identity Federation (WIF)", "zh": "工作負載身分聯合(WIF)", "tag": "Platform",
+    "def_en": "Authenticate to the Claude API with a short-lived OIDC token from your own identity provider (AWS, GCP, Entra ID, GitHub Actions, Kubernetes, SPIFFE, Okta) instead of a static API key. The token is exchanged at POST /v1/oauth/token for a scoped Anthropic token acting as a service account — no standing secret to rotate or leak.",
+    "def_zh": "以自有身分供應商(AWS、GCP、Entra ID、GitHub Actions、Kubernetes、SPIFFE、Okta)簽發的短期 OIDC token 驗證 Claude API,取代靜態 API key。該 token 在 POST /v1/oauth/token 換取一個以服務帳號身分運作、受範圍限制的 Anthropic token——沒有需要輪替或可能外洩的長期密鑰。" }
 ]

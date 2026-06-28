@@ -12704,6 +12704,7 @@ Everything runs through one endpoint: **`POST /v1/messages`**. Tools and output 
 | **Skills** | Folder-based (`SKILL.md`) task expertise with progressive disclosure; pre-built (xlsx/docx/pptx/pdf) + custom via Skills API. | [skills](https://platform.claude.com/docs/en/agents-and-tools/skills) |
 | **Context management** | **Compaction** (summarize near limit) and **context editing** (clear stale tool results/thinking) for long runs. | [compaction](https://platform.claude.com/docs/en/build-with-claude/compaction) |
 | **Memory tool** | `memory_20250818` — Claude reads/writes a `/memories` directory persisting across sessions (you own the backend). | [memory-tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool) |
+| **Authentication** | Static API keys (`sk-ant-…`), or **Workload Identity Federation (WIF)** (GA 2026) — a workload exchanges a short-lived OIDC JWT from its own identity provider (AWS, GCP, Microsoft Entra ID, GitHub Actions, Kubernetes, SPIFFE, Okta) at `POST /v1/oauth/token` for a scoped, minutes-long Anthropic token that acts as a **service account**. No static secret to mint, rotate, or leak; covers all endpoints, the SDKs, and Claude Code. | [workload-identity-federation](https://platform.claude.com/docs/en/manage-claude/workload-identity-federation) |
 
 ---
 
