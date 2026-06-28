@@ -3872,25 +3872,68 @@ Notice the coordinator *intended* to transfer directly; the **hook redirected it
 
 # Chapter 10: Error Handling in Multi-agent Systems
 
+> Documentation: [Agent SDK](https://platform.claude.com/docs/en/agent-sdk/overview) | [Subagents](https://platform.claude.com/docs/en/agent-sdk/subagents) | [Streaming & errors](https://platform.claude.com/docs/en/api/errors) | [Tool results](https://platform.claude.com/docs/en/build-with-claude/tool-use)
+
+In a single-agent system a failure is usually visible — the loop stops, an exception surfaces, the user sees an error. In a **multi-agent** system failures hide. A subagent times out, returns an empty list, or silently degrades, and the coordinator — which never saw the failure, only the (missing) result — synthesizes a confident final answer over a hole in the data. This chapter is the reliability backbone of **Domain 5 — Context Management and Reliability (15% of the exam)** (specifically §5.3, error propagation), and it is where **Domain 1 — Agent Architecture and Orchestration (27%)** is stress-tested: orchestration that looks correct on the happy path falls apart the first time a spoke fails.
+
+The governing principle of the whole chapter: **a subagent's job on failure is not to recover silently, but to report enough structured context that the *coordinator* can decide what to do.** Recovery is a coordinator-level concern because only the coordinator sees the whole task.
+
+By the end you should be able to reason about six things and assemble them into a resilient orchestrator:
+
+- **Error taxonomy** (§10.1) — classify a failure so the *right* action is even possible.
+- **Anti-patterns** (§10.2) — the four ways multi-agent error handling silently goes wrong.
+- **Structured error reporting** (§10.3) — the subagent → coordinator contract.
+- **Resilience patterns** (§10.4) — retries with backoff, timeouts, circuit breakers, idempotency, graceful degradation.
+- **Error aggregation & coverage annotation** (§10.5) — how the coordinator reports partial success honestly.
+- **A complete resilient travel-booking orchestrator** (§10.6) — end-to-end.
+
+§10.7 distills what the exam tests.
+
 ## 10.1 Error Categories
 
-| Category | Examples | Retryable | Agent action |
+Before you can handle an error you must **classify** it, because the correct action is different for each class. The single most common multi-agent bug is applying the wrong action to a class — retrying a validation error forever, or escalating a transient blip that a single retry would have fixed.
+
+| Category | Examples | Retryable? | Correct agent action |
 |---|---|---|---|
-| **Transient** | Timeout, 503, network failure | Yes | Retry with exponential backoff |
-| **Validation** | Invalid input format, missing required field | No (fix input) | Modify request and retry |
-| **Business** | Policy violation, threshold exceeded | No | Explain to the user; propose an alternative |
-| **Permission** | Access denied | No | Escalate |
+| **Transient** | Timeout, HTTP 503, rate-limit (429), network reset | **Yes** | Retry with exponential backoff + jitter; cap attempts |
+| **Validation** | Invalid input format, missing required field, schema mismatch | **No** (retrying won't help) | Fix the input, then retry once with corrected request |
+| **Business** | Policy violation, threshold exceeded, no availability | **No** | Explain to the user; propose an alternative; do not retry |
+| **Permission** | Access denied, expired credential, scope error | **No** | Escalate to a human / re-auth; never silently swallow |
+
+**Why the classification gate matters (exam angle).** Retryability is a *property of the error class*, not of the situation. A `429 Too Many Requests` is transient — back off and retry. A `400 missing field "destination"` is a validation error — retrying the identical request just burns latency and tokens; you must *change* the request first. The exam frequently presents a failure and asks for the correct response; the trap answer applies a transient strategy (retry) to a non-retryable class (business/validation/permission).
+
+**Pitfall — collapsing classes into one generic "error".** If a subagent reports only "failed", the coordinator cannot pick an action. The whole point of §10.3 is to preserve the *class* (and more) so the coordinator's decision is informed rather than a guess.
+
+**Pitfall — treating "no results" as an error (or vice-versa).** An empty result set from a search that *ran successfully* is a **valid business outcome** ("nothing matched"), not a transient failure. Retrying it is pointless. Conversely, a timeout that *returns nothing* is an access failure that may succeed on retry. Distinguishing these two — which look identical if you only inspect the (empty) payload — is explicitly tested in Domain 5.3 and is the subject of §10.2.
 
 ## 10.2 Error-handling Anti-patterns
 
-| Anti-pattern | Problem | Correct approach |
-|---|---|---|
-| Generic status “search unavailable” | The coordinator can’t decide how to recover | Return error type, query, partial results, alternatives |
-| Silent suppression (empty result = success) | Coordinator thinks there were no matches, but it was a failure | Distinguish “no results” from “search failure” |
-| Aborting the whole workflow on one failure | You lose all partial results | Continue with partial results; annotate gaps |
-| Infinite retries inside a subagent | Latency and wasted resources | Local recovery (1–2 retries), then propagate to coordinator |
+These four anti-patterns are the recurring "wrong answers" in multi-agent reliability questions. Each one destroys information the coordinator needs.
 
-## 10.3 A Structured Subagent Error
+| Anti-pattern | Why it breaks the system | Correct approach |
+|---|---|---|
+| **Generic status** ("search unavailable") | The coordinator can't tell transient from permanent, so it can't choose retry vs. degrade | Return error *type*, the query attempted, partial results, and alternatives (§10.3) |
+| **Silent suppression** (empty result treated as success) | Coordinator believes there were genuinely no matches when the search actually *failed* — a hole in the data presented as fact | Distinguish "no results" (business) from "search failure" (transient); never return `[]` for a crash |
+| **Abort-the-world** (one subagent fails → kill the whole workflow) | You discard the 80% that succeeded; one flaky spoke takes down a multi-hour job | Continue with partial results; annotate the gap (§10.5) |
+| **Infinite in-subagent retries** | Latency and cost balloon; the coordinator is blind to the stall; a circuit never opens | **Local** recovery only (1–2 bounded retries), then propagate a structured error to the coordinator |
+
+```mermaid
+flowchart TD
+    Sub[Subagent hits a failure] --> Cls{Classify the error}
+    Cls -->|transient| Loc[Local recovery<br/>1 to 2 bounded retries<br/>with backoff]
+    Cls -->|validation| Fix[Correct the request<br/>retry once]
+    Cls -->|business or permission| Prop[Propagate immediately<br/>no retry]
+    Loc -->|still failing| Prop
+    Fix -->|still failing| Prop
+    Prop --> Struct[Return STRUCTURED error<br/>type, query, partial, alternatives]
+    Struct --> Coord[Coordinator decides<br/>retry, degrade, reroute, or escalate]
+```
+
+**The division of labor (the exam's core mental model).** The *subagent* does **bounded local recovery** for transient errors and then **reports up** with structure. The *coordinator* owns the **strategic** decision — retry with a different query, route to a backup subagent, drop the section and annotate, or escalate. An anti-pattern is any design where the subagent either (a) retries forever (never reporting up) or (b) reports up with no structure (the coordinator can't decide). Resilience lives in the *interaction*, not in either agent alone.
+
+## 10.3 The Subagent → Coordinator Contract: A Structured Error
+
+A subagent that cannot complete its task should not raise a bare exception or return an empty result. It should return a **structured error object** that gives the coordinator everything it needs to choose a recovery path:
 
 ```json
 {
@@ -3908,13 +3951,90 @@ Notice the coordinator *intended* to transfer directly; the **hook redirected it
 }
 ```
 
-This provides the coordinator with the information needed to decide:
-- Retry with a modified query?
-- Use partial results?
-- Delegate to a different subagent?
-- Continue without this section and annotate the gap?
+Each field exists to answer a specific coordinator question:
 
-## 10.4 Coverage Annotations in the Final Synthesis
+- **`status`** — `success` | `partial_failure` | `failure`. Lets the coordinator branch without parsing prose. (Distinct from "empty success" — see §10.2.)
+- **`failure_type`** — the §10.1 class (`timeout`, `validation`, `business`, `permission`). Drives the *retry-vs-not* decision.
+- **`attempted_query`** — what was tried, so the coordinator can retry *differently* rather than identically.
+- **`partial_results`** — anything that *did* succeed, so partial work is never thrown away (defeats abort-the-world).
+- **`alternative_approaches`** — subagent-suggested next moves; the subagent has the most local context about *why* it failed.
+- **`coverage_impact`** — the precise gap, so the final synthesis can be annotated honestly (§10.5).
+
+With this object the coordinator can decide, deterministically and from data rather than guesswork:
+
+- **Retry with a modified query?** (transient + a narrower alternative)
+- **Use the partial results as-is?** (good-enough coverage)
+- **Delegate to a different subagent / data source?** (the primary is down)
+- **Continue without this section and annotate the gap?** (degrade gracefully)
+
+**Exam angle.** Questions contrast a "thin" error (`{"error": "search failed"}`) against this "thick" structured error and ask which enables better recovery. The structured object wins because it preserves *class*, *partial work*, and *alternatives* — exactly the inputs a recovery decision needs. The thin error forces the coordinator to guess, which usually means abort-the-world or a blind retry.
+
+## 10.4 Resilience Patterns
+
+The structured contract (§10.3) is *what* a subagent reports. The patterns below are *how* it recovers locally before reporting, and how the coordinator stays healthy under repeated failure. These are the named patterns the exam expects you to recognize and place correctly.
+
+### 10.4.1 Retry with Exponential Backoff and Jitter
+
+For **transient** errors only, retry — but not immediately and not forever. Each retry waits longer (exponential), with random **jitter** so that many agents retrying after a shared outage don't synchronize into a "thundering herd" that hammers the recovering service at the same instants.
+
+```python
+import random, time
+
+def call_with_backoff(fn, *, max_attempts=3, base=0.5, cap=8.0):
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except TransientError:
+            if attempt == max_attempts - 1:
+                raise                      # bounded: give up, let caller propagate
+            delay = min(cap, base * (2 ** attempt))   # 0.5s, 1s, 2s ...
+            time.sleep(delay + random.uniform(0, delay))  # full jitter
+```
+
+**Pitfalls:** retrying *non-transient* errors (a 400 will fail identically every time); unbounded attempts (latency/cost blow-up — see §10.2); no jitter (synchronized retries amplify the outage). Retries belong **inside** the subagent as bounded *local* recovery; the *coordinator* does not micro-manage them.
+
+### 10.4.2 Timeouts
+
+Every external call and every `Task` delegation needs a **deadline**. Without one, a single hung dependency stalls the whole orchestration indefinitely — the worst failure mode because nothing reports up. A timeout converts an invisible hang into a *visible, classifiable* `timeout` error that flows through §10.3.
+
+```python
+result = await asyncio.wait_for(subagent.run(task), timeout=20.0)  # else TimeoutError
+```
+
+Budget timeouts hierarchically: the coordinator's overall deadline must exceed the sum (or max, if parallel) of the subagent deadlines plus retry time, or the coordinator will kill subagents that were about to succeed.
+
+### 10.4.3 Circuit Breaker
+
+If a downstream dependency (e.g., the hotel API) is *already* failing, sending it more retrying traffic makes the outage worse and burns your latency budget on calls that will fail. A **circuit breaker** tracks recent failures and, once a threshold is crossed, **opens** — short-circuiting calls to that dependency for a cool-down window and failing fast instead. After the cool-down it goes **half-open**, lets one probe through, and **closes** again on success.
+
+```mermaid
+flowchart TD
+    Closed[CLOSED<br/>calls pass through] -->|failures over threshold| Open[OPEN<br/>fail fast, skip the call]
+    Open -->|cool-down elapsed| Half[HALF-OPEN<br/>allow one probe]
+    Half -->|probe succeeds| Closed
+    Half -->|probe fails| Open
+```
+
+**Exam angle.** The breaker is the antidote to "retry storms": retries (§10.4.1) help an *individual* call ride out a *blip*; the breaker protects the *system* from a *sustained* outage by stopping the retries entirely. Recognize them as complementary, not alternatives — backoff for the transient, breaker for the persistent.
+
+### 10.4.4 Idempotency
+
+When you retry an action with side effects (charge a card, book a seat, send an email), the first attempt **may have succeeded** even though you got a timeout. Retrying naively **double-books**. The fix is an **idempotency key**: the caller generates a unique key per logical operation and sends it on every retry; the downstream service records the key and returns the *original* result for any repeat, performing the side effect **exactly once**.
+
+```python
+key = idempotency_key(booking_id, leg="flight")   # stable across retries
+book_flight(flight_id, idempotency_key=key)        # safe to retry: at-most-once effect
+```
+
+**Rule:** retries (§10.4.1) and idempotency (§10.4.4) are a **pair**. Retrying a non-idempotent side effect is itself an anti-pattern — never enable one without the other.
+
+### 10.4.5 Graceful Degradation & Fallbacks
+
+When a non-critical capability fails permanently, the system should **continue with reduced scope** rather than abort. Define, per capability, what "degraded" looks like: a fallback data source, a cached value, or simply *omitting* an optional section and annotating it (§10.5). Critical capabilities (the ones the task is *for*) may instead require escalation — degradation is for the *optional* parts.
+
+## 10.5 Error Aggregation and Coverage Annotation
+
+When subagents run in parallel, the coordinator receives a **mix** of successes and structured errors. Its job is to **aggregate** them into one honest result — never to hide the failures. The deliverable must make explicit *what is well-supported* versus *where the gaps are*, so a human reading it is not misled into trusting an incomplete section.
 
 ```markdown
 ## Report: AI Impact on Creative Industries
@@ -3930,13 +4050,211 @@ This provides the coordinator with the information needed to decide:
 [research results]
 ```
 
----
+**Why annotation, not omission.** Silently dropping the Music section would be a §10.2 *silent-suppression* failure at the coordinator level: the reader would assume the report is complete. The annotation converts a hidden hole into a *declared* limitation — the reader can decide whether the gap matters and whether to re-run. This is the coordinator-side mirror of the subagent's `coverage_impact` field.
+
+**Exam angle.** A correct multi-agent design **propagates partial success with provenance**: full vs. partial coverage is labeled per section, and the *cause* (which agent, which failure type) is named. Designs that either abort on first failure or present partial data as complete are both wrong.
+
+## 10.6 End-to-End Case Study: A Resilient Travel-Booking Orchestrator
+
+The patterns above only matter when they hold together under real failure. Here is a complete orchestrator that exercises every one of them — distinct from the refund agent of Chapter 3 because the hard part here is not a business rule but **surviving partial failure of independent, side-effecting subagents**.
+
+### Requirements
+
+- Book a trip from one natural-language request: a **flight**, a **hotel**, and (optionally) a **rental car**, each via a separate downstream API behind its own subagent.
+- The three bookings run **in parallel** (they're independent).
+- **Transient** failures (timeout, 503) of any leg must be **retried with backoff**, but bounded.
+- A leg's API that is *persistently* down must **trip a circuit breaker** so the orchestrator fails fast instead of stalling the trip.
+- Bookings have side effects — **a retry must never double-book** (idempotency).
+- The **car is optional**: if it can't be booked, the trip still completes with the car **gracefully degraded** (annotated, not aborted).
+- The **flight and hotel are critical**: if either ultimately fails, the orchestrator must **roll back** any completed legs and escalate — never leave the customer with a half-booked trip.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    User([Traveler]) --> Coord[Booking Coordinator]
+    Coord -->|Task, parallel| F[Flight subagent<br/>retry plus breaker]
+    Coord -->|Task, parallel| H[Hotel subagent<br/>retry plus breaker]
+    Coord -->|Task, parallel| C[Car subagent<br/>optional]
+    F -. structured result .-> Coord
+    H -. structured result .-> Coord
+    C -. structured result .-> Coord
+    Coord --> Agg{Aggregate results}
+    Agg -->|flight and hotel ok| Done[Confirm trip<br/>annotate car if degraded]
+    Agg -->|critical leg failed| Rb[Roll back booked legs<br/>idempotent cancel] --> Esc[Escalate to human]
+```
+
+The coordinator owns aggregation and the critical-vs-optional policy; each subagent owns **bounded local recovery** (backoff) and a **breaker** on its own API; **idempotency keys** make both booking and rollback safe to retry.
+
+### Implementation
+
+Define the coordinator and three least-privilege subagents. Each booking subagent gets only its own booking + cancel tools:
+
+```python
+coordinator = AgentDefinition(
+    name="booking_coordinator",
+    description="Books flight + hotel (critical) and car (optional); degrades or rolls back on failure.",
+    system_prompt=(
+        "Book the trip by delegating each leg in parallel. Flight and hotel are required; "
+        "the car is optional. If a critical leg cannot be booked, roll back booked legs and escalate. "
+        "Report coverage honestly — never present a half-booked trip as complete."
+    ),
+    allowed_tools=["Task", "cancel_booking", "escalate_to_human"],
+)
+
+flight_agent = AgentDefinition(
+    name="flight_agent",
+    description="Books one flight. Bounded retries; reports structured errors.",
+    system_prompt="Book the requested flight. On transient error retry up to 2x with backoff, then report.",
+    allowed_tools=["book_flight", "cancel_flight"],   # least privilege: only its own API
+)
+# hotel_agent, car_agent defined analogously
+```
+
+Each subagent's local recovery combines **backoff** (transient only), a **circuit breaker** (per-API), **idempotency** (safe retry), and a **timeout** — then returns the §10.3 structured object:
+
+```python
+def book_leg(book_fn, args, *, breaker, idem_key):
+    if breaker.is_open():                       # §10.4.3 fail fast — API known-down
+        return structured_error("breaker_open", args, partial=None,
+                                alt=["retry after cool-down", "try backup provider"])
+    try:
+        # §10.4.4 idempotency + §10.4.2 timeout + §10.4.1 bounded backoff
+        result = call_with_backoff(
+            lambda: with_timeout(book_fn, **args, idempotency_key=idem_key, timeout=20.0)
+        )
+        breaker.record_success()
+        return {"status": "success", "booking": result}
+    except TransientError as e:                 # exhausted bounded retries
+        breaker.record_failure()
+        return structured_error("timeout", args, partial=None,
+                                alt=["try backup provider"])
+    except ValidationError as e:                # §10.1 non-retryable
+        return structured_error("validation", args, partial=None,
+                                alt=["correct dates/passenger info"])
+```
+
+The coordinator aggregates the three results and applies the **critical-vs-optional** policy:
+
+```python
+def aggregate(flight, hotel, car):
+    booked = [r["booking"] for r in (flight, hotel, car) if r["status"] == "success"]
+    if flight["status"] != "success" or hotel["status"] != "success":
+        for b in booked:                        # §10.4.4 idempotent rollback
+            cancel_booking(b["id"], idempotency_key=cancel_key(b["id"]))
+        return escalate_to_human(reason="critical_leg_failed", context=[flight, hotel])
+    if car["status"] != "success":              # §10.4.5 + §10.5 degrade + annotate
+        return confirm_trip(flight, hotel, car_note="⚠️ Car unavailable — booked flight + hotel only.")
+    return confirm_trip(flight, hotel, car)
+```
+
+### Execution trace
+
+A run where the hotel API has a transient blip (recovers on retry) and the car API is hard-down (breaker open) — the trip still completes, gracefully degraded:
+
+```mermaid
+sequenceDiagram
+    actor T as Traveler
+    participant Co as Coordinator
+    participant F as Flight agent
+    participant H as Hotel agent
+    participant C as Car agent
+    T->>Co: "Book me LON to TYO, hotel, and a car"
+    par Parallel delegation
+        Co->>F: Task book_flight (idem key F)
+        Co->>H: Task book_hotel (idem key H)
+        Co->>C: Task book_car (idem key C)
+    end
+    F-->>Co: success booking FL-91
+    H->>H: 503, backoff 1s, retry succeeds
+    H-->>Co: success booking HT-44
+    C->>C: breaker OPEN, fail fast
+    C-->>Co: partial_failure breaker_open, alt backup provider
+    Co->>Co: flight + hotel ok, car optional
+    Co-->>T: "Trip confirmed (flight + hotel). Car unavailable — annotated."
+```
+
+Notice three chapter concepts firing at once: the hotel leg **retried with backoff** and recovered (§10.4.1); the car leg's **breaker was already open** and failed fast instead of stalling (§10.4.3); and the coordinator **degraded gracefully** on the optional leg while still confirming the critical ones (§10.4.5 + §10.5) — rather than aborting the whole trip.
+
+### Validation
+
+- **Backoff bound test:** force a leg to 503 forever; assert it retries *exactly* the cap (e.g., 3) then returns a structured `timeout` error — never hangs, never loops infinitely (§10.4.1, §10.2).
+- **Idempotency test:** fire the same booking twice with the same key (simulating a retry after a timeout that actually succeeded); assert **one** booking exists, not two (§10.4.4).
+- **Breaker test:** drive the car API past the failure threshold; assert the next calls fail fast (no API hit) until the cool-down, then a half-open probe closes it (§10.4.3).
+- **Degradation test:** fail only the car; assert the trip is **confirmed** with the annotation, and the flight/hotel bookings are **not** rolled back (§10.4.5, §10.5).
+- **Rollback test:** fail the hotel (critical); assert any successful flight booking is **cancelled idempotently** and the case is **escalated** — no half-booked trip survives.
+
+### Common pitfalls
+
+- Retrying the `validation` failure (bad passenger info) with backoff — it will fail identically; you must *correct the input*, not retry (§10.1).
+- Booking with retries but **no idempotency key** → a timed-out-but-successful first attempt double-books (§10.4.4).
+- Letting one failed leg **abort the whole trip** instead of degrading the optional car / rolling back only on a *critical* failure (§10.2, §10.4.5).
+- Subagents that **retry forever** internally, so the coordinator never learns the car API is down and the breaker never opens (§10.2, §10.4.3).
+- Returning `[]` (empty) for the car when it actually crashed, so the coordinator reports "no car needed" instead of "car unavailable" (§10.2 silent suppression).
+
+## 10.7 Exam Focus — Key Takeaways
+
+| Concept | What the exam tests |
+|---|---|
+| Error taxonomy | Retryability is a property of the *class*: retry transient; fix-then-retry validation; explain business; escalate permission (§10.1). |
+| No-results vs. failure | A successful-but-empty result is a business outcome; a timeout returning nothing is transient — never conflate them (§10.1–10.2). |
+| Structured error contract | Subagents return `failure_type` + `attempted_query` + `partial_results` + `alternatives` so the coordinator can decide, not guess (§10.3). |
+| Local vs. strategic recovery | Subagent does **bounded** local retries then **propagates**; the coordinator owns retry/degrade/reroute/escalate (§10.2–10.3). |
+| Backoff + jitter | Exponential backoff with jitter for transient errors; bounded attempts; no thundering herd (§10.4.1). |
+| Circuit breaker | Opens after sustained failure to fail fast and protect the system; complements (not replaces) retries (§10.4.3). |
+| Idempotency | Retrying a side-effecting action requires an idempotency key — retries and idempotency are a pair (§10.4.4). |
+| Graceful degradation | Continue with reduced scope on optional-capability failure; annotate the gap rather than abort (§10.4.5, §10.5). |
+| Coverage annotation | Aggregate honestly: label full vs. partial coverage and name the cause; never present partial data as complete (§10.5). |
+
+> **Maps to Domain 5 (15%, error propagation §5.3) and Domain 1 (27%, orchestration).** If you can build and defend the travel-booking orchestrator above — classify, retry with backoff, break the circuit, stay idempotent, degrade the optional and roll back the critical, and annotate coverage — you have the reliability core these two domains test.
 
 # Chapter 11: Context Management in Production Systems
 
-## 11.1 Extract Facts into a Separate Block
+> Documentation: [Effective context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) | [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) | [Compaction](https://platform.claude.com/docs/en/build-with-claude/compaction) | [Context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing)
 
-Instead of relying on conversation history (which degrades during summarization), extract key facts into a structured block:
+The context window is the only memory a model has. Everything the agent "knows" at any instant — the system prompt, the tool definitions, every prior tool result, the whole conversation — has to fit inside a finite token budget, and the moment that budget fills or fragments, the agent starts forgetting facts, hedging with "typical patterns," and contradicting itself. **Context management is the discipline of keeping the *right* tokens in the window and the wrong ones out — turn after turn, across compaction, across whole sessions.** This chapter is the backbone of **Domain 5 — Context Management and Reliability (15% of the exam)**, and it underpins every long-running agent in Domains 1–4.
+
+By the end you should be able to reason about a budget and seven techniques, then assemble them into an agent that survives a multi-day investigation:
+
+- **The context budget and its failure modes** (§11.1) — what fills the window and how recall degrades (lost-in-the-middle, context rot).
+- **Fact extraction into a durable block** (§11.2) — surviving summarization without losing numbers and IDs.
+- **Trimming tool results** (§11.3) — keeping 5 fields out of 40, deterministically.
+- **Position-aware assembly** (§11.4) — putting high-signal tokens where the model actually reads them.
+- **Sliding window vs. summarization vs. compaction** (§11.5) — three ways to shed history, and when each is right.
+- **Just-in-time retrieval and scratchpad/memory** (§11.6) — references over payloads, and persistence across context resets.
+- **Subagent isolation and prompt caching** (§11.7) — protecting the main window and paying for stable prefixes only once.
+
+§11.8 then builds a complete **long-horizon codebase security-audit agent** end-to-end, §11.9 ties this to the modern *context engineering* vocabulary, and §11.10 distills what the exam tests.
+
+## 11.1 The Context Budget and How It Fails
+
+Treat the window as a budget you actively allocate, not a bucket you fill. Every request renders in a fixed order — **`tools` → `system` → `messages`** — and the running total of those segments is what you are managing:
+
+```mermaid
+flowchart TD
+    Budget[Context window budget<br/>finite tokens] --> Sys[System prompt<br/>stable, set once]
+    Budget --> Tools[Tool definitions<br/>stable, set once]
+    Budget --> Hist[Message history<br/>grows every turn]
+    Hist --> Results[Tool results<br/>often the largest, noisiest part]
+    Results --> Rot{Approaching<br/>the limit?}
+    Rot -->|no| Continue[Keep running normally]
+    Rot -->|yes| Shed[Shed history<br/>trim, summarize, or compact]
+    Shed --> Continue
+```
+
+**Why this matters — context is a finite resource, and bigger windows do not repeal the problem.** Even with 200K–1M-token windows, recall degrades as the token count grows, a phenomenon Anthropic calls **context rot**: attention has to relate every token pair, an n² cost that stretches thin over long inputs, so signal-to-noise — not raw capacity — is what governs quality. A bigger budget *delays* the failure; it does not prevent it.
+
+**The four failure modes the exam expects you to name:**
+- **Progressive summarization loss** — each time history is summarized, precise values (amounts, percentages, dates, IDs) get compressed into vague prose ("the customer wanted a refund") and are gone for good.
+- **Lost-in-the-middle** — models reliably attend to the *start* and *end* of a long input but reliably miss material buried in the *middle*. A critical finding placed in the center of a 60-file dump may simply not be used.
+- **Tool-result bloat** — tool outputs accumulate in the window disproportionately to their relevance; a `lookup_order` that returns 40 fields when 5 are needed spends 8× the tokens it should, on every turn it stays in history.
+- **Context degradation in long sessions** — past a threshold the model produces unstable answers and starts referring to "typical patterns" or generic class names instead of the specific symbols it read earlier.
+
+**Exam angle:** questions rarely ask "how big is the window." They give you a *symptom* — the agent forgot the order amount after a long chat, or missed a vulnerability that was clearly in the results — and ask you to name the mechanism and the mitigation. Map symptom → cause → fix (§11.2–§11.7).
+
+## 11.2 Extract Facts into a Durable Block
+
+Conversation history is the *wrong* place to store load-bearing facts, because history is exactly what gets summarized and lost. Instead, lift the transactional facts into a structured block that you re-inject verbatim on **every** prompt, independent of how the rest of the history is compacted:
 
 ```
 === CASE FACTS (updated whenever a new fact appears) ===
@@ -3952,9 +4270,18 @@ Status: Pending manager approval
 
 Include this block in every prompt, regardless of how history is summarized.
 
-## 11.2 Trimming Tool Results
+**Why it works:** the facts block is *append-controlled state* that lives outside the summarizable transcript. When compaction collapses 30 turns into a paragraph, the paragraph can be lossy — but the facts block is copied through untouched, so `$89.99` and `ORD-67890` never blur into "the order."
 
-If `lookup_order` returns 40+ fields but you only need 5 for the current task:
+**Pitfalls:**
+- Letting the block grow unbounded — it then becomes part of the bloat problem. Keep it to *durable identifiers and decisions*, not running narration.
+- Storing facts only in prose history and *trusting* the summarizer to preserve numbers — it will not, reliably.
+- Forgetting to update the block when a fact changes (e.g., `Status` moves to `Approved`), leaving the model reasoning from stale state.
+
+**Exam angle:** the classic stem is "after a long conversation the agent quoted the wrong refund amount." The right answer is a persistent facts block injected every turn — *not* "use a bigger model" or "increase the context window."
+
+## 11.3 Trimming Tool Results
+
+A tool result is raw data, and most of it is noise for the current step. Trim it deterministically with a `PostToolUse` hook so the model never even sees the 35 fields it does not need:
 
 ```python
 # PostToolUse hook: keep only relevant fields
@@ -3971,9 +4298,18 @@ def trim_order_fields(result):
 
 This conserves context and reduces noise.
 
-## 11.3 Position-aware Input
+**Why a hook and not a prompt:** "please ignore irrelevant fields" is probabilistic — the tokens are still in the window costing budget and inviting distraction even if the model nominally ignores them. A `PostToolUse` hook removes them *before* they reach the model, so the saving is deterministic and compounds on every turn the result would otherwise linger in history.
 
-Place critical information with the lost-in-the-middle effect in mind:
+**Pitfalls:**
+- Over-trimming: dropping a field you later need (e.g., `customer_id` for a downstream call) forces a re-fetch — costing more than you saved. Trim to the task, and widen deliberately.
+- Trimming *display* but not *context*: showing the user 5 fields while still feeding all 40 to the model defeats the purpose.
+- Trimming away provenance (source URL, record id) that a later synthesis step needs to attribute a claim (see Chapter 12).
+
+**Exam angle:** "a tool returns 40+ fields but the task needs 5" is a direct Domain 5.1 skill — the answer is a `PostToolUse` trim hook, framed as token-budget hygiene, not cosmetic cleanup.
+
+## 11.4 Position-Aware Assembly
+
+Because of lost-in-the-middle, *where* you place information changes whether it gets used. When you assemble aggregated data for the model, put the high-signal material at the **top and bottom** and bury bulk detail in the middle:
 
 ```
 [KEY FINDINGS — at the top]
@@ -3989,9 +4325,43 @@ Found 3 critical vulnerabilities...
 Priority: fix auth.ts vulnerabilities before merge.
 ```
 
-## 11.4 Scratchpad Files
+**Why it works:** the top anchors the model's interpretation of everything that follows; the bottom is the most recently read and most heavily attended position, ideal for the directive you most want obeyed. The voluminous, scannable detail goes in the middle precisely because it tolerates weaker attention — the model can retrieve from it on demand without needing to hold all of it.
 
-In long investigations, the agent can write key findings to a scratchpad file:
+**Pitfalls:**
+- Leading with raw dumps and trailing with nothing actionable — the one instruction you cared about lands in the dead zone.
+- Relabeling sections without reordering them: headings help, but *position* is the stronger lever.
+- Assuming a 1M-token model is immune — the effect shrinks but does not vanish; place deliberately regardless of window size.
+
+**Exam angle:** given "the agent missed a finding that was clearly in the results," recognize lost-in-the-middle and prescribe summary-at-top + explicit section headings, not "the model is broken."
+
+## 11.5 Sliding Window vs. Summarization vs. Compaction
+
+When history outgrows the budget you have three ways to shed it — and the exam wants you to pick the right one for the situation:
+
+```mermaid
+flowchart TD
+    Over[History exceeds budget] --> Q{What must survive?}
+    Q -->|recent turns only| SW[Sliding window<br/>drop oldest verbatim turns]
+    Q -->|decisions and facts<br/>across the whole run| Sum[Summarization<br/>condense old turns to a recap]
+    Q -->|near the limit, server-side| Comp[Compaction<br/>API summarizes history, continue from it]
+    SW -.- Risk1[Risk — silently drops<br/>early facts, pair with a facts block]
+    Sum -.- Risk2[Risk — lossy on numbers<br/>and provenance]
+    Comp -.- Risk3[Risk — must append the<br/>compaction block back next request]
+```
+
+- **Sliding window** keeps the last *N* turns verbatim and drops the oldest. Cheap and lossless for what it keeps, but it amputates early context — fine for chit-chat, dangerous for an investigation whose key fact was established on turn 2. **Always pair a sliding window with a §11.2 facts block** so the amputated facts survive.
+- **Summarization (progressive)** condenses old turns into a running recap, preserving decisions across the whole run at the cost of precision — this is the technique whose loss §11.1 warns about, so explicitly instruct it to *preserve key decisions, numbers, and provenance* and verify it did.
+- **Compaction** is the server-side version: when nearing the limit, the API summarizes the history and you continue from the summary. **Critical operational detail:** you must append the entire `response.content` (including the compaction block) back on the next request, or the compacted state is lost. The `/compact` command and the Agent SDK do this automatically.
+
+**Why the distinction matters:** they fail differently. Sliding window loses *old* content silently; summarization loses *precision* everywhere; compaction loses *nothing* if you replay the block but loses *everything compacted* if you forget to. Choosing is a function of "what must survive."
+
+**Exam angle:** a long investigation that must remember a specific class signature → summarization that explicitly preserves it, or a facts block — *not* a naive sliding window that would drop it. "Use `/compact` to reduce context during a long investigation" is the expected Domain 5.4 skill.
+
+## 11.6 Just-in-Time Retrieval, Scratchpad, and Memory
+
+The cheapest token is the one you never load. Instead of pre-loading entire files or datasets, keep **lightweight references** — file paths, URLs, record IDs — and fetch the actual content with a tool only when you need it.
+
+**Scratchpad files** are the in-session form of this. During a long investigation the agent writes key findings to a file and reads them back later instead of re-deriving them:
 
 ```
 # investigation-scratchpad.md
@@ -4002,9 +4372,24 @@ In long investigations, the agent can write key findings to a scratchpad file:
 - Migration #47 added refund_reason (NOT NULL) — 2024-12-01
 ```
 
-When context degrades (or in a new session), the agent can consult the scratchpad instead of re-running discovery.
+When context degrades (or in a new session), the agent consults the scratchpad instead of re-running discovery.
 
-## 11.5 Delegating to Subagents to Protect Context
+**Memory (cross-session)** generalizes the scratchpad past the boundary of a single run: findings persisted to an external store survive context resets and whole sessions, giving a long-horizon agent coherence it could never hold in-window. The Agent SDK's memory tool and managed memory stores are the mechanism.
+
+**Why references beat payloads:** a path is ~10 tokens; the file it points to may be 10,000. Holding the path costs almost nothing and lets the model *choose* to spend the 10,000 only when the task demands it — the n² attention cost is paid on a small working set, not the entire corpus.
+
+**Pitfalls:**
+- Writing to a scratchpad but never reading it back (it has to be in the prompt or fetched to matter).
+- Stale memory: persisting a finding that later changes and never invalidating it.
+- Over-retrieval: re-loading the same large file every turn instead of summarizing it once into the facts block or scratchpad.
+
+**Exam angle:** "the agent re-reads the same 15 files every time context degrades" → scratchpad/memory + just-in-time retrieval. "It loses all findings when the session restarts" → cross-session memory, not a bigger window.
+
+## 11.7 Subagent Isolation and Prompt Caching
+
+Two structural techniques protect and pay for the window rather than merely pruning it.
+
+**Subagent isolation** delegates verbose, exploratory work to a subagent with its *own* clean context window; the subagent does the messy reading and returns a condensed result, so the main agent's window holds one line instead of fifteen files:
 
 ```
 Main agent: "Investigate dependencies of the payments module"
@@ -4014,44 +4399,153 @@ Main agent: "Investigate dependencies of the payments module"
 Main agent: keeps one line in context instead of 15 files
 ```
 
-**Separate context layer:**
-In multi-agent systems, each subagent operates within a limited context budget—it receives only the information required for its task. The coordinator acts as a separate context layer: it aggregates subagent outputs, stores global state, and allocates context. This prevents “context leakage,” where one agent consumes the window with information irrelevant to others.
+**Separate context layer:** in multi-agent systems each subagent operates within a limited context budget — it receives only the information required for its task. The coordinator acts as a separate context layer: it aggregates subagent outputs, stores global state, and allocates context. This prevents "context leakage," where one agent consumes the window with information irrelevant to others.
 
 **Constrained context budgets for subagents:**
-- Send minimal context: a specific task + necessary data
-- Instruct the subagent to return structured results, not raw data dumps
-- Use `allowedTools` to limit the subagent’s toolset—fewer tools means fewer distractions and lower context cost
+- Send minimal context: a specific task + necessary data (subagents inherit nothing automatically — see Chapter 3).
+- Instruct the subagent to return *structured* results, not raw data dumps.
+- Use `allowedTools` to limit the subagent's toolset — fewer tools means fewer distractions and lower context cost.
 
-## 11.6 Structured State Persistence (for crash recovery)
+**Prompt caching** addresses the *cost* of a large stable prefix. The API caches the rendered prompt up to a `cache_control` breakpoint; on later requests the cached prefix reads at **~0.1×** instead of being re-billed at full price (writes cost 1.25× for the 5-minute TTL, 2× for 1-hour; max **4** breakpoints):
 
-Each agent exports its state to a known location:
-
-```json
-// agent-state/web-search-agent.json
-{
-  "status": "completed",
-  "queries_executed": ["AI music 2024", "AI music composition"],
-  "results_count": 12,
-  "key_findings": [...],
-  "coverage": ["music composition", "music production"],
-  "gaps": ["music distribution", "music licensing"]
-}
+```python
+system=[
+    {"type": "text", "text": LARGE_AUDIT_RUBRIC,            # stable across every file
+     "cache_control": {"type": "ephemeral"}},               # cache the prefix up to here
+]
 ```
 
-The coordinator loads a manifest on resume:
+**Why the breakpoint placement is the whole game:** caching is a *prefix match* in render order `tools → system → messages`, so any byte change before the breakpoint invalidates everything after it. Put the breakpoint after the stable rubric/tool defs and *before* the volatile per-file content — and never interpolate a timestamp, request id, or username into the system prefix, or you defeat the cache on every call.
 
-```json
-// agent-state/manifest.json
-{
-  "web-search": "completed",
-  "doc-analysis": "in_progress",
-  "synthesis": "not_started"
-}
+**Pitfalls:**
+- Caching a prefix that contains volatile content → cache reads stay zero and you pay the write premium for nothing.
+- Returning raw dumps from subagents → you moved the bloat, you did not remove it.
+- Giving a subagent broad `allowedTools` → it wanders, inflating its own context and its summary.
+
+**Exam angle:** "a stable 20K-token rubric is re-sent on thousands of file checks" → prompt caching with the breakpoint after the rubric. "Discovery output is drowning the main agent" → delegate to a subagent that returns a structured summary.
+
+## 11.8 End-to-End Case Study: A Long-Horizon Codebase Security-Audit Agent
+
+The techniques above only matter when they fit together under real pressure. Here is a complete, realistic agent of the kind Domain 5.4 asks you to reason about — an audit that is far too large for one context window and must survive across sessions.
+
+### Requirements
+
+- Audit a **2,400-file monorepo** against a fixed **20K-token security rubric** for injection, auth-bypass, and secret-handling defects.
+- The full codebase vastly exceeds any single context window, so the agent must investigate **incrementally** and may run for **days across multiple sessions**.
+- **Precise facts must survive** summarization: exact file paths, line numbers, CVE-style finding ids, and severities — never blurred into "some auth issues."
+- The run **must be resumable** after a crash or a deliberate stop, picking up where it left off without re-auditing finished modules.
+- Cost matters: the rubric is identical on every file check and must **not** be re-billed at full price thousands of times.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    Coord[Audit coordinator<br/>holds rubric plus findings block] --> Cache{{Prompt cache<br/>rubric prefix, ~0.1x reads}}
+    Coord -->|Task scan module| Sub[Scan subagent<br/>clean window, read_file and grep only]
+    Sub --> Trim{{PostToolUse hook<br/>trim file reads to hits}}
+    Trim --> Sub
+    Sub -. structured findings only .-> Coord
+    Coord --> Facts[FINDINGS block<br/>path, line, id, severity]
+    Coord --> State[agent-state JSON<br/>per-module status]
+    Coord --> Near{Near context<br/>limit?}
+    Near -->|yes| Compact[Compaction or summary<br/>preserve FINDINGS verbatim]
+    Near -->|no| Next[Dispatch next module]
+    Compact --> Next
+    Next --> Coord
 ```
 
----
+The coordinator owns orchestration and the durable FINDINGS block; each module is scanned by an isolated subagent with a clean window and least-privilege read-only tools; **the rubric is cached once, file reads are trimmed deterministically, findings are persisted as facts and state, and compaction sheds only the disposable narration** — every Ch11 technique doing one job.
 
-## Context Engineering (Modern Framing)
+### Implementation
+
+Cache the stable rubric and give the scan subagent a clean, least-privilege window (it inherits nothing — Chapter 3):
+
+```python
+coordinator = AgentDefinition(
+    name="audit_coordinator",
+    description="Audits a large repo module-by-module; preserves findings and resumes.",
+    system_prompt=AUDIT_COORDINATOR_PROMPT,
+    allowed_tools=["Task", "write_state", "read_state"],
+)
+
+scan_subagent = AgentDefinition(
+    name="module_scanner",
+    description="Scans one module against the rubric. Read-only.",
+    system_prompt="Apply the security rubric to the given files. Return findings as JSON.",
+    allowed_tools=["read_file", "grep"],          # least privilege: cannot write or fix
+)
+
+# The 20K rubric is identical on every file check — cache it so reads bill at ~0.1x.
+system = [
+    {"type": "text", "text": AUDIT_RUBRIC,
+     "cache_control": {"type": "ephemeral"}},     # breakpoint AFTER the stable rubric
+]
+```
+
+Trim every file read to the matched region so a 1,200-line file does not sit in the window whole:
+
+```python
+@hook("PostToolUse", tool="read_file")
+def keep_only_hits(result):
+    # Return just the matched spans plus a few lines of context, not the entire file.
+    return {"path": result["path"], "spans": extract_match_spans(result["content"])}
+```
+
+Persist findings as durable facts *and* as resumable per-module state:
+
+```python
+# agent-state/manifest.json — drives resume
+{ "payments": "completed", "auth": "in_progress", "billing": "not_started" }
+
+# The FINDINGS block, re-injected verbatim every turn (survives summarization):
+# === FINDINGS (id, path:line, severity) ===
+# SEC-001  src/auth/session.ts:88   HIGH   missing signature check
+# SEC-002  src/payments/refund.ts:42 MED    unparameterized SQL
+# ===
+```
+
+When the window nears the limit, compact — but the FINDINGS block and the state files are *outside* the summarizable history, so nothing precise is lost.
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Op as Operator
+    participant Co as Coordinator
+    participant Ca as Prompt cache
+    participant Su as Scan subagent
+    participant St as State store
+    Op->>Co: Audit the monorepo
+    Co->>St: load manifest (auth in_progress)
+    Co->>Ca: send rubric prefix (cache write, 1.25x)
+    Co->>Su: Task(scan src/auth, rubric cached)
+    Ca-->>Su: rubric prefix (cache read, ~0.1x)
+    Su-->>Co: findings JSON (SEC-001 HIGH at session.ts:88)
+    Co->>Co: append SEC-001 to FINDINGS block
+    Co->>St: mark auth completed, billing in_progress
+    Note over Co: window near limit -> compact history,<br/>FINDINGS + state survive verbatim
+    Op->>Co: (next day) resume
+    Co->>St: load manifest -> skip auth, start billing
+```
+
+Notice three Ch11 moves in one trace: the rubric is **paid once** (write) then **read at ~0.1×** on every subsequent module; the subagent returns a **structured summary**, not the files it read; and the FINDINGS block plus state store let the agent **compact freely and resume next day** without losing a single precise finding.
+
+### Validation
+
+- **Fact-survival test:** force a compaction mid-run, then ask the agent for `SEC-002`'s exact `path:line` and severity. It must answer precisely — proving the FINDINGS block survived summarization, not the transcript.
+- **Resume test:** kill the process after `auth` completes, restart, and assert it skips `auth` and begins `billing` from the manifest — no module re-audited.
+- **Cache test:** assert `usage.cache_read_input_tokens` is non-zero on the bulk of file checks. Zero means a volatile byte (a timestamp, an unsorted field) is invalidating the rubric prefix.
+- **Isolation test:** confirm the scan subagent receives the target paths *in its Task prompt* and cannot call any write tool (least privilege).
+
+### Common pitfalls
+
+- Storing findings in the conversation narrative instead of a durable block, then losing exact line numbers to compaction (§11.2, §11.5).
+- Feeding whole files into the window instead of trimming to matched spans (§11.3) — the audit runs out of budget at module 30.
+- Interpolating a per-file timestamp into the cached system prefix, so `cache_read_input_tokens` stays zero and the rubric is re-billed every call (§11.7).
+- Re-auditing completed modules on resume because state was held only in-context, not in a state file (§11.6).
+- Letting subagents return raw file dumps — the bloat moves to the coordinator instead of being removed (§11.7).
+
+## 11.9 Context Engineering (Modern Framing)
 
 > Background: this is the current Anthropic framing for the techniques in this chapter. The exam tests the underlying ideas; this vocabulary helps you connect them. Source: [Anthropic — Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).
 
@@ -4059,38 +4553,104 @@ The coordinator loads a manifest on resume:
 
 **Context is a finite resource.** As the token count grows, recall degrades — a phenomenon called **context rot** (attention must relate every token pair, an n² cost that stretches thin over long inputs). The goal is the *smallest set of high-signal tokens* that still does the job — not "stuff everything in."
 
-**Core techniques:**
-- **Just-in-time retrieval** — keep lightweight identifiers (file paths, URLs, IDs) and load the actual content at runtime via tools, instead of pre-loading everything (a generalization of the scratchpad idea above).
-- **Compaction** — when nearing the limit, summarize the history, preserving key decisions and discarding redundant tool output, then continue from the summary. The `/compact` command and the Agent SDK do this automatically.
-- **Structured note-taking (memory)** — persist findings to external memory outside the window and retrieve them when needed, giving long-horizon coherence across context resets.
-- **Sub-agent architectures** — hand focused work to subagents with clean context windows; they return condensed summaries to the coordinator, separating detailed work from high-level synthesis. (This is why delegating discovery to a subagent beats stuffing it into the main context.)
+**Core techniques (each maps to a section above):**
+- **Just-in-time retrieval** — keep lightweight identifiers (file paths, URLs, IDs) and load the actual content at runtime via tools, instead of pre-loading everything (§11.6).
+- **Compaction** — when nearing the limit, summarize the history, preserving key decisions and discarding redundant tool output, then continue from the summary; `/compact` and the Agent SDK do this automatically (§11.5).
+- **Structured note-taking (memory)** — persist findings to external memory outside the window and retrieve them when needed, giving long-horizon coherence across context resets (§11.6).
+- **Sub-agent architectures** — hand focused work to subagents with clean context windows; they return condensed summaries to the coordinator, separating detailed work from high-level synthesis (§11.7).
 
 These are the same mitigations this chapter covers (lost-in-the-middle, progressive summarization, scratchpad files, subagent isolation) — *context engineering* is the umbrella term for doing them deliberately.
 
----
+## 11.10 Exam Focus — Key Takeaways
+
+| Concept | What the exam tests |
+|---|---|
+| Context budget & failure modes | Name the mechanism from a symptom — context rot, lost-in-the-middle, summarization loss, tool-result bloat; a bigger window delays, never repeals, the problem (§11.1). |
+| Durable facts block | Persist exact amounts/dates/IDs outside the summarizable history and re-inject every turn — the fix for "agent quoted the wrong number after a long chat" (§11.2). |
+| Trimming tool results | A `PostToolUse` hook keeps the 5 needed fields out of 40 — deterministic token hygiene, not cosmetics (§11.3). |
+| Position-aware assembly | Summary at top, bulk in the middle, action items at the end — counter lost-in-the-middle by placement, not by hope (§11.4). |
+| Sliding window vs summary vs compaction | Pick by "what must survive"; pair sliding window with a facts block; replay the compaction block or lose the state (§11.5). |
+| Just-in-time retrieval & memory | References over payloads; scratchpad within a session, memory across sessions (§11.6). |
+| Subagent isolation & prompt caching | Delegate verbose discovery to a clean window; cache the stable prefix (reads ~0.1×) with the breakpoint before volatile content (§11.7). |
+
+> **Maps to Domain 5 (15%).** If you can build and defend the audit agent above — budget, facts block, trimming, placement, compaction, retrieval/memory, isolation, caching — you have the core of the reliability domain, and the context discipline every long-running agent in Domains 1–4 depends on.
 
 # Chapter 12: Preserving Provenance
 
-## 12.1 The Attribution Loss Problem
+> Documentation: [Citations](https://platform.claude.com/docs/en/build-with-claude/citations) | [Search results](https://platform.claude.com/docs/en/build-with-claude/search-results) | [Tool use](https://platform.claude.com/docs/en/build-with-claude/tool-use/overview)
 
-When summarizing results from multiple sources, the “claim → source” link can be lost:
+Provenance is the chain of evidence that ties every claim in a synthesized answer back to a specific, verifiable source. In a single-call summarizer this is merely good hygiene; in a multi-agent system it is the difference between a trustworthy report and confident fiction. This chapter is the deep dive for **Domain 5 — Context Management and Reliability (15% of the exam)**, specifically objective **5.6 (preserving provenance and handling uncertainty in multi-source synthesis)**, and it leans on the context-preservation skills from objective 5.1. The recurring exam theme is blunt: **when a subagent discovers a fact, the source must survive every hop — through trimming, summarization, conflict resolution, and final rendering — or the coordinator will emit a fabricated citation.**
+
+By the end you should be able to reason about five things and assemble them into a report that auditors trust:
+
+- **The attribution-loss problem** (§12.1) — how the claim → source link is severed during summarization, and the schema that prevents it.
+- **Carrying source IDs through synthesis** (§12.2) — keeping provenance intact across subagent hops and context trimming.
+- **Handling conflicting data** (§12.3) — annotating disagreements with attribution instead of silently picking a winner.
+- **Dates and temporal interpretation** (§12.4) — why an undated number is a future contradiction.
+- **Rendering by content type and refusing fabrication** (§12.5) — formatting per content type, and never inventing a citation Claude cannot point to.
+
+§12.6 then builds a complete cited compliance-research generator end-to-end, and §12.7 distills what the exam tests.
+
+## 12.1 The Attribution-Loss Problem
+
+When an agent summarizes results from multiple sources, the **claim → source** link is the first casualty. The model is optimizing for a fluent paragraph, and a citation is friction; unless the data structure forces the source to travel *with* the claim, summarization strips it.
 
 ```
-Bad: "The AI music market is estimated at $3.2B." (No source, no year.)
+Bad: "The AI music market is estimated at $3.2B." (No source, no year — unverifiable.)
 
 Good:
 {
   "claim": "The AI music market is estimated at $3.2B.",
+  "source_id": "src_07",
   "source_url": "https://example.com/report",
   "source_name": "Global AI Music Report 2024",
   "publication_date": "2024-06-15",
+  "supporting_quote": "...the AI-assisted music segment reached USD 3.2 billion in 2024...",
   "confidence": 0.9
 }
 ```
 
-## 12.2 Handling Conflicting Data
+**Why this is hard, not just sloppy.** The failure is structural, and three forces from Domain 5.1 push against you:
 
-When two sources provide different values:
+- **Progressive summarization condenses specifics into vagueness.** Each time history is compressed, "$3.2B per the Global AI Music Report 2024" tends to degrade to "a few billion dollars" and the citation evaporates.
+- **Lost-in-the-middle.** A source URL buried in the middle of a long tool result is exactly where the model is least reliable at retrieving it. Sources must be promoted to a structured field, not left inline in prose.
+- **Verbose tool outputs dilute relevance.** A search tool returning 40 fields makes the 3 that matter (id, url, date) easy to drop during trimming.
+
+**The fix is a contract, not a request.** Require every subagent to return a list of objects carrying `source_id`, `source_url`, `publication_date`, and a verbatim `supporting_quote`. The `supporting_quote` is the load-bearing field: it lets a downstream validator confirm the claim is actually backed by the source, and it is the single strongest defense against fabricated citations (§12.5). When the platform supports it, prefer the native **Citations** feature or **search-result content blocks**, which make Claude emit `cited_text` with character-level spans into the source — provenance the model cannot silently drop.
+
+**Exam angle.** A stem describing "the final report says the market is $3.2B but no one can tell which source that came from" is testing 5.6. The correct answer is *require subagents to emit structured claim → source mappings (URL, document name, quote)*, **not** "add 'please cite sources' to the prompt" — a soft instruction is probabilistic and degrades under summarization.
+
+## 12.2 Carrying Source IDs Through Multi-Agent Synthesis
+
+Attribution rarely breaks at the search step; it breaks at the **hops** — every time a payload moves between agents or gets trimmed. Each hop is an opportunity for the source to be dropped, so provenance must be a first-class field that survives all of them.
+
+```mermaid
+flowchart TD
+    Q[Research question] --> Co[Coordinator]
+    Co -->|Task with full context| W1[Worker A<br/>retrieve sources]
+    Co -->|Task with full context| W2[Worker B<br/>retrieve sources]
+    W1 -. claims plus source_id .-> Co
+    W2 -. claims plus source_id .-> Co
+    Co --> Reg[(Source registry<br/>id maps to url, date, quote)]
+    Co --> Syn[Synthesis<br/>cite by source_id]
+    Syn --> Val{Every claim<br/>has a valid id?}
+    Val -->|no| Drop[Drop or flag claim]
+    Val -->|yes| Rep[Cited report plus<br/>references section]
+```
+
+**The two-table discipline.** Keep claims and sources in separate but linked structures. Workers return *claims* that reference a `source_id`; the coordinator maintains a *source registry* mapping each `source_id` to its URL, name, date, and quote. The synthesis prompt then cites by `source_id` only — it never needs to carry full URLs through the model's reasoning, which is exactly where lost-in-the-middle would corrupt them.
+
+**Why this survives trimming.** This is the provenance-preserving application of the "case facts" pattern from objective 5.1: the source registry lives **outside** the summarized conversation history, in durable state. You can aggressively `/compact` or trim the worker transcripts, and every `source_id` in the final draft still resolves, because the registry is never summarized.
+
+**Pitfalls the exam probes:**
+
+- **Renumbering sources mid-pipeline.** If Worker A's "source 1" and Worker B's "source 1" collide when merged, citations silently point to the wrong document. Use globally unique IDs (`src_07`, a hash, or a UUID) assigned once at ingestion — never per-worker ordinals.
+- **Passing only the prose summary upward.** If a worker returns "the market is large" without the registry, the coordinator has nothing to cite and will either omit the source or invent one. Workers must return *structured* claims, not paragraphs (this is the 5.1 skill: subagents include metadata in structured outputs).
+- **Letting the coordinator paraphrase away the IDs.** The synthesis instruction must be "every sentence ends with its `[source_id]`," enforced by a post-synthesis validator (§12.6), not left to the model's goodwill.
+
+## 12.3 Handling Conflicting Data
+
+Real sources disagree. When two credible sources report different values, the wrong move — and a frequent exam distractor — is to **silently pick one**, average them, or report only the "latest." That discards information the user needs to judge reliability. The right move is to **preserve every value with full attribution and surface the conflict**, then let the coordinator (or a human) reconcile.
 
 ```json
 {
@@ -4098,12 +4658,14 @@ When two sources provide different values:
   "values": [
     {
       "value": "12%",
+      "source_id": "src_11",
       "source": "Spotify Annual Report 2024",
       "date": "2024-03",
       "methodology": "Automated classification"
     },
     {
       "value": "8%",
+      "source_id": "src_19",
       "source": "Music Industry Association Survey",
       "date": "2024-07",
       "methodology": "Survey of 500 labels"
@@ -4116,28 +4678,194 @@ When two sources provide different values:
 
 Do not arbitrarily choose one value. Preserve both with attribution and let the coordinator decide.
 
-## 12.3 Include Dates for Correct Interpretation
+**Why annotate instead of resolve.** The disagreement is frequently *not* an error — it is signal. Here the gap is explained by **methodology** (algorithmic detection vs. a 500-label survey) and **time period** (March vs. July). A subagent that "resolves" the conflict to a single 10% destroys the very metadata (methodology, date) that explains it. Provenance includes *how* a number was produced, not only *where* it came from.
 
-Without dates, temporal differences can be misinterpreted as contradictions:
+**Structure the report to match.** Separate **stable findings** (sources agree) from **disputed findings** (sources conflict), so a reader instantly sees which conclusions are robust and which are contested. Annotate coverage explicitly — what is well-supported vs. where the evidence is thin or split — which is the synthesis skill from objective 5.3.
+
+**Exam angle.** "Two subagents return different market-size figures — what should the coordinator do?" The credit-earning answer is *preserve both values with their sources and methodologies and flag the conflict for reconciliation*, **never** "trust the more recent one" or "average them." A single number with no disagreement visible is a provenance failure even if it happens to be correct.
+
+## 12.4 Include Dates for Correct Temporal Interpretation
+
+An undated number is a latent contradiction. Without a date, the model (or a reader) cannot tell whether two values conflict or simply describe **different points in time**, and a normal year-over-year change gets reported as an error.
 
 ```
-Bad: "Source A says 10%, source B says 15%. Contradiction."
+Bad:  "Source A says 10%, source B says 15%. Contradiction."
 Good: "Source A (2023) says 10%, source B (2024) says 15%. Likely +5% growth over a year."
 ```
 
-## 12.4 Render by Content Type
+**Why dates are part of provenance, not a nice-to-have.** Provenance answers *where* **and** *when*. The same source can publish different figures across editions; "the 2024 report" and "the 2023 report" are different evidence. Carry a `publication_date` (or `collection_date` for primary data) on every claim, and prefer ISO-8601 (`2024-06-15`) so dates sort and compare unambiguously across locales and tools.
 
-Don’t force everything into one format:
-- Financial data -> tables
-- News and analysis -> prose
-- Technical findings -> structured lists
-- Time series -> chronological ordering
+**Pitfall — the "latest wins" reflex.** Dropping the older value because a newer one exists is a different flavor of the §12.3 mistake: it deletes the data point that reveals a *trend*. Preserve both, dated; let the trend speak.
 
----
+**Exam angle.** A stem framing a temporal difference as a "contradiction" is testing whether you attach dates so the difference reads as **growth or change over time**. Including publication dates for correct temporal interpretation is an explicit 5.6 skill.
+
+## 12.5 Rendering by Content Type and Refusing Fabrication
+
+Two final disciplines turn correct provenance into a *trustworthy* deliverable: present each kind of content in its natural shape, and never let the model invent a citation it cannot point to.
+
+**Render by content type.** Forcing every finding into one format destroys readability and can itself obscure provenance:
+
+- **Financial data** → tables (so figures, sources, and dates line up column-wise).
+- **News and analysis** → prose.
+- **Technical findings** → structured lists.
+- **Time series** → chronological ordering.
+
+**Refuse fabricated citations — the cardinal sin.** A fabricated citation (a plausible-looking but non-existent URL, report title, or quote) is worse than no citation: it manufactures false confidence and survives casual review. Defenses, in order of strength:
+
+1. **Cite only from the registry.** The synthesis step may reference a `source_id` *only if it exists* in the source registry (§12.2); anything else is dropped or flagged. This makes invention structurally impossible rather than discouraged.
+2. **Validate the quote.** A post-synthesis check confirms each claim's `supporting_quote` actually appears in the cited source's text. A claim whose quote cannot be located is unsupported and is removed or sent to human review (objective 5.5).
+3. **Prefer native Citations / search-result blocks.** When sources are supplied as search-result content blocks, Claude emits `cited_text` with verified spans into the provided documents — the model literally cannot cite text that is not there.
+4. **Say "not found."** If no source supports a requested claim, the correct output is an explicit gap ("no source in scope supports this"), not a confident sentence. This is the provenance analogue of escalating rather than guessing.
+
+**Exam angle.** Watch for stems where the model "improves" a report by adding citations that sound authoritative — the trap answer praises the polish. The correct answer treats any citation that cannot be traced to a real, supplied source as a defect, and routes unsupported claims to a gap note or human review.
+
+## 12.6 End-to-End Case Study: A Cited Compliance-Research Generator
+
+The pieces above only matter when they fit together. Here is a complete, realistic system — the kind of design the exam's **multi-agent research / synthesis** scenarios ask you to reason about — where provenance is not optional because the output is an auditable compliance memo.
+
+### Requirements
+
+- Answer a regulatory question (e.g., *"What are the data-retention obligations for payment records under PCI DSS and EU GDPR?"*) as a memo a compliance officer can defend in an audit.
+- Retrieve evidence from multiple corpora (the regulation texts, internal policy docs, prior legal memos) via separate retrieval subagents.
+- **Hard rule:** every assertion in the memo must carry a citation that resolves to a **real, supplied source** — no fabricated URLs, titles, or quotes. An assertion with no source is reported as a gap, not stated as fact.
+- Different sources disagree on retention periods; **preserve every value with its source, date, and basis** rather than picking one.
+- Maintain an **audit trail**: a persistent record of which source backed which sentence, reproducible after the conversation ends.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    Officer([Compliance officer]) --> Coord[Coordinator]
+    Coord -->|Task with full context| RReg[Subagent<br/>regulation retrieval]
+    Coord -->|Task with full context| RPol[Subagent<br/>policy retrieval]
+    RReg -. claims plus source_id plus quote .-> Coord
+    RPol -. claims plus source_id plus quote .-> Coord
+    Coord --> Reg[(Source registry plus audit log<br/>durable state)]
+    Coord --> Syn[Synthesis<br/>cite each sentence by source_id]
+    Syn --> Gate{{Validator hook<br/>id in registry and quote matches?}}
+    Gate -->|fail| Gap[Mark as unsupported gap<br/>or route to human]
+    Gate -->|pass| Memo[Cited memo plus references<br/>plus conflict section]
+```
+
+The coordinator owns orchestration and the durable registry; retrieval subagents do narrow, least-privilege work and return *structured claims with quotes*, not prose; a **validator gate — not a prompt request — enforces "no citation, no claim,"** because audit integrity must be deterministic.
+
+### Implementation
+
+Require each retrieval subagent to return structured, quote-bearing claims (the §12.1 contract):
+
+```python
+retrieval_subagent = AgentDefinition(
+    name="regulation_retriever",
+    description="Retrieves passages from supplied regulation corpora. Read-only.",
+    system_prompt=(
+        "Search the supplied documents. For each relevant finding return a JSON object: "
+        "{claim, source_id, source_name, publication_date, supporting_quote}. "
+        "Use ONLY the source_ids present in the provided documents. "
+        "If nothing supports the question, return an empty list — never invent a source."
+    ),
+    allowed_tools=["search_corpus"],   # least privilege: retrieval only
+)
+```
+
+Keep provenance in durable state so it survives trimming (the §12.2 two-table discipline):
+
+```python
+# Source registry lives OUTSIDE the summarized history — never compacted away.
+source_registry = {}          # source_id -> {url, name, date, full_text}
+audit_log = []                # append-only: (sentence_id, source_id, quote)
+
+def register_claim(claim):
+    sid = claim["source_id"]
+    if sid not in source_registry:           # globally unique IDs assigned at ingestion
+        source_registry[sid] = lookup_source(sid)
+    return claim
+```
+
+Enforce "no citation, no claim" deterministically with a validator gate over the synthesized memo — this is the line the exam wants you to get right:
+
+```python
+def validate_citations(memo_sentences):
+    for s in memo_sentences:
+        sid = s.get("source_id")
+        # 1) the cited source must actually exist in the registry
+        if sid not in source_registry:
+            s["status"] = "unsupported_gap"       # cannot cite what we do not have
+            continue
+        # 2) the supporting quote must actually appear in that source's text
+        if s["supporting_quote"] not in source_registry[sid]["full_text"]:
+            s["status"] = "quote_mismatch"        # fabricated/edited quote -> reject
+            continue
+        s["status"] = "verified"
+        audit_log.append((s["id"], sid, s["supporting_quote"]))
+    return memo_sentences
+```
+
+For conflicting retention periods, preserve every value with attribution (the §12.3 structure) instead of resolving to one — the synthesis emits a dedicated "Disputed findings" section keyed by `source_id`.
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Off as Compliance officer
+    participant Co as Coordinator
+    participant R as Retrieval subagent
+    participant V as Validator gate
+    Off->>Co: "Retention rules for payment records?"
+    Co->>R: Task(question plus corpus ids, full context)
+    R-->>Co: claim "retain 1 year" + src_07 + quote
+    Co->>Co: register src_07; draft cites it as [src_07]
+    Co->>V: validate(sentence, src_07, quote)
+    V->>V: src_07 in registry AND quote matches
+    V-->>Co: verified; append to audit_log
+    Co-->>Off: cited memo + references + conflict note
+```
+
+Notice the subagent returned the *quote alongside the claim*, and the **validator gate confirmed the quote really exists in src_07 before the sentence was allowed into the memo**. Had the model paraphrased a source it never read, the quote check would have failed and the sentence would be demoted to a gap — provenance enforced by code, not by a polite "please cite."
+
+### Validation
+
+- **No-fabrication test:** feed a question with **no** supporting source in the corpus and assert the memo reports a gap (zero invented citations), not a confident answer.
+- **Quote-integrity test:** corrupt one `supporting_quote` so it no longer matches the source text and assert the validator flags `quote_mismatch` and removes the sentence.
+- **Trim-survival test:** `/compact` the worker transcripts, then assert every `source_id` in the final memo still resolves via the registry — proving provenance lives outside summarized history.
+- **Conflict-preservation test:** supply two sources with different retention periods and assert *both* appear, dated and attributed, in the Disputed findings section.
+- **Audit-trail test:** assert every verified sentence has a matching `(sentence_id, source_id, quote)` row in `audit_log`, reproducible after the session ends.
+
+### Common pitfalls
+
+- Asking for citations in the prompt instead of validating them with a gate (probabilistic — the model will sometimes fabricate; §12.5).
+- Renumbering sources per subagent so merged citations point to the wrong document (use globally unique IDs; §12.2).
+- Summarizing the source registry along with the chat history, so citations no longer resolve after `/compact` (keep it in durable state; §12.2).
+- Resolving conflicting retention periods to a single value and dropping the methodology/date that explained the gap (§12.3).
+- Treating fluent, authoritative-sounding citations as proof of correctness instead of verifying the quote against the source (§12.5).
+
+## 12.7 Exam Focus — Key Takeaways
+
+| Concept | What the exam tests |
+|---|---|
+| Attribution loss | Require subagents to emit structured claim → source mappings (id, URL, name, quote); a "please cite" prompt degrades under summarization (§12.1). |
+| Source IDs through synthesis | Keep a durable source registry **outside** summarized history; cite by globally unique `source_id`; never renumber per worker (§12.2). |
+| Conflicting data | Preserve **every** value with source, date, and methodology and flag the conflict — never silently pick, average, or take the latest (§12.3). |
+| Dates | Attach `publication_date` (ISO-8601) so temporal differences read as growth/change, not contradiction (§12.4). |
+| No fabricated citations | Cite only from the registry, validate the supporting quote against the source, and report a gap when nothing supports a claim (§12.5). |
+| Render by content type | Financial → tables, news → prose, technical → lists, time series → chronological (§12.5). |
+
+> **Maps to Domain 5 (15%), objective 5.6.** If you can build and defend the cited compliance generator above — structured claim → source contracts, a durable registry that survives trimming, conflict preservation, and a validator gate that refuses fabricated citations — you have the provenance core the reliability domain tests.
 
 # Chapter 13: Claude Code Built-in Tools
 
+> Documentation: [Claude Code settings](https://docs.claude.com/en/docs/claude-code/settings) | [Subagents](https://docs.claude.com/en/docs/claude-code/sub-agents) | [Hooks](https://docs.claude.com/en/docs/claude-code/hooks) | [IAM & permissions](https://docs.claude.com/en/docs/claude-code/iam)
+
+Claude Code ships with a small, fixed set of **built-in tools** — the same primitives the agent uses to read, search, edit, and run code. Everything else (custom slash commands, skills, MCP servers, `CLAUDE.md`) configures *how* and *when* these tools fire, but the tools themselves are the hands of the agent. This chapter is part of **Domain 3 — Claude Code Configuration and Workflows (20% of the exam)**: the domain that tests whether you can drive Claude Code as a disciplined engineering workflow rather than a chat box. By the end you should be able to reason about three things and assemble them into a safe, auditable automation:
+
+- **Which tool for which job** (§13.1) — file discovery vs content search vs read/write vs shell, and why picking wrong wastes context and reliability.
+- **Incremental investigation** (§13.2) — Grep→Read→Grep→Read instead of loading the whole repo, and why this is a context-management skill, not just a search habit.
+- **The permission model** (§13.4) — the gate that decides whether a tool call runs, asks, or is denied; the only *deterministic* control over what an agent can do to your machine.
+
+§13.3 covers the Edit→Read+Write fallback, §13.5 fits the tools into delegation and TODO-tracking workflows, §13.6 builds a complete **guarded codebase-audit-and-refactor** automation end-to-end, and §13.7 distills what the exam tests.
+
 ## 13.1 Tool Selection Reference
+
+Each built-in tool has one job. The exam rewards picking the *cheapest correct* tool — using a shell `cat` where `Read` belongs, or reading ten files where one `Grep` would answer the question, are both marked wrong because they burn context and reduce reliability.
 
 | Task | Tool | Example |
 |---|---|---|
@@ -4147,10 +4875,35 @@ Don’t force everything into one format:
 | Write a new file | **Write** | Create a file from scratch |
 | Edit an existing file precisely | **Edit** | Replace a specific snippet via unique text match |
 | Run a shell command | **Bash** | git, npm, run tests, build |
+| Delegate an isolated sub-task | **Task** | Spawn a subagent with its own context window |
+| Fetch and read a URL | **WebFetch** | Pull docs/changelog, then reason over the content |
+| Track multi-step progress | **TodoWrite** | Maintain a visible checklist across a long task |
+
+**Why the distinction matters (Grep vs Glob is the classic trap):**
+- **Glob** answers *“which files exist that match this name pattern?”* — it never opens file contents. Use it to scope the work surface (e.g. find every test file before running them).
+- **Grep** answers *“which files contain this text?”* — it reads contents but returns matches, not whole files. It is built on ripgrep, so it takes real regex and respects `.gitignore`.
+- **Read** is for when you already know *which* file and need the actual lines. Reading a file you found by Glob “just to check” is the most common context-waste anti-pattern.
+
+**Bash is the escape hatch, not the default.** Anything the typed tools do — finding files, searching, reading — you *could* do with `find`, `grep`, `cat` in Bash, but you shouldn't: the dedicated tools integrate with the permission UI, return structured results, and avoid shell-quoting bugs. Reserve **Bash** for things that have no dedicated tool: `git`, `npm`/`pytest`, build steps, and process control. This is exactly the boundary the permission model is designed around (§13.4) — it can allow `Read` everywhere while still asking before every `Bash`.
+
+**Exam angle:** questions describe a goal (“locate every caller of `processPayment`”, “rename a symbol across the repo”, “run the test suite and report failures”) and ask which tool. The right answer is the narrowest tool that does the job: Grep for the callers, Edit (or Read+Write) for the rename, Bash for the tests.
 
 ## 13.2 Incremental Investigation Strategy
 
-Do not read all files at once. Build understanding incrementally:
+Do not read all files at once. Build understanding incrementally — search to *locate*, read to *confirm*, then search again from what you learned:
+
+```mermaid
+flowchart TD
+    A[Goal — understand a feature<br/>or find a bug] --> B[Glob to scope<br/>the candidate files]
+    B --> C[Grep for entry points<br/>definitions and exports]
+    C --> D[Read only the matched files]
+    D --> E[Grep for usages<br/>imports and call sites]
+    E --> F{Picture complete?}
+    F -->|no| D
+    F -->|yes| G[Act — Edit, Bash,<br/>or report findings]
+```
+
+In words, the loop is:
 
 ```
 1. Grep: find entry points (function definition, export)
@@ -4160,14 +4913,244 @@ Do not read all files at once. Build understanding incrementally:
 5. Repeat until you have a complete picture
 ```
 
+**Why this is a context-management skill, not just a search habit.** A long Claude Code session has a finite context window. Reading whole directories early fills that window with text you mostly don't need, and pushes the *relevant* lines toward the middle — where the lost-in-the-middle effect makes the model less reliable. Grep-first keeps only the lines that matter in context, so the model stays sharp deep into the task. This is the same reason Domain 5 favours scratchpads and subagent delegation for large codebases.
+
+**Pitfalls:**
+- **Reading before searching.** Opening files to “get oriented” is the dominant way sessions blow their context budget. Always Grep/Glob to narrow first.
+- **Grep too broad.** A pattern that matches thousands of lines is as useless as reading everything. Anchor the regex and use file-type/glob filters.
+- **Forgetting the second Grep.** Finding a *definition* tells you what a function is; finding its *call sites* tells you what breaks if you change it. Investigations that skip the usage pass produce refactors that compile and then fail at runtime.
+
+**Exam angle:** scenarios about investigating an unfamiliar or large codebase test whether you (a) search before reading, (b) delegate verbose discovery to a subagent to protect the main context (§13.5), and (c) recognise that “read the whole repo into context” is never the answer.
+
 ## 13.3 Fallback: Read + Write Instead of Edit
 
-When Edit fails due to a non-unique text match:
-1. Read — load the full file content
-2. Modify the content programmatically
-3. Write — write the updated version
+`Edit` performs a precise, in-place replacement by matching a **unique** string in the file. If the target text appears more than once, the edit is ambiguous and fails by design — Claude Code refuses rather than guessing which occurrence you meant. There are two correct responses:
 
----
+1. **Make the match unique.** Include more surrounding context in the `old_string` so it matches exactly one place (often the cleanest fix), or use `replace_all` when you genuinely intend every occurrence.
+2. **Fall back to Read + Write:**
+   - **Read** — load the full file content.
+   - Modify the content programmatically (compute the new version).
+   - **Write** — write the updated version back.
+
+```mermaid
+flowchart TD
+    A[Need to change a file] --> B[Edit with a<br/>unique old_string]
+    B --> C{Match unique?}
+    C -->|yes| D[Edit applied]
+    C -->|no, multiple matches| E[Add surrounding context<br/>to make it unique]
+    E --> F{Now unique?}
+    F -->|yes| D
+    F -->|no, or whole-file rewrite| G[Read full file]
+    G --> H[Compute new content]
+    H --> I[Write file back]
+```
+
+**Why Edit is preferred when it works.** A targeted Edit changes only the lines you name and leaves the rest byte-for-byte identical, which produces clean diffs and avoids accidental reformatting. A full Write replaces the entire file, so a single mistake in reconstructing the content can silently drop unrelated code. Use Write-as-fallback deliberately, not as a habit.
+
+**Pitfalls:**
+- **Writing a file you never Read.** Claude Code requires a prior Read of an existing file before Write (and before Edit) so you can't clobber content you haven't seen. Overwriting blind is both blocked and dangerous.
+- **`replace_all` when you meant one spot.** It is the right tool for a rename, the wrong tool for fixing a single bug that happens to share text with valid code.
+
+**Exam angle:** the canonical question is *“Edit failed because the snippet isn't unique — what now?”* The expected answer is to disambiguate the match (more context) or fall back to Read→modify→Write, **not** to abandon the change.
+
+## 13.4 The Permission Model: the Gate in Front of Every Tool
+
+The built-in tools are powerful — `Bash` can run anything, `Write` can overwrite anything — so Claude Code puts a **permission layer** in front of them. This is the single most important *deterministic* control in the whole configuration story, and it maps directly onto Domain 3's theme that guarantees come from configuration, not from polite prompting.
+
+Every tool call is evaluated against rules before it runs, with three outcomes:
+
+```mermaid
+flowchart TD
+    A[Agent requests a tool call<br/>e.g. Bash git push] --> B{Matches a deny rule?}
+    B -->|yes| C[Denied — call never runs]
+    B -->|no| D{Matches an allow rule?}
+    D -->|yes| E[Auto-approved — runs silently]
+    D -->|no| F{Default mode?}
+    F -->|ask| G[Prompt the user<br/>approve or reject]
+    F -->|acceptEdits| H[Auto-approve edits<br/>still ask for Bash]
+    G -->|approved| E
+    G -->|rejected| C
+```
+
+**How rules are written.** Permissions live in `settings.json` (and `.claude/settings.local.json`) as `allow`, `ask`, and `deny` lists keyed by tool, optionally with argument matchers:
+
+```json
+{
+  "permissions": {
+    "allow": ["Read", "Grep", "Glob", "Bash(npm test:*)", "Bash(git status)"],
+    "ask":   ["Bash(git push:*)", "Write"],
+    "deny":  ["Bash(rm -rf:*)", "Read(./secrets/**)", "WebFetch"]
+  }
+}
+```
+
+- **`allow`** runs the matching call without a prompt — use it for read-only and clearly safe operations so the agent isn't constantly interrupting you.
+- **`ask`** forces a human approval prompt every time — use it for actions with side effects you want to eyeball (writes, pushes).
+- **`deny`** blocks the call outright — the model **cannot** override it. This is where you put the truly dangerous things (`rm -rf`, reading credential files, network egress).
+
+**Precedence is the load-bearing detail: `deny` wins.** A call is checked against deny first; an allow rule can never re-enable something a deny rule forbids. So a `deny` on `Read(./secrets/**)` holds even if `Read` is globally allowed — exactly the property you want for a secrets directory.
+
+**Why this beats a prompt instruction.** Telling the model in `CLAUDE.md` “never touch the secrets folder” is *probabilistic* — it usually complies, but “usually” is unacceptable for credentials or `rm -rf`. A `deny` rule is *deterministic*: it is enforced by the harness, not the model's judgement. This is the §3.5 hooks principle applied to Claude Code's own tools — **when failure has security or data-loss consequences, gate it with configuration, not wording.**
+
+**Modes and headless runs.** The default interactive mode is **ask**; `acceptEdits` auto-approves file edits while still gating Bash; **plan mode** lets the agent explore read-only and propose changes without executing them. In CI/headless runs (`claude -p`) there is no human to answer prompts, so you must pre-approve the needed tools with `--allowedTools` (and rely on `deny` for the guardrails) — an un-allowed tool simply fails rather than hanging.
+
+**Pitfalls:**
+- **Over-broad allow.** `"allow": ["Bash"]` hands the agent unrestricted shell — the opposite of least privilege. Allow specific commands (`Bash(npm test:*)`), not the whole tool.
+- **Relying on a prompt where a deny is required.** “Please don't delete files” is not a control; `deny: ["Bash(rm:*)"]` is.
+- **Forgetting headless has no prompt.** A `-p` automation that needs `Write` but only allowed `Read` will fail silently on the first edit.
+
+**Exam angle:** expect a scenario where an agent must run tests and read code but must *never* push, delete, or read secrets — and you choose the allow/ask/deny split. The key facts tested: deny overrides allow, allow-listing specific commands is least privilege, and configuration (not prompt text) is what makes a prohibition guaranteed.
+
+## 13.5 Tools in Workflows: Delegation and Progress Tracking
+
+Two built-in tools are less about touching files and more about *running the workflow* itself.
+
+**`Task` (subagents) protects the main context.** A `Task` call spawns a subagent with its own fresh context window; it does the verbose work (a deep search, reading dozens of files) and returns only a summary to the coordinator. Three rules carry over directly from Chapter 3: the subagent **inherits no context** — pass everything it needs in the Task prompt; it should run with **least privilege** — only the tools its job requires; and **all results flow back through the coordinator**. The payoff specific to built-in tools: discovery output that would otherwise flood and degrade the main session stays isolated in the subagent.
+
+**`TodoWrite` makes a multi-step plan explicit and durable.** For any task with several steps, writing a checklist (exactly one item `in_progress` at a time, marked `completed` as you finish) keeps the agent — and the watching human — oriented across a long run, and makes a crash or interruption recoverable because the remaining work is written down rather than held only in the model's head.
+
+```mermaid
+flowchart TD
+    A[Coordinator agent] --> B[TodoWrite —<br/>write the step list]
+    B --> C[Task — audit subagent<br/>Grep + Read, read-only]
+    C -. findings summary only .-> A
+    A --> D[Edit — apply one fix]
+    D --> E[Bash — npm test]
+    E --> F{Tests pass?}
+    F -->|no| D
+    F -->|yes| G[TodoWrite — mark step done]
+    G --> H{More steps?}
+    H -->|yes| C
+    H -->|no| I[Report]
+```
+
+**Pitfalls:** spawning a subagent but forgetting to pass it the context it needs (it starts blind); giving an audit subagent write/Bash tools it doesn't need (violates least privilege and widens blast radius); treating TodoWrite as decoration instead of keeping exactly one task in progress.
+
+**Exam angle:** large-codebase and multi-step scenarios test whether you delegate verbose discovery to a subagent (context protection) and track progress explicitly — and whether the subagent's toolset is scoped to its role.
+
+## 13.6 End-to-End Case Study: A Guarded Codebase-Audit-and-Refactor Workflow
+
+The tools above only matter when they fit together under the permission model. Here is a complete, realistic Claude Code automation — the kind Domain 3 asks you to design: a workflow that audits a repository for a class of security issue and fixes it, while configuration (not trust) guarantees it can never do harm.
+
+### Requirements
+
+- Scan a Node.js repository for **hardcoded secrets** (API keys, tokens) and for unsafe `child_process.exec(...)` calls built from user input.
+- For each finding, apply a **safe, mechanical fix**: move secrets to environment variables, switch `exec` to `execFile` with argument arrays.
+- **Hard rule:** the workflow may read anything *except* `./secrets/**` and `.env*`, may run only the test suite, and may **never** run destructive shell commands or push to git — no exceptions, no model discretion.
+- Run **headless in CI** on every pull request, and emit a structured report; verbose discovery must not exhaust the main context.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    PR([Pull request in CI]) --> Coord[Coordinator — claude -p]
+    Coord --> Perm{{Permission layer<br/>allow / ask / deny}}
+    Coord --> Plan[TodoWrite — audit then fix then verify]
+    Coord -->|Task| Audit[Audit subagent<br/>Glob + Grep + Read, read-only]
+    Audit -. findings list only .-> Coord
+    Coord --> Fix[Edit — apply mechanical fix]
+    Fix --> Test[Bash — npm test]
+    Test --> Report[Write — audit-report.json]
+    Perm -. blocks rm, push, secrets read .-> Coord
+```
+
+The coordinator owns orchestration; the **audit subagent does narrow, read-only discovery** so its verbose output never reaches the main window; and the **permission layer — not the system prompt — guarantees the safety envelope**, because that must be deterministic.
+
+### Implementation
+
+Configure the safety envelope in `settings.json`. This is the line the exam wants you to get right — the prohibitions are rules, not requests:
+
+```json
+{
+  "permissions": {
+    "allow": ["Read", "Grep", "Glob", "Bash(npm test:*)", "Edit", "Write(./audit-report.json)"],
+    "deny":  ["Read(./secrets/**)", "Read(./.env*)", "Bash(rm:*)", "Bash(git push:*)", "WebFetch"]
+  }
+}
+```
+
+Note `Read` is allowed broadly, yet the `deny` on `./secrets/**` and `./.env*` still holds — **deny overrides allow**, so the agent physically cannot read credentials even while reading source freely.
+
+Delegate the verbose scan to a least-privilege subagent (read-only tools, full context in the prompt):
+
+```python
+audit_agent = AgentDefinition(
+    name="secret_auditor",
+    description="Finds hardcoded secrets and unsafe exec() calls. Read-only.",
+    system_prompt=(
+        "Search the repo for hardcoded API keys/tokens and for child_process.exec "
+        "called with interpolated input. Return a JSON list of {file, line, kind}. "
+        "Do not modify files."
+    ),
+    allowed_tools=["Glob", "Grep", "Read"],   # least privilege: no Edit, no Bash
+)
+```
+
+Run the whole thing headless in CI, pre-approving exactly the tools needed (no human is present to answer an `ask`):
+
+```bash
+claude -p "Run the secret-and-exec audit, apply mechanical fixes, then run the tests." \
+  --allowedTools "Read,Grep,Glob,Edit,Bash(npm test:*),Write(./audit-report.json)" \
+  --output-format json
+```
+
+A representative fix the agent applies — narrowed via Grep, changed via Edit:
+
+```js
+// before  (flagged: hardcoded secret)
+const apiKey = "sk-live-9f8a7b6c5d4e3f2a1b0c";
+// after
+const apiKey = process.env.API_KEY;
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor CI as CI pipeline
+    participant Co as Coordinator
+    participant Au as Audit subagent
+    participant Pm as Permission layer
+    CI->>Co: claude -p "audit and fix"
+    Co->>Au: Task(scan for secrets + unsafe exec)
+    Au-->>Co: 2 findings: config.js L3, run.js L20
+    Co->>Pm: Edit config.js (key to env var)
+    Pm-->>Co: allowed, edit applied
+    Co->>Pm: Read ./secrets/prod.key
+    Pm-->>Co: DENIED by deny rule
+    Co->>Pm: Bash npm test
+    Pm-->>Co: allowed, tests pass
+    Co-->>CI: audit-report.json (2 fixed)
+```
+
+Notice the coordinator *attempted* to read `./secrets/prod.key` (perhaps to "verify" a key) and the **permission layer denied it deterministically**. With only a `CLAUDE.md` note ("don't read secrets"), the model would comply most of the time — not good enough for credentials. The `deny` rule makes it impossible, not merely unlikely.
+
+### Validation
+
+- **Determinism test:** in 100 runs where the agent is prompted to read `./secrets/prod.key`, assert 100 denials. A prompt-only guardrail will eventually leak; the `deny` rule must be 100%.
+- **Context-isolation test:** confirm the audit subagent receives the search task and repo scope *in its Task prompt*; the coordinator's window should contain the findings summary, not the raw file dumps — proving discovery stayed isolated.
+- **Least-privilege test:** assert the `secret_auditor` subagent has no `Edit` or `Bash`, so a prompt-injected instruction inside a scanned file cannot make it modify code or shell out.
+- **Headless test:** run with `-p` and a deliberately incomplete `--allowedTools` (omit `Edit`); confirm the fix step fails cleanly rather than hanging on a prompt.
+
+### Common pitfalls
+
+- Putting the secrets/`rm`/push prohibitions in `CLAUDE.md` instead of `deny` rules (probabilistic, not guaranteed) — see §13.4.
+- Allowing the whole `Bash` tool instead of `Bash(npm test:*)`, handing the agent an unrestricted shell (over-broad allow).
+- Letting the coordinator do the scan itself, flooding the main context with file contents instead of delegating to a read-only subagent (§13.2, §13.5).
+- Running headless without pre-approving `Edit`/`Write`, so the automation silently fails on the first change because there is no human to grant the prompt.
+
+## 13.7 Exam Focus — Key Takeaways
+
+| Concept | What the exam tests |
+|---|---|
+| Tool selection | Pick the narrowest correct tool: Glob to find files, Grep to search contents, Read to open a known file, Edit for precise changes, Bash only for git/tests/build (§13.1). |
+| Incremental investigation | Search before reading; Grep→Read→Grep→Read; never load the whole repo into context (§13.2). |
+| Edit fallback | A non-unique match fails by design — disambiguate with more context or fall back to Read→modify→Write (§13.3). |
+| Permission model | Three outcomes (allow/ask/deny); **deny overrides allow**; configuration is deterministic where a prompt is only probabilistic (§13.4). |
+| Least privilege & delegation | Scope each agent/subagent to the minimum tools; delegate verbose discovery to a read-only subagent to protect context (§13.5). |
+| Headless guardrails | In `claude -p` there is no prompt — pre-approve tools with `--allowedTools` and enforce limits with `deny` (§13.4, §13.6). |
+
+> **Maps to Domain 3 (20%).** If you can design and defend the guarded-audit workflow above — right tool per job, search-first investigation, and a permission split that makes the dangerous things impossible rather than merely discouraged — you have the core of Claude Code as a disciplined engineering workflow.
 
 # PART II: EXAM DOMAIN NOTES
 
