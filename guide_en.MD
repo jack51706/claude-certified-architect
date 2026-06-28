@@ -117,6 +117,19 @@ This part covers all the theory you need to pass the exam successfully. The mate
 
 > Documentation: [Messages API](https://platform.claude.com/docs/en/api/messages) | [Prompt Engineering](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/overview)
 
+Every Claude system — a single classification call, a Claude Code session, or a 20-agent research swarm — is ultimately a sequence of HTTP requests to one endpoint: `POST /v1/messages`. The Messages API is the substrate the rest of this guide builds on. Tool use (Chapter 2), the Agent SDK (Chapter 3), and MCP (Chapter 4) are all *features of this one endpoint or wrappers around it*. If you misunderstand how a request is shaped, what `stop_reason` means, or why the API is stateless, those mistakes propagate into every higher layer.
+
+This chapter underpins three exam domains at once: **Domain 1 — Agent Architecture and Orchestration (27%)** (the agent loop is driven entirely by `stop_reason`), **Domain 4 — Prompt Engineering and Structured Output (20%)** (the `system` field and message construction), and **Domain 5 — Context Management and Reliability (15%)** (the context window and the consequences of a stateless API). By the end you should be able to reason about:
+
+- **The request/response contract** (§1.1) — what every call carries, and which fields are load-bearing.
+- **Message roles and statelessness** (§1.2) — why you resend the whole conversation every time.
+- **`stop_reason`** (§1.3) — the single field that controls agent loops and error handling.
+- **The system prompt** (§1.4) — how behavior is set, and how its wording leaks into tool selection.
+- **The context window** (§1.5) — the finite budget all of the above share.
+- **Streaming, tokens, and cost** (§1.6) — the operational realities of running the API in production.
+
+§1.7 then builds a complete multi-turn support-chat backend end-to-end, and §1.8 distills what the exam tests.
+
 ## 1.1 API Request Structure
 
 The Claude API follows a request–response model. Each request to the Claude Messages API includes:
@@ -144,6 +157,16 @@ The Claude API follows a request–response model. Each request to the Claude Me
 - `tools` — definitions of available tools
 - `tool_choice` — tool selection strategy
 
+**Why each field is the way it is — and the common mistakes:**
+
+- **`model`** is an exact ID string, not a fuzzy alias you can decorate. `claude-opus-4-8` is the most capable tier; `claude-sonnet-4-6` balances cost and intelligence; `claude-haiku-4-5` is fastest and cheapest. A typo (`claude-sonnet-4.6`) or an invented date suffix (`claude-sonnet-4-6-20251114`) returns **404 `not_found_error`** — the exam likes to test that you do not construct IDs.
+- **`max_tokens`** caps only the *output*, and the model does not know about it. Set it too low and the response is silently cut off mid-sentence with `stop_reason == "max_tokens"`. Set a generous value for open-ended generation (16K for non-streaming; up to 64K–128K when streaming), and a tiny one (e.g. 256) for classification. Underestimating `max_tokens` is the single most common cause of "the model stopped halfway."
+- **`system`** is a *separate top-level field*, not the first element of `messages`. New developers often try to prepend a `{"role": "system", ...}` entry to the array — historically that returns an error, and even where mid-conversation system messages are now supported, the *initial* instructions belong in the top-level `system` field. (More in §1.4.)
+- **`messages`** must be non-empty, must start with a `user` turn, and the first message can never be `assistant` — a `400` otherwise. Roles are combined across consecutive same-role entries, but the array as a whole is the entire memory the model has (see §1.2).
+- **`tools` / `tool_choice`** are optional. With no tools, the model can only produce text. `tool_choice` defaults to `{"type": "auto"}` (model decides). These are the seam into Chapter 2; for now, note only that their *presence* costs context-window tokens because every tool's JSON schema is sent on every request.
+
+**Exam angle:** questions phrase this as "what is the minimum required to make a valid call?" — the answer is `model`, `max_tokens`, and a `messages` array starting with a `user` turn. Everything else is optional.
+
 ## 1.2 Message Roles
 
 The `messages` array uses three roles:
@@ -152,6 +175,27 @@ The `messages` array uses three roles:
 - `tool` — tool call results (the role is not explicitly set; this appears as a `tool_result` content block)
 
 **Critically important:** on every API request you must send the **full conversation history**. The model does not persist state between requests—each call is independent.
+
+**Why this matters more than it looks.** "Stateless" is not a minor implementation detail; it is the defining property of the API, and it dictates the design of every multi-turn system above it:
+
+```mermaid
+flowchart TD
+    A[Turn 1<br/>send: user msg 1] --> B[Claude replies<br/>assistant msg 1]
+    B --> C[Your app stores both<br/>in the messages array]
+    C --> D[Turn 2<br/>send: user1 + assistant1 + user2]
+    D --> E[Claude replies<br/>assistant msg 2]
+    E --> F[Append again<br/>history keeps growing]
+    F -.->|every turn resends everything| D
+```
+
+- **The server keeps nothing.** There is no session you can "continue" with just the latest user message. If you send only message N, the model has amnesia about messages 1..N-1. The full transcript *is* the conversation.
+- **`tool` results are content blocks, not a literal role.** When the model calls a tool, you append the result as a `tool_result` content block inside a `user`-role message — the role label is not set to `"tool"`. This trips up developers who expect a symmetric "tool" role; the exam expects you to know the result rides back in a user turn keyed by `tool_use_id`.
+- **Consecutive same-role messages are allowed** (the API merges them into one turn), but the array must still begin with `user`.
+
+**Common mistakes:**
+- Sending only the latest user turn and wondering why context is "lost" — the context was never stored server-side.
+- Letting the array grow unbounded until it overflows the context window (§1.5) — statelessness means *you* own history management, including trimming and summarization.
+- Hand-rolling a `{"role": "tool", ...}` message instead of a `tool_result` block.
 
 ## 1.3 The `stop_reason` Field in the Response
 
@@ -168,6 +212,25 @@ The Claude API response includes `stop_reason`, which indicates why the model st
 
 For agentic systems, `"tool_use"` and `"end_turn"` are the most important—they control the agent loop.
 
+**`stop_reason` is the control plane of every agent.** This single field is *the* exam-critical concept in Chapter 1, because the entire agentic loop (Chapter 3, §3.1) branches on it:
+
+```mermaid
+flowchart TD
+    A[Read response.stop_reason] --> B{which value?}
+    B -->|tool_use| C[Execute tool<br/>append tool_result<br/>loop again]
+    B -->|end_turn| D[Done — return text to user]
+    B -->|max_tokens| E[Truncated — raise max_tokens<br/>or stream, then retry]
+    B -->|pause_turn| F[Resend response<br/>so the server resumes]
+    B -->|refusal| G[Stop — handle gracefully<br/>do NOT blind-retry]
+```
+
+- **Branch on `stop_reason`, never on text.** The only reliable signal that a task is complete is `stop_reason == "end_turn"`. Parsing the assistant's prose for "done" or "task completed" is the canonical anti-pattern the exam wants you to reject — it is brittle, language-dependent, and easily spoofed by the model's own wording.
+- **`max_tokens` means truncated, not finished.** Treat it as an error condition: the output is incomplete. Either raise `max_tokens` and re-request, or switch to streaming (which lets you use a higher ceiling without hitting HTTP timeouts).
+- **`pause_turn` is for server-side tools.** When the model uses an Anthropic-hosted tool (web search, code execution) and the server-side loop hits its iteration limit, you get `pause_turn`. Resume by sending the assistant response straight back — **do not** add a `"Continue."` user message; the API detects the trailing server-tool block and resumes automatically.
+- **`refusal` must not be blind-retried.** On Claude 4+, a safety decline returns a successful HTTP 200 with `stop_reason == "refusal"`. Re-sending the identical request just burns tokens for the same outcome. Read `stop_reason` *before* touching `response.content` — on a pre-output refusal the content array can be empty, and code that does `response.content[0].text` unconditionally will crash.
+
+**Guard `stop_details` before reading it.** `response.stop_details` is populated *only* when `stop_reason == "refusal"`; for `end_turn`, `max_tokens`, `tool_use`, etc. it is `null`. Reading `.category` without a guard is a runtime error.
+
 ## 1.4 System Prompt
 
 The system prompt is a special instruction that defines context and behavioral rules. It:
@@ -176,7 +239,23 @@ The system prompt is a special instruction that defines context and behavioral r
 - Is loaded once and applies throughout the conversation
 - Is used to define role, constraints, and output format
 
-**Important for the exam:** system prompt wording can create unintended tool associations. For example, an instruction like “always verify the customer” can cause the model to overuse `get_customer`, even when it is unnecessary.
+**Important for the exam:** system prompt wording can create unintended tool associations. For example, an instruction like "always verify the customer" can cause the model to overuse `get_customer`, even when it is unnecessary.
+
+**Why the system prompt is more than "the instructions."** It is the highest-authority text in the request and it sits at the *front* of the prompt prefix, which has two consequences the exam probes:
+
+```mermaid
+flowchart TD
+    SP[System prompt<br/>highest authority<br/>front of the prefix] --> A[Defines role and constraints]
+    SP --> B[Sets output format]
+    SP --> C[Influences tool selection]
+    C -.->|over-strong wording| D[Tool overtriggering<br/>e.g. always-verify -> overuse get_customer]
+    SP --> E[First bytes of the cacheable prefix<br/>see 1.6 prompt caching]
+```
+
+- **Wording leaks into behavior.** Because the model follows the system prompt closely, imperative phrasing meant to *overcome* reluctance now *over*-triggers. "Always verify the customer" makes the model call `get_customer` even when the request never needed it; "CRITICAL: you MUST use the search tool" makes it search when reasoning would do. The fix is almost always to soften the language ("verify the customer when the request involves account changes"), not to add more guardrails. This is the exam's favorite Chapter 1 nuance, and it ties directly into Domain 4 (prompt design) and Domain 1 (tool-selection behavior).
+- **Soft preferences belong here; hard rules do not.** The system prompt yields *probabilistic* compliance — the model usually obeys, but not 100% of the time. Anything that must be guaranteed (a refund ceiling, an identity check before a financial action) belongs in deterministic code or a hook (Chapter 3, §3.5), never in prompt text alone. Putting a money rule in the system prompt is a classic wrong answer.
+- **It is set once, applies throughout, and overrides user messages.** A user cannot talk the model out of a constraint that lives in the system prompt as easily as one buried in conversation — which is exactly why operator instructions belong there rather than in a user turn.
+- **It is the front of the cacheable prefix.** Because the system prompt is stable and sits first, it is the natural place to anchor prompt caching (§1.6). Interpolating volatile content into it — a timestamp, the user's name, a request ID — invalidates the cache for everything after it. Keep it frozen.
 
 ## 1.5 Context Window
 
@@ -192,21 +271,278 @@ The context window is the total amount of text (in tokens) the model can process
 
 2. **Accumulation of tool results:** every tool call adds output to the context. If a tool returns 40+ fields but only 5 matter, then most of the context is wasted.
 
-3. **Progressive summarization:** when compressing history, numeric values, percentages, and dates often get lost and become vague (“about”, “roughly”, “a few”).
+3. **Progressive summarization:** when compressing history, numeric values, percentages, and dates often get lost and become vague ("about", "roughly", "a few").
 
----
+**Why the context window is a *budget*, not just a *limit*.** Everything in §1.1–§1.4 competes for the same finite token pool, and because the API is stateless (§1.2), that pool fills up turn after turn as you resend a growing transcript:
+
+```mermaid
+flowchart TD
+    CW[Context window<br/>one shared token budget] --> S[System prompt]
+    CW --> H[Full message history<br/>grows every turn]
+    CW --> T[Tool definitions<br/>every schema, every request]
+    CW --> R[Tool results<br/>accumulate fast]
+    H -.->|unbounded growth| X[Overflow risk and<br/>lost-in-the-middle]
+    R -.->|40+ fields when 5 matter| X
+```
+
+- **Lost-in-the-middle is a placement problem.** Models attend most reliably to the *start* and *end* of a long input and can miss findings buried in the middle. So order matters: put the key instruction or the critical finding near the top or the bottom, not at token 40,000 of 60,000. When aggregating data from multiple sources, lead with the most important section under an explicit heading.
+- **Tool-result bloat is the silent budget killer.** A tool that returns 40 fields when the model needs 5 wastes the other 35 on every subsequent turn (because history is resent). Trim verbose tool outputs down to the relevant fields *before* they enter the transcript — this is a Domain 5 skill and a recurring exam scenario.
+- **Summarization loses exactly the data you cared about.** Progressive summarization tends to compress precise values — numbers, percentages, dates, IDs — into vague language ("about a few", "roughly last quarter"). The mitigation is to extract transactional facts into a persistent, *un*-summarized "case facts" block rather than trusting a rolling summary to preserve them.
+- **Modern long-context features exist, but the principles stand.** Even with 200K–1M-token windows, server-side compaction, and context editing, the same failure modes apply — a bigger budget delays the problem, it doesn't repeal it. The exam tests the *principles* (placement, trimming, fact preservation), not the raw window size.
+
+## 1.6 Streaming, Tokens, and Cost
+
+The previous sections describe the *shape* of a call; this section covers the *operational* realities of running it in production — the parts the exam frames as "which approach should you use" trade-offs.
+
+### Streaming
+
+A non-streaming request blocks until the entire response is generated, then returns it all at once. For long outputs this risks an HTTP timeout — the SDKs refuse non-streaming requests that they estimate will take too long, and large `max_tokens` (above ~16K) effectively *requires* streaming. Streaming sends the response incrementally as a series of Server-Sent Events:
+
+```mermaid
+sequenceDiagram
+    actor App as Your app
+    participant API as Messages API
+    App->>API: messages.stream(...)
+    API-->>App: message_start (metadata)
+    API-->>App: content_block_start
+    API-->>App: content_block_delta (token)
+    API-->>App: content_block_delta (token)
+    API-->>App: content_block_stop
+    API-->>App: message_delta (stop_reason, usage)
+    API-->>App: message_stop
+    App->>App: get_final_message() to assemble the whole reply
+```
+
+- **`message_delta` carries the payload you actually need to branch on:** it contains `stop_reason` and the running token `usage`. Even when streaming for UX, call the SDK helper (`get_final_message()` / `.finalMessage()`) to reassemble the complete message — you get the streamed UX *and* timeout protection without having to handle every event by hand.
+- **Default to streaming for anything with long input or high `max_tokens`.** It is the standard production posture; non-streaming is fine only for short, fast calls (classification, extraction).
+
+### Tokens and cost
+
+Pricing is per-token, billed separately for input and output, and varies by model:
+
+| Model | Input $/1M | Output $/1M | Context |
+|---|---|---|---|
+| `claude-opus-4-8` | $5.00 | $25.00 | 1M |
+| `claude-sonnet-4-6` | $3.00 | $15.00 | 1M |
+| `claude-haiku-4-5` | $1.00 | $5.00 | 200K |
+
+- **Output is far more expensive than input** (5× on every model above). A response that rambles costs more than the prompt that asked for it — another reason a well-scoped `max_tokens` and a concise system prompt matter.
+- **Count tokens with the API, not a guess.** To estimate cost or check whether a prompt fits the window, use `POST /v1/messages/count_tokens` (`client.messages.count_tokens(...)`). Do **not** use `tiktoken` or other OpenAI tokenizers — they are calibrated for a different model and undercount Claude tokens, badly on code and non-English text. Token counts are model-specific; pass the same `model` you will use for inference.
+- **`usage` reports the real numbers.** Each response carries `usage` with `input_tokens`, `output_tokens`, and the cache fields below. `input_tokens` is the *uncached remainder only* — total prompt size is `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`.
+
+### Prompt caching (basics)
+
+Prompt caching is a **prefix match**: the API caches the rendered prompt up to a `cache_control` breakpoint, and any byte change anywhere in that prefix invalidates everything after it. Render order is `tools` → `system` → `messages`.
+
+- **Keep the stable content first, volatile content last.** A frozen system prompt and a deterministic tool list are ideal cache anchors; a timestamp or per-request ID interpolated into the system prompt silently breaks caching for the whole request.
+- **Cache reads cost ~0.1× of base input price**, writes ~1.25× — so a large reused preamble (instructions, few-shot examples, a long document) pays for itself within a couple of requests.
+- **Verify with `usage.cache_read_input_tokens`.** If it stays zero across requests that *should* share a prefix, a silent invalidator is at work (commonly `datetime.now()` in the system prompt, an unsorted JSON dump, or a tool set that varies per request).
+
+**Exam angle:** caching, streaming, and token counting are the Chapter 1 building blocks behind Domain 5's cost/reliability scenarios — the questions test *when* to stream, *why* not to use `tiktoken`, and *what* invalidates a cache, not the exact pricing numbers.
+
+## 1.7 End-to-End Case Study: A Multi-Turn Support-Chat Backend
+
+The fields above only matter when they fit together. Here is a complete, realistic backend that ties the chapter into one system — a stateless web service that powers a multi-turn customer-support chat. It uses *only* Chapter 1 concepts: messages, the system prompt, statelessness, streaming, `stop_reason`, token/cost accounting, and prompt caching. (No tools yet — that is Chapter 2.)
+
+### Requirements
+
+- Power a back-and-forth support chat: the user types, the assistant replies, repeat.
+- The service is a stateless HTTP backend (multiple instances behind a load balancer) — **it cannot rely on in-process memory** between requests.
+- Stream replies token-by-token so the UI shows text as it is generated.
+- A fixed support persona and policy text apply to every conversation and must be cached, not re-billed every turn.
+- Track token usage per conversation for cost reporting.
+- Handle truncated (`max_tokens`) and refused (`refusal`) responses correctly — never show a half-message as if it were complete, never blind-retry a refusal.
+- Keep conversations from overflowing the context window.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    User([User browser]) -->|POST message + conversation_id| Svc[Stateless chat backend]
+    Svc --> Store[(Conversation store<br/>full messages array)]
+    Store --> Build[Build request<br/>cached system + full history + new turn]
+    Build -->|messages.stream| API[Claude Messages API]
+    API -->|token deltas| Svc
+    Svc -->|SSE| User
+    API -->|message_delta: stop_reason + usage| Check{stop_reason?}
+    Check -->|end_turn| Save[Append assistant reply<br/>record usage]
+    Check -->|max_tokens| Retry[Mark truncated<br/>raise max_tokens]
+    Check -->|refusal| Safe[Return safe fallback<br/>no blind retry]
+    Save --> Store
+```
+
+Because the backend is stateless, **the conversation store is the only memory** — every turn rebuilds the full request from it. The system prompt is the cache anchor; the growing `messages` array is the conversation.
+
+### Implementation
+
+A conversation manager that resends full history, caches the persona, and streams:
+
+```python
+import anthropic
+
+client = anthropic.Anthropic()
+
+SUPPORT_SYSTEM = (
+    "You are Acme's support assistant. Be concise and friendly. "
+    "Help with orders and returns. If a request needs an account change, "
+    "ask the user to confirm their order number first."
+)  # Frozen — no timestamps or per-user data, so it caches cleanly.
+
+def handle_turn(conversation_id: str, user_text: str) -> dict:
+    history = store.load(conversation_id)          # full messages array (statelessness)
+    history.append({"role": "user", "content": user_text})
+
+    with client.messages.stream(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        cache_control={"type": "ephemeral"},       # cache the stable system prefix
+        system=SUPPORT_SYSTEM,
+        messages=history,
+    ) as stream:
+        for text in stream.text_stream:
+            push_sse(conversation_id, text)        # stream tokens to the UI
+        final = stream.get_final_message()         # reassemble + get stop_reason/usage
+
+    if final.stop_reason == "refusal":
+        return {"status": "refused"}               # do NOT re-send the same request
+    if final.stop_reason == "max_tokens":
+        return {"status": "truncated"}             # incomplete — raise max_tokens & retry
+
+    assistant_text = next(b.text for b in final.content if b.type == "text")
+    history.append({"role": "assistant", "content": assistant_text})
+    store.save(conversation_id, history)           # persist the growing transcript
+    record_usage(conversation_id, final.usage)     # input/output/cache tokens for cost
+    return {"status": "ok"}
+```
+
+Guard the context window by trimming history when it grows too large, preserving the most recent turns:
+
+```python
+def trim(history: list, keep_recent: int = 20) -> list:
+    # Statelessness means WE own history management. Keep recent turns;
+    # for long sessions, summarize older turns into a persistent facts block
+    # rather than dropping precise order numbers and dates (1.5).
+    return history if len(history) <= keep_recent else history[-keep_recent:]
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant B as Chat backend
+    participant DB as Conversation store
+    participant C as Claude API
+    U->>B: "Where is order #5512?"
+    B->>DB: load history (turns 1..n)
+    DB-->>B: full messages array
+    B->>C: stream(system=cached, messages=history + new turn)
+    C-->>B: token deltas (streamed to U)
+    C-->>B: message_delta: stop_reason=end_turn, usage
+    B->>DB: append assistant reply, save
+    U->>B: "Cancel it." (next turn, same conversation_id)
+    B->>DB: load history (now includes the order #5512 exchange)
+    B->>C: stream(system=cached prefix → cache hit, full history)
+    C-->>B: reply (knows about #5512 only because history was resent)
+```
+
+Notice that turn 2 only "remembers" order #5512 because the backend **resent the entire transcript** — the API stored nothing. The second request also gets a **cache hit** on the system prefix, so the persona text is billed at ~0.1× instead of full price.
+
+### Validation
+
+- **Statelessness test:** restart the backend (drop all in-process state) mid-conversation; the next turn must still have full context, proving memory lives in the store, not the process.
+- **Cache test:** assert `usage.cache_read_input_tokens > 0` on the second and later turns. If it is zero, a silent invalidator slipped into the system prompt (a timestamp, a per-user string).
+- **Truncation test:** force `max_tokens=16` on a long answer and assert the backend reports `truncated` rather than saving a half-sentence as a complete reply.
+- **Refusal test:** assert a `refusal` response returns the safe fallback and does *not* fire a second identical request.
+- **Context-budget test:** run a long conversation and confirm `trim()` keeps the window bounded without dropping the latest user intent.
+
+### Common pitfalls
+
+- Storing history in process memory and losing the conversation when the load balancer routes the next turn to a different instance (the API is stateless — §1.2).
+- Interpolating `datetime.now()` or the user's name into `SUPPORT_SYSTEM`, silently killing the cache (§1.4, §1.6).
+- Treating `max_tokens` as success and showing a truncated message as final (§1.3).
+- Blind-retrying a `refusal` and burning tokens for the same outcome (§1.3).
+- Letting the `messages` array grow unbounded until it overflows the context window (§1.5).
+- Estimating cost with `tiktoken` instead of `count_tokens`, undercounting Claude tokens (§1.6).
+
+## 1.8 Exam Focus — Key Takeaways
+
+| Concept | What the exam tests |
+|---|---|
+| Request structure | Minimum valid call is `model` + `max_tokens` + a `messages` array starting with `user`; `system` is a separate field, not a message (§1.1). |
+| Statelessness | The server stores nothing — you resend the full history every turn; you own trimming and summarization (§1.2). |
+| `stop_reason` | Branch on `stop_reason`, never on parsed text; `end_turn` = done, `max_tokens` = truncated, `refusal` = stop and don't blind-retry (§1.3). |
+| System prompt | Highest authority and front of the prefix; over-strong wording overtriggers tools; hard rules belong in code, not prompts (§1.4). |
+| Context window | One shared token budget; mitigate lost-in-the-middle by placement, trim bloated tool results, preserve precise facts (§1.5). |
+| Streaming & cost | Stream for long output / high `max_tokens`; read `usage`; count tokens with `count_tokens`, never `tiktoken`; cache the stable prefix (§1.6). |
+
+> **Maps to Domains 1, 4, and 5.** Chapter 1 is the foundation the rest of the guide stands on: `stop_reason` drives the agent loops of Domain 1, the system prompt and message construction drive Domain 4, and statelessness plus the context window drive Domain 5. Master the support-chat backend above — messages, system prompt, streaming, `stop_reason`, cost, caching — and the higher layers become far easier to reason about.
 
 # Chapter 2: Tools and `tool_use`
 
 > Documentation: [Tool Use](https://platform.claude.com/docs/en/build-with-claude/tool-use)
 
+Tools are how Claude stops being a text generator and starts being a system that *acts* — looking up an order, running a query, calling an API. This chapter is the backbone of **Domain 2 — Tool Design and MCP Integration (18% of the exam)**. Where Chapter 3 covers how an agent *orchestrates* tools, this chapter covers the contract underneath every one of those calls: how you *define* a tool, how Claude *requests* it, how you *return* its result (including failures), and how you *steer* selection. By the end you should be able to:
+
+- Explain the **`tool_use` / `tool_result` round trip** (§2.1) — the message exchange every tool call rides on.
+- Write a **tool definition** whose `description` actually drives correct selection (§2.2).
+- Steer selection with **`tool_choice`** (§2.3) and reason about **parallel tool calls** (§2.4).
+- Use **JSON Schema** as the most reliable path to structured output (§2.5), and tell **syntax from semantic** errors (§2.6).
+- Return **structured error results** so the model can recover correctly (§2.7).
+
+§2.8 then builds a complete invoice-extraction service end-to-end, and §2.9 distills what the exam tests.
+
 ## 2.1 What is `tool_use`
 
-`tool_use` is a mechanism that allows Claude to call external functions. The model does not run code directly—it generates a structured tool call request; your code executes it and returns the result.
+`tool_use` is the mechanism that lets Claude call external functions. The model **does not run code** — it emits a structured *request* to call a tool; **your code executes it** and feeds the result back. Claude is the planner; your runtime is the hands.
+
+Mechanically, a tool call is a four-message round trip carried entirely inside the normal `messages` array:
+
+```mermaid
+flowchart TD
+    A[Your code sends user message<br/>plus tools array] --> B[Claude replies<br/>stop_reason is tool_use]
+    B --> C[Response holds a tool_use block<br/>id, name, input]
+    C --> D[Your code runs the real function]
+    D --> E[Append a user message with<br/>a tool_result block, same id]
+    E --> F[Claude reads the result<br/>and continues]
+    F --> G{stop_reason?}
+    G -->|tool_use| D
+    G -->|end_turn| H[Final text answer to user]
+```
+
+The wire format matters because the exam tests whether you understand it:
+
+```json
+// 1) Claude's response — stop_reason: "tool_use"
+{
+  "role": "assistant",
+  "content": [
+    {"type": "text", "text": "Let me look that up."},
+    {"type": "tool_use", "id": "toolu_01A...", "name": "get_customer",
+     "input": {"email": "ada@example.com"}}
+  ]
+}
+
+// 2) Your reply — the result goes back as a USER message
+{
+  "role": "user",
+  "content": [
+    {"type": "tool_result", "tool_use_id": "toolu_01A...",
+     "content": "{\"name\":\"Ada\",\"status\":\"active\"}"}
+  ]
+}
+```
+
+**Why this matters / common mistakes:**
+- The `tool_result` block goes back in a message with **`role: "user"`**, not `assistant` — a frequent point of confusion. The `tool_use_id` must match the `id` Claude generated, or the API rejects the turn.
+- You must **echo the assistant's `tool_use` turn back** in the next request. The API is stateless; if you drop the assistant turn that contained the `tool_use` block and only send the `tool_result`, the conversation is malformed.
+- Claude often emits a `text` block ("Let me look that up.") *alongside* the `tool_use` block. Don't treat that text as the final answer — `stop_reason == "tool_use"` means the turn is not done.
+
+> **Exam angle:** know the role/id pairing (`tool_use.id` ↔ `tool_result.tool_use_id`) and that `tool_result` rides on a `user` message. This is the literal protocol Chapter 3's agentic loop drives.
 
 ## 2.2 Tool Definition
 
-Each tool is defined using a JSON schema:
+Each tool is defined with a JSON schema. The `description` is the single most important field you will write:
 
 ```json
 {
@@ -225,38 +561,76 @@ Each tool is defined using a JSON schema:
 
 **Critically important aspects of a tool description:**
 
-1. **The description is the primary selection mechanism.** An LLM chooses tools based on their descriptions. Minimal descriptions (“Retrieves customer information”) lead to mistakes when tools overlap.
+1. **The description is the primary selection mechanism.** Claude chooses tools almost entirely from their descriptions and schemas — it has no other view of what the tool does. Minimal descriptions ("Retrieves customer information") cause wrong-tool selection the moment two tools overlap.
 
 2. **Include in the description:**
-   - What the tool does and returns
+   - What the tool does and what it returns
    - Input formats and example values
    - Edge cases and constraints
    - When to use this tool vs similar alternatives
 
-3. **Avoid** identical or overlapping descriptions across tools. If `analyze_content` and `analyze_document` have nearly identical descriptions, the model will confuse them.
+3. **Avoid** identical or overlapping descriptions across tools. If `analyze_content` and `analyze_document` read almost the same, the model will confuse them. The fix is often to **rename for specificity** (`analyze_content` → `extract_web_results`) and to **split a general tool into focused ones** with distinct input/output contracts — exactly the Domain 2 skill of eliminating functional overlap.
 
-4. **Built-in tools vs MCP tools:** agents may prefer built-in tools (Read, Grep) over MCP tools with similar functionality. To prevent this, strengthen MCP tool descriptions—highlight concrete advantages, unique data, or context that built-in tools cannot provide.
+4. **Built-in tools vs MCP tools:** agents tend to prefer built-in tools (Read, Grep) over MCP tools with similar functionality. To counter this, strengthen the MCP tool's description — name the concrete advantage, the unique data, or the context a built-in tool cannot provide.
+
+5. **Mind the system prompt.** Wording in the system prompt can create unintended associations ("you are a *search* assistant" biases the model toward anything named `search_*`). Tool routing is the product of *both* the descriptions and the surrounding prompt.
+
+**Why this matters / common mistakes:** treating descriptions as human documentation rather than the model's routing table. A vague or duplicated description is not a cosmetic issue — it is a correctness bug that surfaces as the agent calling the wrong tool.
+
+> **Exam angle:** given two confusable tools, the right answer is usually to *rewrite/rename the descriptions to disambiguate* (and split overly general tools), not to add more prompt instructions.
 
 ## 2.3 The `tool_choice` Parameter
 
-`tool_choice` controls how the model selects tools:
+`tool_choice` controls *how* the model selects tools:
 
 | Value | Behavior | When to use |
 |---|---|---|
 | `{"type": "auto"}` | The model decides whether to call a tool or answer in text | Default for most cases |
-| `{"type": "any"}` | The model **must** call some tool | When you need guaranteed structured output |
-| `{"type": "tool", "name": "extract_metadata"}` | The model **must** call a specific tool | When you need a forced first step / execution order |
+| `{"type": "any"}` | The model **must** call some tool (never plain text) | When you need guaranteed structured output |
+| `{"type": "tool", "name": "extract_metadata"}` | The model **must** call that specific tool | When you need a forced first step / execution order |
+| `{"type": "none"}` | The model **may not** call any tool this turn | Temporarily disable tools without removing them |
 
 **Important scenarios:**
-- `tool_choice: "any"` + multiple extraction tools → the model picks the best one, but you still get structured output
-- Forced selection → when you must guarantee a specific first action (e.g., `extract_metadata` before enrichment)
+- `tool_choice: "any"` + several extraction tools → the model still picks the best one, but you are guaranteed a tool call rather than a prose answer.
+- Forced selection (`type: "tool"`) → when you must guarantee a specific first action (e.g., `extract_metadata` before any enrichment step).
 
-## 2.4 JSON Schemas for Structured Output
+**Why this matters / common mistakes:**
+- With `auto`, Claude may legitimately answer in text. If your code unconditionally parses a `tool_use` block, it crashes on the text-only turn. Use `any` when downstream code *requires* structured output.
+- **Forcing a tool disables extended thinking** for that turn, and `any`/`tool` mean the model will *always* call something — so a forced tool must be one it is safe to call unconditionally. Don't force a side-effectful tool (e.g., `send_email`) just to get structure; force an extraction/formatting tool instead.
 
-Using `tool_use` with JSON schemas is the **most reliable** way to obtain structured output from Claude. It:
-- Guarantees syntactically valid JSON (no missing braces, no trailing commas)
-- Enforces the required structure (required fields are present)
-- Does **not** guarantee semantic correctness (values can still be wrong)
+> **Exam angle:** "guarantee structured output, model picks the tool" → `any`. "Guarantee a specific tool runs first" → `{"type":"tool","name":...}`. "Model may answer or call" → `auto`.
+
+## 2.4 Parallel Tool Calls
+
+When a turn needs several independent lookups, Claude can emit **multiple `tool_use` blocks in a single response**. Your code runs them (ideally concurrently) and returns **all** the `tool_result` blocks in **one** following `user` message.
+
+```mermaid
+flowchart TD
+    A[Claude one response<br/>three tool_use blocks] --> B[get_weather<br/>id 1]
+    A --> C[get_traffic<br/>id 2]
+    A --> D[get_events<br/>id 3]
+    B --> E[Run concurrently in your code]
+    C --> E
+    D --> E
+    E --> F[One user message<br/>three tool_result blocks<br/>ids 1, 2, 3]
+    F --> G[Claude continues with all results]
+```
+
+**Why this matters / common mistakes:**
+- All `tool_result` blocks for a parallel batch must come back in **one** user message, each matched to its `tool_use_id`. Splitting them across multiple messages, or omitting one id, malforms the turn.
+- Parallelism is an optimization for **independent** calls. If tool B needs tool A's output, those are *sequential* round trips, not a parallel batch — the model will request A, see the result, then request B.
+- You can nudge or suppress parallelism: prompting (e.g., asking the model to gather all needed data at once) encourages it; `disable_parallel_tool_use: true` in `tool_choice` forces at most one call per turn when your backend can't handle concurrency safely.
+
+> **Exam angle:** parallel tool calls = lower latency for independent work; the giveaway in a question is "fetch X, Y, and Z" with no dependency between them. Dependent steps are not parallelizable.
+
+## 2.5 JSON Schemas for Structured Output
+
+Using `tool_use` with a JSON schema is the **most reliable** way to get structured output from Claude. It:
+- **Guarantees syntactically valid JSON** (no missing braces, no trailing commas)
+- **Enforces the required structure** (required fields are present, enums are respected)
+- Does **not** guarantee semantic correctness (the values can still be wrong)
+
+The classic pattern is a single "extractor" tool whose `input_schema` *is* the shape you want back; call it with `tool_choice: {"type":"tool","name":"..."}` and read the `input` of the resulting `tool_use` block.
 
 **Schema design — key principles:**
 
@@ -291,19 +665,237 @@ Using `tool_use` with JSON schemas is the **most reliable** way to obtain struct
 ```
 
 **Schema design rules:**
-1. **Required vs optional:** mark fields as required only if the information is always available. Required fields push the model to fabricate values when data is missing.
-2. **Nullable fields:** use `"type": ["string", "null"]` for information that may be absent. The model can return `null` instead of hallucinating.
-3. **Enums with `"other"`:** add `"other"` + a detail string to avoid losing data outside your predefined categories.
-4. **Enum `"unclear"`:** for cases where the model cannot confidently pick a category—honest `"unclear"` is better than a wrong category.
+1. **Required vs optional:** mark a field `required` only if the information is *always* available. Required fields push the model to **fabricate** a value when the data is missing.
+2. **Nullable fields:** use `"type": ["string", "null"]` for information that may be absent, so the model can return `null` instead of hallucinating.
+3. **Enums with `"other"`:** add `"other"` + a detail string so data outside your predefined categories isn't silently lost.
+4. **Enum `"unclear"`:** for cases where the model can't confidently choose — an honest `"unclear"` beats a confident wrong category.
+5. **Describe each field.** The per-field `description` is part of the prompt; "Null if not found in source" measurably reduces hallucination.
 
-## 2.5 Syntax vs Semantic Errors
+**Why this matters / common mistakes:** over-requiring fields and omitting null are the two most common schema bugs, and both manufacture hallucinations. The schema constrains *shape*, never *truth* — which is why §2.6 exists.
+
+> **Exam angle:** "How do I guarantee valid, well-structured output?" → a tool/JSON-schema, not prompt-and-parse. "How do I let the model say *I don't know*?" → nullable types and an `unclear`/`other` enum.
+
+## 2.6 Syntax vs Semantic Errors
+
+A JSON schema closes the door on one whole class of error and not the other. Keeping them separate tells you which mitigation applies.
 
 | Error type | Example | Mitigation |
 |---|---|---|
-| **Syntax** | Invalid JSON, wrong field type | `tool_use` with a JSON schema (eliminates) |
-| **Semantic** | Totals don't add up, value in wrong field, hallucination | Validation checks, retry with feedback, self-correction |
+| **Syntax** | Invalid JSON, wrong field type, missing required key | `tool_use` with a JSON schema (**eliminates** this class) |
+| **Semantic** | Totals don't add up, value placed in the wrong field, fabricated value | Validation checks, retry with feedback, self-correction |
 
----
+**Why this matters / common mistakes:** assuming that because the JSON parsed, it is *correct*. A schema guarantees `line_items` is an array of the right shape; it cannot guarantee the line items sum to `total`. Semantic correctness is *your* job — validate after extraction, and on failure re-prompt with the specific discrepancy (e.g., "line items sum to 90.00 but total is 95.00; recompute") so the model self-corrects.
+
+> **Exam angle:** if a question's failure is "malformed JSON / missing field," the fix is the schema. If it's "numbers are wrong / value mis-slotted," the fix is validation + retry — the schema won't help.
+
+## 2.7 Structured Error Results
+
+Tools fail — timeouts, bad input, policy violations, missing permissions. **How you report the failure back to Claude determines whether it recovers correctly.** A tool result is not limited to success payloads; you mark a failed result with **`is_error: true`** (the `isError` flag in MCP), and — critically — you make the *content* machine-actionable:
+
+```json
+{
+  "type": "tool_result",
+  "tool_use_id": "toolu_01B...",
+  "is_error": true,
+  "content": "{\"errorCategory\":\"transient\",\"isRetryable\":true,\"message\":\"Upstream timeout after 5s\"}"
+}
+```
+
+Distinguish the error *categories*, because each implies a different recovery:
+
+| Category | Example | Retryable? | What Claude should do |
+|---|---|---|---|
+| **Transient** | Upstream timeout, 503 | Yes | Retry, ideally with backoff |
+| **Validation** | Malformed email, missing field | No | Fix the input and call again |
+| **Business** | Refund exceeds policy limit | No | Explain to the user / escalate |
+| **Permission/Access** | Token lacks scope | No | Stop and surface, don't loop |
+
+**Why this matters / common mistakes:**
+- A generic `"Operation failed"` strips the model of the information it needs to decide *retry vs fix vs stop*. The classic failure mode is the agent **retrying a non-retryable validation or business error forever**.
+- Return `isRetryable: false` for business-rule violations *with a clear user-facing `message`*, so the agent explains rather than loops.
+- **Distinguish an access failure from a valid empty result.** `search` returning zero rows is a *success* with empty data — not an error. Marking "no matches" as `is_error` makes the model think the tool broke and retry pointlessly.
+- **Recover locally where you can.** For transient failures, a subagent should retry internally and only propagate errors it genuinely cannot resolve — don't burden the coordinator with every blip.
+
+> **Exam angle:** the right answer to "the agent keeps retrying a doomed call" is *structured error metadata* (`errorCategory`, `isRetryable`, human-readable `message`), not a longer prompt. And "no results found" is not an error.
+
+## 2.8 End-to-End Case Study: An Invoice-Extraction Service
+
+The pieces above only matter assembled. Here is a complete, realistic build that exercises every concept in this chapter — definitions, `tool_choice`, the round trip, parallel calls, structured errors, and the syntax/semantic split. The job: turn a messy uploaded invoice (PDF text + a vendor ID) into validated structured data, enriched with live tax and vendor info.
+
+### Requirements
+
+- Input: raw invoice text plus a `vendor_id`. Output: a **strictly structured** invoice record (line items, subtotal, tax, total).
+- The extraction must be **guaranteed structured** — downstream accounting code cannot parse prose.
+- Enrichment needs **two independent lookups** — current `tax_rate` for the region and the canonical `vendor` record — which should run **in parallel** to cut latency.
+- Lookups can **fail**; the system must tell retryable timeouts apart from a vendor that simply doesn't exist.
+- A correct-shaped invoice can still be **wrong** (line items not summing to the total); that must be caught.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    In([Invoice text plus vendor_id]) --> Ext[Forced tool<br/>extract_invoice<br/>tool_choice type tool]
+    Ext --> Par[Claude requests two tools<br/>in one turn]
+    Par --> Tax[get_tax_rate]
+    Par --> Ven[get_vendor]
+    Tax --> Batch[One user message<br/>two tool_result blocks]
+    Ven --> Batch
+    Batch --> Val{Validation<br/>line items sum to total?}
+    Val -->|no| Retry[Re-prompt with the discrepancy]
+    Retry --> Ext
+    Val -->|yes| Done[Validated invoice record]
+```
+
+`extract_invoice` is **forced** so structure is guaranteed; the two enrichment lookups are **independent**, so Claude is allowed to request them **in parallel**; **structured errors** drive recovery; and a **semantic** check (the sum) sits outside the schema because a schema can't enforce arithmetic.
+
+### Implementation
+
+Define the extractor — its `input_schema` *is* the output shape — plus two enrichment tools:
+
+```python
+extract_invoice = {
+    "name": "extract_invoice",
+    "description": "Extract a structured invoice from raw text. Returns line items, "
+                   "subtotal, tax, and total. Use vendor_currency for all amounts.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "line_items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "desc": {"type": "string"},
+                        "amount": {"type": "number"}
+                    },
+                    "required": ["desc", "amount"]
+                }
+            },
+            "subtotal": {"type": "number"},
+            "currency": {"type": "string"},
+            "vendor_tax_id": {
+                "type": ["string", "null"],
+                "description": "Null if no tax id appears in the source"
+            }
+        },
+        "required": ["line_items", "subtotal", "currency"]
+    }
+}
+
+get_tax_rate = {
+    "name": "get_tax_rate",
+    "description": "Returns the current tax rate (0..1) for a region code. Read-only.",
+    "input_schema": {"type": "object",
+        "properties": {"region": {"type": "string"}}, "required": ["region"]}
+}
+
+get_vendor = {
+    "name": "get_vendor",
+    "description": "Returns the canonical vendor record (legal name, region) for a vendor_id. Read-only.",
+    "input_schema": {"type": "object",
+        "properties": {"vendor_id": {"type": "string"}}, "required": ["vendor_id"]}
+}
+```
+
+Force the extractor on the first turn so you never get prose back:
+
+```python
+resp = client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=1024,
+    tools=[extract_invoice, get_tax_rate, get_vendor],
+    tool_choice={"type": "tool", "name": "extract_invoice"},   # guaranteed structure
+    messages=[{"role": "user", "content": invoice_text}],
+)
+invoice = next(b.input for b in resp.content if b.type == "tool_use")
+```
+
+Run the two independent lookups concurrently and return **both** results in **one** user message:
+
+```python
+def run_tool(call):
+    try:
+        if call.name == "get_vendor":
+            return {"is_error": False, "content": json.dumps(lookup_vendor(call.input["vendor_id"]))}
+        if call.name == "get_tax_rate":
+            return {"is_error": False, "content": json.dumps(get_rate(call.input["region"]))}
+    except TimeoutError:
+        return {"is_error": True,
+                "content": json.dumps({"errorCategory": "transient", "isRetryable": True,
+                                       "message": "Upstream timeout"})}
+    except VendorNotFound:
+        return {"is_error": True,
+                "content": json.dumps({"errorCategory": "validation", "isRetryable": False,
+                                       "message": "No vendor with that id"})}
+
+# Claude emitted get_tax_rate and get_vendor in ONE response -> run in parallel
+results = parallel_map(run_tool, tool_use_blocks)   # concurrent
+tool_results = [
+    {"type": "tool_result", "tool_use_id": b.id, **r}
+    for b, r in zip(tool_use_blocks, results)
+]
+messages.append({"role": "user", "content": tool_results})   # all in one message
+```
+
+Validate **semantics** the schema can't — and on failure, re-prompt with the exact discrepancy:
+
+```python
+computed = round(sum(li["amount"] for li in invoice["line_items"]), 2)
+if computed != invoice["subtotal"]:
+    feedback = (f"line_items sum to {computed} but subtotal is "
+                f"{invoice['subtotal']}. Recompute and call extract_invoice again.")
+    # send `feedback` back as a user turn -> the model self-corrects (§2.6)
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Sys as Caller
+    participant Cl as Claude
+    participant Tax as get_tax_rate
+    participant Ven as get_vendor
+    Sys->>Cl: invoice_text, tool_choice forces extract_invoice
+    Cl-->>Sys: tool_use extract_invoice with structured input
+    Cl-->>Sys: two tool_use blocks, get_tax_rate and get_vendor
+    Sys->>Tax: region US-CA
+    Sys->>Ven: vendor_id V-77
+    Ven-->>Sys: is_error true, validation, no such vendor
+    Tax-->>Sys: rate 0.0725
+    Sys->>Cl: one user message, both tool_result blocks
+    Cl-->>Sys: end_turn, explains vendor V-77 not found, returns invoice with tax
+```
+
+Two things to notice. The **forced** `extract_invoice` removed any chance of a prose answer. And the **structured** `get_vendor` error (`validation`, `isRetryable: false`) let Claude *explain* the missing vendor instead of retrying a call that can never succeed — exactly the §2.7 behavior the exam rewards.
+
+### Validation
+
+- **Structure test:** assert the first turn is always a `tool_use` for `extract_invoice` (forcing works) and that its `input` validates against the schema.
+- **Parallelism test:** feed an invoice that needs both lookups; assert Claude emits both `tool_use` blocks in **one** response and that you return both `tool_result`s in **one** message.
+- **Error-routing test:** make `get_vendor` raise `VendorNotFound`; assert the agent *explains* rather than retries (non-retryable), and that a `TimeoutError` *is* retried.
+- **Semantic test:** feed an invoice whose line items don't sum to subtotal; assert the validator catches it and re-prompts. A schema-only design passes this bad invoice silently.
+
+### Common pitfalls
+
+- Returning the `tool_result` on an **`assistant`** message, or with a mismatched `tool_use_id` (§2.1) — the API rejects the turn.
+- Using `tool_choice: "auto"` and then unconditionally reading a `tool_use` block, which crashes on a text-only turn (§2.3).
+- Splitting parallel `tool_result`s across multiple user messages instead of one (§2.4).
+- Marking "vendor not found" as a generic error with no category, so the agent retries forever; or marking an empty search result as an error at all (§2.7).
+- Trusting parsed JSON as correct and skipping the sum check (§2.6).
+
+## 2.9 Exam Focus — Key Takeaways
+
+| Concept | What the exam tests |
+|---|---|
+| `tool_use` round trip | `tool_result` rides on a **`user`** message; `tool_use.id` ↔ `tool_result.tool_use_id`; echo the assistant turn back (§2.1). |
+| Tool descriptions | The description is the model's routing table; fix confusable tools by **rewriting/renaming/splitting**, not more prompt (§2.2). |
+| `tool_choice` | `any` = some tool guaranteed; `{"type":"tool",...}` = a specific tool; `auto` = model may answer in text (§2.3). |
+| Parallel tool calls | Multiple `tool_use` in one turn for **independent** work; return all `tool_result`s in **one** message; dependent steps stay sequential (§2.4). |
+| JSON-schema output | Most reliable structured output; nullable types + `unclear`/`other` let the model avoid fabricating (§2.5). |
+| Syntax vs semantic | Schema **eliminates** syntax errors but not wrong values; semantics need validation + retry (§2.6). |
+| Structured errors | `errorCategory` / `isRetryable` / `message` drive retry-vs-fix-vs-stop; an empty result is **not** an error (§2.7). |
+
+> **Maps to Domain 2 (18%).** If you can build and defend the invoice-extraction service above — definitions, forcing, the round trip, parallel calls, structured errors, and the syntax/semantic split — you have the core of the Tool Design and MCP Integration domain.
 
 # Chapter 3: Claude Agent SDK — Building Agentic Systems
 
@@ -593,22 +1185,90 @@ Notice the coordinator *intended* to refund directly; the **hook overrode it det
 
 > Documentation: [MCP](https://modelcontextprotocol.io/) | [Tools](https://modelcontextprotocol.io/docs/concepts/tools) | [Resources](https://modelcontextprotocol.io/docs/concepts/resources) | [Servers](https://modelcontextprotocol.io/docs/concepts/servers)
 
+If Chapter 3 was about the *brain* of an agent — the loop, delegation, and hooks — this chapter is about its *hands and eyes*: how an agent reaches the outside world. The Model Context Protocol (MCP) is the open standard that lets Claude talk to your databases, APIs, and internal services without bespoke glue code for each one. This chapter is the backbone of **Domain 2 — Tool Design and MCP Integration (18% of the exam)**, and it directly supports **Domain 1** (an agent is only as capable as the tools you wire into it) and **Domain 5** (structured MCP errors are how multi-agent systems stay reliable).
+
+By the end you should be able to reason about five things and assemble them into a working integration:
+
+- **The protocol and its primitives** (§4.1) — Tools, Resources, Prompts, and the client/server split.
+- **Servers and transports** (§4.2) — what a server is, and stdio vs Streamable HTTP.
+- **Configuration and scope** (§4.3) — `.mcp.json` (project) vs `~/.claude.json` (user), and secret handling.
+- **Structured errors** (§4.4) — the `isError` flag and why generic errors break recovery.
+- **Resources** (§4.5) — read-only "maps" that eliminate exploratory tool calls.
+
+§4.6 then builds a complete internal **Deployments MCP server** end-to-end — server, tools, resources, transport, and a permission guard — and §4.7 distills what the exam tests.
+
 ## 4.1 What is MCP
 
-The Model Context Protocol (MCP) is an open protocol for connecting external systems to Claude. MCP defines three primary resource types:
+The Model Context Protocol (MCP) is an open standard for connecting external systems to Claude. The official analogy is **"USB-C for AI"**: instead of writing a custom adapter for every model–tool pairing, you implement the protocol once and any MCP-compatible client (Claude Code, the Agent SDK, the Claude apps) can use your server. Under the hood MCP is **JSON-RPC 2.0** over a transport — a small, well-specified message format, not a Claude-only API.
 
-1. **Tools** — functions the agent can call to perform actions (CRUD operations, API calls, command execution)
-2. **Resources** — data the agent can read for context (documentation, database schemas, content catalogs)
-3. **Prompts** — predefined prompt templates for common tasks
+MCP defines three primary primitives:
 
-## 4.2 MCP Servers
+1. **Tools** — functions the agent can *call to perform actions* (CRUD operations, API calls, command execution). Model-invoked: Claude decides when to use them.
+2. **Resources** — data the agent can *read for context* (documentation, database schemas, content catalogs). Read-only: they inform, they don't act.
+3. **Prompts** — predefined prompt templates for common tasks, surfaced to the user (e.g., as slash commands).
 
-An MCP server is a process that implements the MCP protocol and provides tools/resources. When you connect to an MCP server:
-- All tools are discovered automatically
-- Tools from all connected servers are available at once
-- Tool descriptions determine how the model will use them
+**The mental model is client/server.** The *host* application (Claude Code, the SDK) runs an MCP *client*; each integration is an MCP *server* — a separate process you control. The two communicate over a transport (§4.2).
+
+```mermaid
+flowchart TD
+    subgraph Host[Host application e.g. Claude Code]
+        Model[Claude model]
+        C1[MCP client 1]
+        C2[MCP client 2]
+    end
+    Model --> C1
+    Model --> C2
+    C1 -->|JSON-RPC over transport| S1[MCP server<br/>GitHub]
+    C2 -->|JSON-RPC over transport| S2[MCP server<br/>internal service]
+    S1 --> EXT1[GitHub API]
+    S2 --> DB[(Internal DB)]
+```
+
+**Why this separation matters (and what the exam probes):** because each server is its own process behind a standard protocol, you get isolation (a crashing server doesn't take down the host), independent auth per server, and reuse across hosts. The exam frames MCP as the *integration layer* — the way you give an agent new capabilities without modifying the agent itself.
+
+**Tools vs Resources is a recurring distinction.** A common mistake is exposing read-only data as a tool. If the agent only needs to *know* something (the list of services, a schema), that is a **Resource**. If it needs to *do* something with side effects (trigger a deploy, write a row), that is a **Tool**. Getting this wrong inflates the tool count — which, per Domain 2, directly hurts tool-selection reliability.
+
+## 4.2 MCP Servers and Transports
+
+An **MCP server** is a process that implements the MCP protocol and exposes tools, resources, and/or prompts. When a client connects to a server:
+
+- All tools are **discovered automatically** at connection time (the client calls `tools/list`).
+- Tools from **all connected servers are available at once** to the model.
+- **Tool descriptions determine how the model will use them** — the description is the primary selection signal (Domain 2.1). A vague description means unreliable selection.
+
+To avoid name collisions across servers, hosts namespace tools. In Claude Code a tool from a server appears as `mcp__<server>__<tool>` — e.g., the `query_status` tool on a server named `deployments` is `mcp__deployments__query_status`. You reference that exact name when allow-listing tools or forcing `tool_choice`.
+
+### stdio vs Streamable HTTP
+
+MCP defines **two standard transports**, and choosing between them is an architecture decision the exam expects you to make:
+
+| | **stdio** | **Streamable HTTP** |
+|---|---|---|
+| Topology | Local subprocess (host launches it) | Remote service (POST request + SSE stream) |
+| Best for | Local tools, dev, single-user, filesystem/CLI access | Shared team servers, hosted SaaS integrations |
+| Auth | Environment-based credentials (env vars) | OAuth 2.0 |
+| Lifecycle | Host spawns/kills the process | Long-running service you deploy and operate |
+
+```mermaid
+flowchart TD
+    H[Host: Claude Code or SDK] --> D{Where does the<br/>server run?}
+    D -->|same machine, per-user| STDIO[stdio transport<br/>spawn local subprocess<br/>env-var credentials]
+    D -->|shared, remote service| HTTP[Streamable HTTP<br/>POST plus SSE<br/>OAuth 2.0]
+    STDIO --> R[Tools and resources<br/>exposed to the model]
+    HTTP --> R
+```
+
+**Pitfalls and exam angles:**
+
+- **The old SSE-only transport is deprecated.** If a question offers "SSE transport" as the modern remote option, the current answer is **Streamable HTTP** (POST + SSE). Don't pick legacy SSE.
+- **Match the transport to the auth model.** A shared team server holding privileged credentials should be **Streamable HTTP with OAuth**, not a stdio server where each user pastes a token. Conversely, a personal local filesystem tool is **stdio with env vars** — standing up an OAuth service for it is over-engineering.
+- **A server is not "Claude code."** It's a generic process. The same `deployments` server can serve Claude Code, the Agent SDK, and the Claude desktop app simultaneously — that reuse is the point of the standard.
+
+For *remote* servers there is also the **MCP connector** in the Messages API: Claude can call a remote MCP server directly, server-side, with no local client — you pass an `mcp_servers` entry plus a matching `mcp_toolset` in `tools`. That is the API-level counterpart to a Claude Code HTTP server; the transport story (HTTP + OAuth) is the same.
 
 ## 4.3 Configuring MCP Servers
+
+Where you register a server determines **who can use it** — this scope decision is squarely tested in Domain 2.4.
 
 **Project configuration (`.mcp.json`)** — for team usage:
 
@@ -634,22 +1294,35 @@ An MCP server is a process that implements the MCP protocol and provides tools/r
 ```
 
 **Key points:**
-- `.mcp.json` is stored at the project root and managed in version control
-- Environment variables (`${GITHUB_TOKEN}`) are used for secrets—tokens themselves are not committed
-- Available to all project contributors
+- `.mcp.json` is stored at the **project root and managed in version control**, so every contributor gets the same servers on checkout.
+- **Environment variables (`${GITHUB_TOKEN}`) are used for secrets** — the variable *reference* is committed, the token itself is not. This is the central secret-management pattern: never hard-code a token into `.mcp.json`.
+- Available to all project contributors.
 
 **User configuration (`~/.claude.json`)** — for personal/experimental servers:
-- Stored in the user's home directory
-- Not shared via version control
-- Suitable for personal experiments and testing
+- Stored in the user's home directory.
+- **Not shared via version control.**
+- Suitable for personal experiments and testing.
+
+```mermaid
+flowchart TD
+    Q{Who should get<br/>this server?}
+    Q -->|whole team, reproducible| PROJ[.mcp.json at project root<br/>committed to git<br/>env-var token refs]
+    Q -->|just me, experimental| USER[~/.claude.json<br/>home directory<br/>not in version control]
+    PROJ --> TEAM[All contributors get it<br/>on checkout]
+    USER --> SOLO[Only this developer]
+```
+
+**Adding servers from the CLI.** In Claude Code you don't have to hand-edit JSON: `claude mcp add` / `claude mcp list` / `claude mcp remove` manage servers, and `--scope user` vs `--scope project` selects which file is written. For HTTP servers needing OAuth, run `/mcp` in-session to authorize. This is the exam-correct answer to "how does each developer get the same server without each editing config by hand": put it in **project `.mcp.json`**, committed once.
 
 **Choosing servers:**
-- For standard integrations (Jira, GitHub, Slack), prefer existing community MCP servers
-- Build your own servers only for unique, team-specific workflows
+- For **standard integrations (Jira, GitHub, Slack), prefer existing community MCP servers** — they're maintained and battle-tested.
+- **Build your own server only for unique, team-specific workflows** that no community server covers (this is exactly the §4.6 case study).
+
+**Context cost — MCP tool search.** Every connected server's tools are loaded into context, and a dozen servers can flood the model with hundreds of tools — bloating context and *degrading* selection (Domain 2.3: too many tools reduces reliability). Claude Code's **MCP tool search** mitigates this by lazily loading tools on demand instead of front-loading all of them, and organizations can ship an org-wide `managed-mcp.json`. The takeaway: connecting a server is not free; tool count is a budget.
 
 ## 4.4 The `isError` Flag in MCP
 
-When an MCP tool encounters an error, it uses `isError: true` in the response. This signals to the agent that the call failed.
+When an MCP tool encounters an error, it sets **`isError: true`** in the response. This signals to the agent that the call failed — but *signaling failure is not enough*. The agent's next move (retry? change the query? escalate? give up?) depends entirely on **what kind** of failure it was. This is the heart of Domain 2.2 and a reliability concern for Domain 5.
 
 **Structured error (good):**
 
@@ -675,20 +1348,241 @@ When an MCP tool encounters an error, it uses `isError: true` in the response. T
 }
 ```
 
-A generic error gives the agent no information for decision-making—should it retry, change the query, or escalate?
+A generic error gives the agent no information for decision-making — should it retry, change the query, or escalate? The structured version tells it precisely.
+
+**Error categories the exam expects you to distinguish:**
+
+| Category | Meaning | Retryable? | Right agent response |
+|---|---|---|---|
+| `transient` | Timeout, service briefly down | **Yes** | Retry (ideally with backoff) |
+| `validation` | Bad input (malformed id, missing field) | No | Fix the arguments, then retry |
+| `business` | Policy/rule violation (e.g., over a limit) | **No** | Stop and explain to the user; do not retry the same call |
+| `permission` | Caller lacks access | No | Escalate / request access — distinct from "no results" |
+
+```mermaid
+flowchart TD
+    E[Tool returns isError true] --> CAT{errorCategory?}
+    CAT -->|transient| RETRY[Retry with backoff]
+    CAT -->|validation| FIX[Correct the arguments<br/>then retry]
+    CAT -->|business| STOP[Stop and explain<br/>do not retry]
+    CAT -->|permission| ESC[Escalate or request access]
+    RETRY --> OK[Resolve locally if possible]
+    FIX --> OK
+```
+
+**Pitfalls and exam angles:**
+
+- **Use `isRetryable: false` for business-rule violations** with a clear, user-facing explanation. Marking a policy failure retryable sends the agent into a pointless retry loop.
+- **An empty result is not an error.** A search that legitimately found nothing should return `isError: false` with an empty result set — *not* `isError: true`. Conflating "no matches" with "access failed" makes the agent escalate when it should simply report "none found" (Domain 2.2).
+- **Recover locally, propagate selectively.** A subagent should resolve transient failures itself (retry) and only propagate errors it genuinely can't resolve up to the coordinator — this keeps error noise out of the hub-and-spoke system (Domain 5.3).
 
 ## 4.5 MCP Resources
 
-Resources are data that an agent can request to get context without taking actions:
+**Resources** are data an agent can request to gain context **without taking action**. Where a tool *does*, a resource *informs*:
 
-- Content catalogs (e.g., a list of all project tasks, hierarchical navigation)
-- Database schemas (understanding data structure)
-- Documentation (API references, internal guides)
-- Issue/task summaries
+- Content catalogs (e.g., a list of all project tasks, hierarchical navigation).
+- Database schemas (understanding data structure before querying).
+- Documentation (API references, internal guides).
+- Issue/task summaries.
 
-**Resource advantage:** the agent does not need exploratory tool calls to understand what data exists. A resource provides an immediate “map.”
+**Resource advantage:** the agent does **not** need exploratory tool calls to discover what data exists. A resource provides an immediate **"map."** Without it, an agent might burn three or four tool calls (and the tokens and latency they cost) just to learn the shape of the system before doing any real work.
 
----
+```mermaid
+flowchart TD
+    subgraph Without[Without a resource]
+        A1[Agent guesses] --> A2[Tool call: list X]
+        A2 --> A3[Tool call: describe X]
+        A3 --> A4[Tool call: find Y]
+        A4 --> A5[Finally act]
+    end
+    subgraph With[With a catalog resource]
+        B1[Read resource: the map] --> B2[Act directly]
+    end
+```
+
+**Pitfalls and exam angles:**
+
+- **Don't model read-only context as a tool.** If the agent only needs to *read* the service catalog, expose it as a **Resource**, not a `list_services` tool. This keeps the tool count down (helping selection) and signals intent correctly.
+- **Resources cut exploratory tool calls**, which is the phrasing the exam uses — they trade many round-trips for one up-front read. That is both a context-management win (Domain 5) and a tool-design win (Domain 2).
+- Resources are **read-only by definition** — they never have side effects. If you find yourself wanting a resource to "also update" something, you actually want a tool.
+
+## 4.6 End-to-End Case Study: An Internal "Deployments" MCP Server
+
+The pieces above only matter when they fit together. Here is a complete, realistic MCP server — the kind of *unique, team-specific* integration §4.3 says you should build yourself, and exactly the design the exam's MCP-integration scenarios probe.
+
+### Requirements
+
+A platform team wants Claude Code to help during incident response. The agent must be able to:
+
+- **See the service catalog** — every service, its owner, and its current version — without exploratory calls.
+- **Query a service's deployment status** (read-only).
+- **Trigger a rollback** of a service to its previous version (an *action* with real consequences).
+- **Hard rule:** a rollback of a **production** service must be **denied at the protocol level** unless the caller holds an explicit `prod-rollback` grant — never left to model discretion.
+- Return **structured errors** so the agent recovers correctly (retry a flaky status check, but never retry a denied prod rollback).
+- Run locally over **stdio** for an on-call engineer, and the same server runs as a shared **Streamable HTTP** service (OAuth) for the team.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    User([On-call engineer]) --> CC[Claude Code host]
+    CC -->|JSON-RPC over stdio or HTTP| Srv[Deployments MCP server]
+    Srv --> Res[[Resource: service-catalog<br/>read-only map]]
+    Srv --> T1[Tool: query_status<br/>read-only]
+    Srv --> T2[Tool: trigger_rollback<br/>action]
+    T2 --> Guard{prod and no grant?}
+    Guard -->|yes| Deny[Return isError<br/>permission, not retryable]
+    Guard -->|no| Exec[Execute rollback]
+    T1 --> DEP[(Deployment system)]
+    Exec --> DEP
+```
+
+The **catalog is a Resource** (read-only context, no exploratory calls); **status and rollback are Tools** (status reads, rollback acts); the **production guard lives in the server**, not in a prompt — so it holds regardless of which host or model connects.
+
+### Implementation
+
+A minimal server using the Python MCP SDK. The catalog is a resource; status and rollback are tools; the prod guard returns a **structured permission error**.
+
+```python
+from mcp.server import Server
+from mcp.types import Tool, Resource, TextContent
+import mcp.server.stdio
+
+app = Server("deployments")
+
+# --- Resource: the service catalog (read-only "map") ---
+@app.list_resources()
+async def list_resources() -> list[Resource]:
+    return [Resource(
+        uri="catalog://services",
+        name="Service catalog",
+        description="All services, owners, and current versions.",
+        mimeType="application/json",
+    )]
+
+@app.read_resource()
+async def read_resource(uri: str) -> str:
+    # Returns the catalog JSON: [{service, owner, env, version}, ...]
+    return get_service_catalog_json()
+
+# --- Tools ---
+@app.list_tools()
+async def list_tools() -> list[Tool]:
+    return [
+        Tool(name="query_status",
+             description="Read the current deployment status of one service. Read-only.",
+             inputSchema={"type": "object",
+                          "properties": {"service": {"type": "string"}},
+                          "required": ["service"]}),
+        Tool(name="trigger_rollback",
+             description="Roll a service back to its previous version. Mutating action.",
+             inputSchema={"type": "object",
+                          "properties": {"service": {"type": "string"}},
+                          "required": ["service"]}),
+    ]
+
+@app.call_tool()
+async def call_tool(name: str, args: dict) -> list[TextContent]:
+    if name == "query_status":
+        try:
+            status = deployment_api.status(args["service"])
+        except TimeoutError:
+            return error("transient", retryable=True,
+                         message="Deployment API timed out; safe to retry.")
+        return ok(status)
+
+    if name == "trigger_rollback":
+        svc = catalog.get(args["service"])
+        # The production guard — code, not a prompt. The model cannot bypass it.
+        if svc.env == "production" and not caller_has_grant("prod-rollback"):
+            return error("permission", retryable=False,
+                         message="Production rollback denied: 'prod-rollback' grant required.")
+        result = deployment_api.rollback(args["service"])
+        return ok(result)
+```
+
+The structured-error helpers keep every failure machine-readable (§4.4):
+
+```python
+def error(category, retryable, message):
+    payload = {"errorCategory": category, "isRetryable": retryable, "message": message}
+    return [TextContent(type="text", text=json.dumps(payload))]  # isError set on the response
+```
+
+Run it over **stdio** locally:
+
+```python
+async def main():
+    async with mcp.server.stdio.stdio_server() as (read, write):
+        await app.run(read, write, app.create_initialization_options())
+```
+
+Register it as a **project** server so the whole team gets it on checkout (§4.3) — stdio for local use, with a shared HTTP+OAuth deployment for the team:
+
+```json
+{
+  "mcpServers": {
+    "deployments": {
+      "command": "python",
+      "args": ["-m", "deployments_server"],
+      "env": { "DEPLOY_API_TOKEN": "${DEPLOY_API_TOKEN}" }
+    }
+  }
+}
+```
+
+In Claude Code the tools now appear as `mcp__deployments__query_status` and `mcp__deployments__trigger_rollback`, and the catalog as a readable resource.
+
+### Execution trace
+
+An on-call engineer asks Claude Code to roll back a production service they're not authorized for:
+
+```mermaid
+sequenceDiagram
+    actor Eng as On-call engineer
+    participant CC as Claude Code
+    participant S as Deployments server
+    participant G as Prod guard
+    Eng->>CC: "Roll back checkout-api, it's erroring"
+    CC->>S: read resource catalog://services
+    S-->>CC: checkout-api is env production
+    CC->>S: call trigger_rollback(checkout-api)
+    S->>G: production and no prod-rollback grant?
+    G-->>S: deny
+    S-->>CC: isError permission, not retryable
+    CC-->>Eng: "Blocked: production rollback needs the prod-rollback grant. Escalating."
+```
+
+Notice Claude *intended* to roll back directly; the **server's guard denied it deterministically**, and because the error was categorized `permission` / not-retryable, the agent escalated instead of looping. A prompt instruction ("don't roll back prod without approval") would comply only ~90% of the time — not good enough for production.
+
+### Validation
+
+- **Permission test:** call `trigger_rollback` on a production service without the grant 100 times; assert 100 structured `permission` errors and zero rollbacks. The guard must be 100%, like the §3.5 money rule.
+- **Error-category test:** simulate a `query_status` timeout and assert `transient` / `retryable: true`; simulate a denied prod rollback and assert `permission` / `retryable: false`. The agent should retry the first and never retry the second.
+- **Resource-vs-tool test:** confirm the catalog is reachable via `read_resource` (no tool call) — proving the agent gets its "map" without exploratory calls (§4.5).
+- **Empty-vs-error test:** querying a non-existent service should be a clean "not found" result, not `isError: true` (§4.4).
+
+### Common pitfalls
+
+- Putting the production-rollback rule in the system prompt instead of the **server guard** (probabilistic, not guaranteed — see §3.5 and §4.4).
+- Exposing the catalog as a `list_services` **tool** instead of a **Resource**, inflating the tool count and forcing exploratory calls (§4.5).
+- Returning `"Operation failed"` instead of a categorized error, so the agent can't tell a retryable timeout from a hard denial (§4.4).
+- Hard-coding `DEPLOY_API_TOKEN` into `.mcp.json` instead of using a `${...}` env reference (§4.3).
+- Choosing legacy **SSE** for the shared remote deployment instead of **Streamable HTTP** (§4.2).
+
+## 4.7 Exam Focus — Key Takeaways
+
+| Concept | What the exam tests |
+|---|---|
+| Primitives | Tools *act*, Resources *inform* (read-only), Prompts are templates; MCP is an open JSON-RPC standard, "USB-C for AI" (§4.1). |
+| Client/server | The host runs a client; each integration is a separate server process — isolation and reuse across hosts (§4.1). |
+| Transports | **stdio** (local subprocess, env-var auth) vs **Streamable HTTP** (remote, OAuth); legacy SSE-only is deprecated (§4.2). |
+| Scope & secrets | `.mcp.json` (project, committed, team) vs `~/.claude.json` (user); `${VAR}` for tokens — never commit the secret (§4.3). |
+| Tool count | All connected servers' tools load at once; too many degrades selection — MCP tool search loads lazily (§4.2–4.3). |
+| Structured errors | `isError` + `errorCategory`/`isRetryable`; transient→retry, business/permission→stop; empty ≠ error (§4.4). |
+| Resources | Read-only "maps" that eliminate exploratory tool calls; don't model read-only context as a tool (§4.5). |
+
+> **Maps to Domain 2 (18%)**, with direct support for Domain 1 (tools are an agent's capabilities) and Domain 5 (structured errors keep multi-agent systems reliable). If you can build and defend the Deployments server above — primitives, transport, scope, the server-side guard, and categorized errors — you have the core of the MCP-integration domain.
 
 # Chapter 5: Claude Code — Configuration and Workflows
 
