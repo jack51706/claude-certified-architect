@@ -6463,68 +6463,726 @@ sequenceDiagram
 
 > *Advanced — beyond the official exam scope.* Source: [Anthropic — Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents).
 
-Anthropic draws a sharp line between two kinds of "agentic" system:
+The single most consequential architecture decision in production agent engineering is also the simplest to state: **who controls the flow — your code, or the model?** Anthropic draws a sharp line between two answers, and almost every reliability, cost, and latency problem in a deployed system traces back to picking the wrong one.
 
-- **Workflow** — "systems where LLMs and tools are orchestrated through **predefined code paths**." *You* control the flow.
-- **Agent** — "systems where LLMs **dynamically direct their own processes** and tool usage, maintaining control over how they accomplish tasks." *The model* controls the flow.
+- **Workflow** — "systems where LLMs and tools are orchestrated through **predefined code paths**." *You* control the flow. The sequence of steps is fixed at design time; the model fills in the intelligence at each step.
+- **Agent** — "systems where LLMs **dynamically direct their own processes** and tool usage, maintaining control over how they accomplish tasks." *The model* controls the flow. It decides what to do next, in what order, and when it is done.
 
-**Start simple.** Use the simplest pattern that passes your evals — often a single well-tooled LLM call, or a workflow. Reserve agents for **open-ended problems where you can't predict the number of steps or hardcode the path, but can still verify progress.** Agents trade predictability for flexibility: more latency, more tokens, and the risk that an early mistake compounds.
+This chapter is **advanced material beyond the Foundations exam**, but it sits directly under Domain 1 (Agent Architecture, 27%): the exam's coordinator/subagent pattern is one specific workflow (orchestrator–workers), and the agentic loop from Chapter 3 is the *agent* end of this same spectrum. Knowing where a design sits on the control-versus-flexibility axis is what lets you defend an architecture rather than just build one.
 
-## The five workflow patterns
+By the end you should be able to:
 
-1. **Prompt chaining** — break a task into sequential steps; each call processes the previous output, with programmatic checks between steps.
-2. **Routing** — classify the input and send it to a specialized handler (separation of concerns).
-3. **Parallelization** — run subtasks at once, by **sectioning** (independent pieces) or **voting** (same task several times, then aggregate).
-4. **Orchestrator–workers** — a central LLM breaks the task down and delegates to worker LLMs, then synthesizes their results (the coordinator/subagent pattern from Domain 1).
-5. **Evaluator–optimizer** — one LLM generates, another evaluates and gives feedback, in an iterative refine loop (see Chapter 16).
+- **Place any design on the control-vs-flexibility spectrum** (§14.1) and explain the trade-off you are buying.
+- **Choose among the five workflow patterns** (§14.2) and know each one's failure mode.
+- **Apply the four-question test** (§14.3) before reaching for an agent.
+- **Invest in the agent–computer interface** (§14.4) — where reliability is actually won.
+- **Build a feedback-triage system** end-to-end (§14.5) that starts as a workflow and graduates exactly one stage to an agent — and know why.
 
-## Should you build an agent?
+## 14.1 The control-vs-flexibility spectrum
 
-Check all four before reaching for an agent: **complexity** (multi-step, hard to fully specify), **value** (worth the cost and latency), **viability** (Claude is capable at this task), and **cost of error** (mistakes are catchable and recoverable — tests, review, rollback). If any answer is "no," stay at a simpler tier.
+"Workflow" and "agent" are not a binary; they are the two ends of a continuum. As you move from left to right you gain flexibility (the system handles inputs you never anticipated) and you lose predictability (you can no longer enumerate what it will do).
 
-## Invest in the agent–computer interface (ACI)
+```mermaid
+flowchart TD
+    A[Single LLM call<br/>most control, least flexible] --> B[Workflow<br/>predefined code paths]
+    B --> C[Agent<br/>model directs its own steps]
+    C --> D[Multi-agent system<br/>most flexible, least predictable]
+    A -. add steps you can enumerate .-> B
+    B -. steps you cannot enumerate .-> C
+    C -. parallel autonomous workers .-> D
+```
 
-Spend "just as much effort in creating good agent-computer interfaces (ACI)" as you would on a human UI: clear tool documentation, example usage, edge cases, unambiguous parameters, and testing. On modern Claude, **tool descriptions and schemas matter more than clever prompting** — this is where reliability is won.
+**The golden rule: start simple, move right only when forced.** Use the simplest pattern that passes your evals — often a single well-tooled LLM call, sometimes a workflow. Each step rightward is a deliberate purchase: you pay in latency, tokens, and debuggability for the ability to handle open-endedness.
 
----
+**Why this matters in production.** The cost of the agentic end is not theoretical:
+
+- **Compounding errors.** In a workflow, a bad step is contained — the next step is fixed code that can validate and reject it. In an agent, an early wrong turn becomes the context the model reasons from for every subsequent step, so one mistake silently steers the whole trajectory.
+- **Cost and latency multiply.** An agent may take 3 steps or 30 for the same input; you cannot budget tokens or p99 latency the way you can for a fixed 4-call chain.
+- **Debuggability collapses.** "Why did it do that?" has a code answer in a workflow and a "re-read 40k tokens of model reasoning" answer in an agent.
+
+**The decisive question: can you enumerate the steps?** If you can write down the sequence ("classify, then summarize, then draft a reply"), build a workflow — it will be cheaper, faster, and more reliable. Reserve agents for **open-ended problems where you cannot predict the number of steps or hardcode the path, but you *can still verify progress*.** That last clause is non-negotiable: an agent you cannot verify is an agent you cannot trust.
+
+## 14.2 The five workflow patterns
+
+Most "I need an agent" instincts are really one of five workflow patterns in disguise. Each is built from `predefined code paths` plus LLM calls, and each has a characteristic failure mode you must design against.
+
+**1. Prompt chaining** — break a task into a fixed sequence of steps; each call processes the previous output, with **programmatic checks (gates) between steps**.
+
+```mermaid
+flowchart TD
+    In[Input] --> S1[LLM call 1<br/>extract]
+    S1 --> G{Gate<br/>schema valid?}
+    G -->|fail| Fix[Repair or reject]
+    G -->|pass| S2[LLM call 2<br/>transform]
+    S2 --> S3[LLM call 3<br/>format]
+    S3 --> Out[Output]
+```
+
+- *Use when* the task cleanly decomposes into ordered subtasks and you can validate each handoff.
+- *Failure mode:* skipping the gates. The whole point is that the code between calls catches a bad step before it poisons the next one. A chain with no gates is just a slow single call.
+
+**2. Routing** — classify the input, then send it to a specialized handler. This is separation of concerns: each handler gets a focused prompt and tool set instead of one bloated do-everything prompt.
+
+- *Use when* inputs fall into distinct categories that each deserve different handling (billing vs. technical vs. refund).
+- *Failure mode:* a weak classifier. Routing is only as good as the router; misroutes are invisible failures. Keep the categories few and mutually exclusive, and measure routing accuracy as its own eval.
+
+**3. Parallelization** — run subtasks at once, in two flavors:
+- **Sectioning** — split independent pieces of one task and run them concurrently (e.g., check a document for PII, tone, and policy in parallel), then merge.
+- **Voting** — run the *same* task several times and aggregate (majority vote, or "flag if any run says unsafe") to raise reliability on a judgment call.
+- *Failure mode:* using sectioning when the pieces actually depend on each other, or voting without a clear aggregation rule.
+
+**4. Orchestrator–workers** — a central LLM dynamically breaks the task down, delegates to worker LLMs, and synthesizes their results. **This is the coordinator/subagent pattern from Domain 1 (Chapter 3).** It differs from parallelization because the *subtasks are not known in advance* — the orchestrator decides them at run time.
+
+- *Use when* you cannot pre-decide how to split the work (e.g., "fix this bug" might touch one file or seven).
+- *Failure mode:* forgetting that workers have **isolated context** — the orchestrator must pass everything each worker needs in its prompt (Chapter 3, §3.4).
+
+**5. Evaluator–optimizer** — one LLM generates, a second evaluates against explicit criteria and returns feedback, and the first revises, in a loop. This is the engine of Chapter 16 (loop engineering).
+
+```mermaid
+flowchart TD
+    Task[Task] --> Gen[Generator LLM<br/>produce draft]
+    Gen --> Ev[Evaluator LLM<br/>check vs criteria]
+    Ev --> D{Meets criteria?}
+    D -->|no, with feedback| Gen
+    D -->|yes| Done[Accept output]
+    D -. budget exhausted .-> Esc[Escalate to human]
+```
+
+- *Use when* you have **clear, checkable success criteria** and quality improves measurably with iteration (translation, code that must pass tests, drafts against a rubric).
+- *Failure mode:* the generator and evaluator share a model and context, so the evaluator rubber-stamps its own reasoning. Keep the evaluator's context independent (Chapter 16).
+
+> **Note where routing/parallelization sit:** patterns 1–3 and 5 have a *fixed* structure — they are firmly workflows. Pattern 4 (orchestrator–workers) is the bridge: its control flow is decided by the model at run time, which already makes it agentic in spirit.
+
+## 14.3 Should you build an agent? The four-question test
+
+Before moving right on the spectrum, every "yes" is required. A single "no" means stay at a simpler tier.
+
+| Question | What it checks | If "no" |
+|---|---|---|
+| **Complexity** | Is the task genuinely multi-step and hard to fully specify in code? | A workflow (or one call) is simpler and more reliable. |
+| **Value** | Is the outcome worth the extra latency and token cost an agent incurs? | The economics don't justify autonomy; stay simple. |
+| **Viability** | Is Claude actually capable at this task, with the tools it has? | No architecture rescues a task the model can't do. |
+| **Cost of error** | Are mistakes **catchable and recoverable** — tests, review, rollback, human gate? | Autonomy is unsafe; keep a human or deterministic gate in the loop. |
+
+The fourth question is the one teams skip and regret. An agent's value comes from acting without supervision, so **the cost of a wrong action sets the ceiling on how much autonomy you can grant.** A coding agent whose mistakes are caught by tests and code review can be highly autonomous; an agent that moves money or emails customers cannot — there, you keep the deterministic hooks and human gates of Chapter 3 and Domain 5, no matter how capable the model is.
+
+## 14.4 Invest in the agent–computer interface (ACI)
+
+Once you do build an agent, the highest-leverage work is **not** prompt cleverness — it is the interface between the model and its tools. Anthropic's guidance is to spend "just as much effort in creating good agent-computer interfaces (ACI)" as you would on a human-facing UI.
+
+In practice, the ACI is your **tool definitions**:
+
+- **Clear descriptions** — say exactly what the tool does, when to use it, and when *not* to.
+- **Unambiguous parameters** — name and type each field so there is one obvious way to call it; prefer absolute paths over relative, enums over free text.
+- **Example usage and edge cases** — show a correct call and document what happens at the boundaries.
+- **Testing** — exercise the tool with the model and watch where it mis-calls; fix the description, not the prompt.
+
+**Why this beats prompting on modern Claude:** the model is already strong at reasoning; what it cannot recover from is a tool it *misunderstands*. A vague schema produces malformed calls no system prompt can reliably fix. **Tool descriptions and schemas are where reliability is won** — this is the production version of the exam's tool-design domain (Domain 2), and it is why Chapter 15's harness treats tool quality as a first-class concern.
+
+## 14.5 End-to-End Case Study: A Customer-Feedback Triage System
+
+The spectrum only becomes real when you build on it. Here is a system that processes inbound customer feedback (support tickets, app-store reviews, survey free-text) — and the instructive part is that it is **mostly a workflow, with exactly one stage promoted to an agent**, because that is the only stage whose steps you cannot enumerate.
+
+### Requirements
+
+- Ingest free-text feedback from several sources at high volume (thousands/day) — so **cost and latency per item matter**.
+- **Classify** each item (bug, feature request, billing, praise, churn-risk) and **route** it to the right downstream queue.
+- For bug reports, produce a **structured, deduplicated** record (component, severity, repro steps) for the engineering tracker.
+- For a small slice — **ambiguous, multi-issue, or escalated** items — do open-ended investigation: pull the customer's history, search past tickets and docs, and decide whether to merge, escalate, or draft a response. **The steps here cannot be enumerated in advance.**
+- Anything that drafts a customer-facing reply must pass a **human gate** before sending (cost-of-error is high).
+
+### Architecture: a workflow with one agentic stage
+
+```mermaid
+flowchart TD
+    In[Feedback item] --> R{Router<br/>classify category}
+    R -->|praise| Log[Log and thank<br/>single call]
+    R -->|feature| Track[Append to roadmap<br/>prompt chain]
+    R -->|bug| Chain[Bug chain<br/>extract then dedup then format]
+    Chain --> Gate{Schema gate<br/>valid record?}
+    Gate -->|fail| Repair[Repair or queue for human]
+    Gate -->|pass| Tracker[Write to engineering tracker]
+    R -->|ambiguous or escalated| Agent[Investigation agent<br/>agentic loop]
+    Agent --> HG{Human gate<br/>reply approved?}
+    HG -->|yes| Send[Send response]
+    HG -->|no| Human[Human handles]
+```
+
+The router (pattern 2) and the bug chain (pattern 1, with a schema gate) are pure workflow — fixed paths, cheap, debuggable, and the bulk of the volume. Only the **ambiguous/escalated branch** becomes an agent, because there you genuinely cannot pre-script the steps: it might need one lookup or six, in an order that depends on what it finds.
+
+### Why this split is correct (the four-question test, applied)
+
+- **Praise / feature / bug** fail the *complexity* test — their steps are enumerable, so they stay workflows. Forcing them through an agent would burn 10x the tokens to do a job a chain does deterministically.
+- **The ambiguous branch passes all four:** complex (unpredictable steps), valuable (these are the costly cases), viable (Claude can investigate with the right tools), and **error-recoverable only because of the human gate** before any reply is sent.
+
+### Execution trace: an item that escalates from workflow to agent
+
+```mermaid
+sequenceDiagram
+    actor U as Customer
+    participant R as Router workflow
+    participant A as Investigation agent
+    participant T as Tools history plus search
+    participant H as Human reviewer
+    U->>R: "App keeps logging me out AND I was double charged"
+    R->>R: classify, detects two issues, marks ambiguous
+    R->>A: hand off with full text plus customer id
+    A->>T: lookup_customer_history(id)
+    T-->>A: 3 prior logout tickets, 1 open billing dispute
+    A->>T: search_tickets("double charge")
+    T-->>A: known billing bug, fix shipping Friday
+    A->>H: draft reply plus merge into BUG-417, escalate billing
+    H-->>U: approved reply sent
+```
+
+The router could not handle this item — it is two issues at once, and the right next step depended on what the history lookup returned. That unpredictability is the signal to cross from workflow into agent. Note the agent still ends at a **human gate**, satisfying cost-of-error.
+
+### Implementation sketch
+
+The router is deterministic dispatch over a classification — *not* an agent:
+
+```python
+def triage(item):
+    category = classify(item)              # one LLM call, returns an enum
+    if category == "bug":
+        return bug_chain(item)             # prompt chain + schema gate
+    if category in ("praise", "feature"):
+        return simple_handler(category, item)
+    return investigation_agent.run(item)   # only this branch is agentic
+```
+
+The bug chain is a workflow with a hard gate between steps — the gate, not a prompt, is what guarantees a valid record:
+
+```python
+def bug_chain(item):
+    extracted = llm_extract(item)          # component, severity, repro
+    if not schema_valid(extracted):        # programmatic gate, not model self-check
+        return queue_for_human(item)
+    deduped = dedupe_against_tracker(extracted)
+    return write_tracker(format_record(deduped))
+```
+
+Only the investigation branch is an `AgentDefinition` running the agentic loop of Chapter 3, with least-privilege read tools and a mandatory human gate before any send:
+
+```python
+investigation_agent = AgentDefinition(
+    name="feedback_investigator",
+    description="Investigates ambiguous or escalated feedback; drafts but never sends.",
+    system_prompt="Investigate the item, then propose a resolution. Never send a reply yourself.",
+    allowed_tools=["lookup_customer_history", "search_tickets", "search_docs", "draft_reply"],
+)  # no send_email tool — the human gate owns that action
+```
+
+### Validation
+
+- **Spectrum-fit test:** measure cost/latency per category. If the bug chain were "upgraded" to an agent, tokens-per-item should spike with no quality gain — proving the workflow choice was right.
+- **Gate test:** feed the bug chain malformed inputs and assert the schema gate (not the model) routes them to human review 100% of the time.
+- **Routing-accuracy eval:** measure the classifier independently; a misroute is a silent failure, so track it as its own metric (§14.2).
+- **Human-gate test:** assert the investigation agent has **no** send tool — confirm it physically cannot send a reply, so cost-of-error stays bounded.
+
+### Common pitfalls
+
+- **Agent-washing the whole pipeline.** Making the router and bug chain "an agent" multiplies cost and destroys debuggability for branches whose steps you can enumerate — the opposite of "start simple."
+- **A chain with no gates.** Without the programmatic check between steps, prompt chaining is just a slower, more expensive single call (§14.2).
+- **Promoting to an agent without verifiable progress.** The ambiguous branch only works because every action is a read or a draft, with a human gate on send — remove that and it fails the fourth question.
+- **Tuning the agent's prompt instead of its tools.** When the investigator mis-calls `search_tickets`, fix the tool schema, not the system prompt (§14.4).
+
+## 14.6 Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| Control vs flexibility | Workflow = *your* code controls the flow; agent = *the model* controls the flow. They are ends of a spectrum, not a binary (§14.1). |
+| Start simple | Use the simplest pattern that passes evals; move right only when you cannot enumerate the steps. Each step right costs latency, tokens, and debuggability (§14.1). |
+| Five workflow patterns | Prompt chaining, routing, parallelization (sectioning/voting), orchestrator–workers, evaluator–optimizer — most "agent" needs are one of these (§14.2). |
+| The four-question test | Complexity, value, viability, cost-of-error must *all* be yes before building an agent; cost-of-error sets the autonomy ceiling (§14.3). |
+| Invest in the ACI | On modern Claude, reliability is won in tool descriptions and schemas, not clever prompting (§14.4). |
+| One agentic stage | Promote only the branch whose steps you cannot enumerate; keep the rest as cheap, gated workflows (§14.5). |
+
+> **Beyond the exam, but anchored to Domain 1.** The orchestrator–workers pattern *is* the coordinator/subagent design (Chapter 3), and the cost-of-error question *is* why Domain 5 keeps deterministic hooks and human gates. Master this spectrum and you can justify — not just assemble — any agent architecture.
 
 # Chapter 15: The Agent Harness
 
-> *Advanced — beyond the official exam scope.* Source: [Anthropic — Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents).
+> *Advanced — beyond the official exam scope.* Source: [Anthropic — Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) | [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents).
 
-The model emits tool calls; the **harness** is the infrastructure around it that turns a model into an *agent*. It executes tools, manages the context lifecycle across sessions and context windows, persists state so the agent knows prior progress, enforces permissions and guardrails, provides observability, and runs verification. For **long-running** agents, the harness — not the prompt — is where reliability lives.
+The model emits text and tool calls. That is *all* it does. Everything else that makes a model behave like an **agent** — running the tools, deciding what to feed back in, persisting progress, stopping at the right moment, recovering from a crashed tool, recording what happened — is code you write *around* the model. That code is the **harness**.
 
-## Design principles for long-running harnesses
+This distinction is the most important mental model in production agent engineering. When a long-running agent fails — loops forever, forgets what it already did, leaks a secret into a log, declares success on broken code — the fix is almost never "a better prompt." It is a fix in the harness. **The prompt shapes the model's judgment; the harness governs the system's behavior.** For anything that must be reliable, behavior beats judgment.
 
-- **Differentiated initialization** — use a *different prompt for the first context window* that lays down scaffolding (feature list, repo, progress docs) later sessions can read.
-- **Structured state management** — keep machine-readable artifacts (e.g. a feature list in JSON, a progress file) so a fresh context window can quickly understand the state of work.
-- **Incremental decomposition** — have the agent do **one feature at a time** rather than trying to one-shot the whole thing and running out of context mid-task.
-- **Environmental cleanup** — require the agent to commit progress to git with descriptive messages and leave a clean state a human could pick up.
-- **Explicit verification** — mandate end-to-end tests before a feature is declared done; don't trust the model's "it works" without evidence.
-- **Session startup routines** — begin each session by reading the progress file, reviewing git history, and running basic checks before new work.
+This chapter is advanced material — the Foundations exam does not test "build a harness." But every harness responsibility below is the production-grade version of an exam theme: the agentic loop (Domain 1), tool design and error handling (Domain 2), and context management and reliability (Domain 5). Reading this chapter is the best way to understand *why* those exam topics exist. By the end you should be able to name the components of a harness, reason about the trade-offs in each, and design one end-to-end.
 
-This is the production-grade version of the exam's tool-design, reliability, and context-management themes.
+This chapter covers:
 
----
+- **What a harness is vs. what the model is** (§15.1) — drawing the line precisely.
+- **The five core components** (§15.2) — loop driver, tool execution, context assembly, error handling, observability.
+- **Design principles for long-running harnesses** (§15.3) — state, decomposition, verification, cleanup.
+- **An end-to-end case study** (§15.4) — a long-running codebase-migration agent.
+- **Key takeaways** (§15.5).
+
+## 15.1 What the Model Does vs. What the Harness Does
+
+A single API call to Claude takes a list of messages plus tool definitions, and returns one response: some text, zero or more `tool_use` blocks, and a `stop_reason`. It does not run the tools. It does not remember the previous call. It does not decide when the task is "done." It cannot read a file, hit an API, or commit to git. It produces *a request to do those things* and waits.
+
+The harness is everything that closes that gap:
+
+```mermaid
+flowchart TD
+    H[Harness] --> A[Loop driver<br/>decides next step and when to stop]
+    H --> B[Tool execution<br/>runs the tool, returns a result]
+    H --> C[Context assembly<br/>builds the next request]
+    H --> D[Error handling<br/>retries, timeouts, guardrails]
+    H --> E[Observability<br/>logs, traces, metrics]
+    M[Model] -. emits text plus tool_use plus stop_reason .-> H
+    H -. sends messages plus tools .-> M
+```
+
+A useful test: **if you removed the model and replaced it with a human typing the same tool calls, what infrastructure would still be needed to run the task?** That infrastructure is the harness. The model supplies *judgment about what to do next*; the harness supplies *the machinery to actually do it, safely and observably, over and over*.
+
+Why this line matters in practice: it tells you where to put each concern. A money limit, a permission check, a retry policy, a secret redactor, a stop condition — none of these belong in the prompt, because the prompt is advisory and the model is probabilistic. They belong in the harness, where they are deterministic code (this is the exam's hooks-vs-prompts rule from Chapter 3, generalized to the whole system).
+
+## 15.2 The Five Core Components of a Harness
+
+### Loop driver
+
+The loop driver is the heart of the harness: a `while` loop that calls the model, inspects `stop_reason`, runs any requested tools, appends the results, and calls again — until a real stop condition fires.
+
+```mermaid
+flowchart TD
+    Start[Receive task] --> Build[Assemble request<br/>messages plus tools]
+    Build --> Call[Call the model]
+    Call --> Stop{stop_reason?}
+    Stop -->|tool_use| Exec[Execute requested tools]
+    Exec --> Append[Append tool_result<br/>to history]
+    Append --> Budget{Budget or<br/>guardrail hit?}
+    Budget -->|no| Build
+    Budget -->|yes| Halt[Halt and escalate]
+    Stop -->|end_turn| Done[Return result]
+```
+
+The non-obvious decisions live here:
+
+- **The stop condition.** The *primary* signal is `stop_reason == "end_turn"` — never parsed assistant text like "Done!", and never an iteration cap as the main control (Chapter 3, §3.1). But a production loop layers *secondary* guardrails on top: a max-turns budget, a token budget, a wall-clock timeout, and an escalation trigger. These do not *replace* `end_turn`; they bound the blast radius if the model never reaches it.
+- **Sequential vs. parallel tool execution.** A single model response can contain several `tool_use` blocks. Read-only, independent tools (two lookups) can run concurrently for latency; tools with side effects, or where one depends on another's result, must run in order. The harness owns this decision — the model cannot.
+- **Where to enforce policy.** Permission checks and business rules run *between* the model's request and the tool's execution, not inside the model. This is the natural home for the Chapter 3 hook pattern.
+
+**Pitfall:** trusting the model to stop itself. Without a budget, a model that gets confused can call tools forever, burning money and time. **Pitfall:** treating the iteration cap as the *normal* exit — if your agent routinely hits `max_turns`, the task is under-decomposed (see §15.3), not the limit too low.
+
+### Tool execution
+
+A `tool_use` block is *a request*, not an action. The harness validates it, runs it, and turns whatever happened — success, error, timeout — into a `tool_result` the model can reason about.
+
+Three responsibilities are easy to under-build:
+
+1. **Validation before execution.** Check the arguments against the tool's schema and against policy *before* touching anything. A malformed or out-of-policy call should become an error result the model can correct, not a crash or an unauthorized action.
+2. **Sandboxing and least privilege.** Tools that touch the filesystem, shell, or network are the agent's attack surface. Scope them (allowed paths, allowed commands, network allowlists) so a confused or adversarial model cannot exfiltrate data or destroy state. The harness — not the prompt — enforces this.
+3. **Turning failure into a result.** When a tool raises, times out, or returns an error, the harness must feed a *structured error back to the model* (`is_error: true` with a clear message), not throw the whole loop away. A well-formed error message ("file not found: /x; did you mean /y?") lets the model self-correct on the next turn — that recovery loop is one of the biggest reliability wins a harness provides.
+
+**Trade-off:** rich, forgiving tool results help the model recover but cost tokens and can leak internals; terse results are cheap but give the model less to work with. Tune per tool.
+
+### Context assembly
+
+The model is stateless; the harness decides *exactly what the model sees* on every call. This is the single biggest lever on cost, latency, and quality — and the hardest part to get right over a long run.
+
+Context assembly answers, each turn: which system prompt, which tool definitions, how much conversation history, which retrieved documents or state files, and in what order. Key techniques (drawn from Domain 5):
+
+- **Compaction / summarization.** A long-running agent will exceed any context window. The harness must summarize or prune older history while preserving the load-bearing facts. Things that must *survive* summarization (a findings list, a source registry, the original goal) live in a structured block the harness re-injects verbatim every turn, rather than relying on them staying in the rolling history.
+- **Prompt caching.** Stable prefixes (system prompt, tool definitions, a large rubric) should be cached so repeated turns bill at a fraction of the cost. The harness controls cache boundaries; misplacing them silently wastes money.
+- **Externalized state.** The cheapest context is the context you *don't* send. Keep machine-readable state (a progress file, a feature list in JSON) on disk and let the agent read only the slice it needs, rather than carrying everything in the window.
+
+**Pitfall:** naive "append everything" context. It works in a demo and fails in production — cost grows turn over turn, latency climbs, and important early facts get buried or summarized away. **Pitfall:** summarizing away the one fact the task depended on. Decide *explicitly* what must never be compacted.
+
+### Error handling and guardrails
+
+Beyond individual tool failures, the harness owns system-level reliability: retries with backoff for transient API errors, timeouts on every external call, circuit breakers when a dependency is down, and *guardrails* that block disallowed actions regardless of what the model decides. Guardrails are deterministic code (block a refund over a limit, refuse to write outside the repo, require human approval for irreversible actions) — the production generalization of Chapter 3's hooks. **The rule from Chapter 3 holds for the whole harness:** when failure has financial, legal, or safety consequences, enforce it in code, not in the prompt.
+
+### Observability
+
+A long-running agent is a black box unless the harness opens it. Log every turn: the request (or a hash), the model's text and tool calls, each tool result, token counts, latency, and the eventual stop reason. This is what lets you debug "why did it do that on turn 40," attribute cost, build evals from real traces, and detect drift. **Pitfall:** logging raw tool I/O that contains secrets or PII — the observability layer is exactly where redaction must live.
+
+## 15.3 Design Principles for Long-Running Harnesses
+
+When an agent must run for hours across many context windows (a large migration, a multi-day investigation), a handful of principles separate harnesses that finish from harnesses that stall:
+
+- **Differentiated initialization.** Use a *different prompt for the first context window* — one that lays down scaffolding (a feature list, repo layout, a progress doc) that every later session reads. Session one builds the map; later sessions follow it.
+- **Structured, machine-readable state.** Persist progress as artifacts a fresh context window can parse in seconds — a feature list in JSON, a `progress.md`, a manifest that drives resume. The agent's memory lives on disk, not in the window.
+- **Incremental decomposition.** Have the agent do **one unit of work at a time** (one feature, one file, one migration step), verify it, commit, then move on — rather than one-shotting the whole thing and running out of context mid-task. If the loop keeps hitting `max_turns`, the unit is too big.
+- **Explicit verification.** Mandate end-to-end checks (tests pass, build is green) *before* a unit is declared done. Never trust the model's "it works" without evidence — pair the harness with an evaluator (Chapter 16) so success is *checked*, not *claimed*.
+- **Environmental cleanup.** Require the agent to commit progress to git with descriptive messages and leave a clean state a human could pick up. The next session — or the next person — starts from a known-good point.
+- **Session startup routine.** Begin each session by reading the progress file, reviewing recent git history, and running basic checks *before* doing new work, so a fresh context window re-orients instead of guessing.
+
+## 15.4 End-to-End Case Study: A Long-Running Codebase-Migration Agent
+
+The components above only matter when they fit together. Here is a realistic long-running agent: migrate a large repository from one framework version to the next — hundreds of files, far more work than fits in a single context window — running unattended overnight.
+
+### Requirements
+
+- Migrate every module in the repo from `framework v1` to `framework v2`, one module at a time.
+- The work vastly exceeds one context window, so the agent must **resume across many sessions** without losing progress.
+- A module is **not done until its tests pass** — no "looks migrated" without evidence.
+- **Hard rule:** the agent may write only inside the repo and may run only allowlisted commands (no network, no deletes outside the repo). This is enforced in code.
+- Every session must leave a **clean, committed git state** a human could inspect.
+- The whole run must be **observable** — which module, which turn, what failed.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    Start[Session start] --> Read[Read progress.json<br/>and git log]
+    Read --> Pick[Pick next module<br/>marked pending]
+    Pick --> Loop[Run agentic loop<br/>edit and migrate module]
+    Loop --> Sandbox{{Tool sandbox<br/>repo-only writes plus allowlist}}
+    Sandbox --> Verify[Run module tests]
+    Verify --> Pass{Tests green?}
+    Pass -->|no| Loop
+    Pass -->|yes| Commit[Commit with message<br/>and mark module done]
+    Commit --> More{More modules<br/>or budget left?}
+    More -->|yes| Pick
+    More -->|no| End[Stop and report]
+```
+
+The harness owns every non-model concern: the **loop driver** runs the migration turns; the **tool sandbox** makes repo-only, allowlisted execution a hard guarantee; **context assembly** keeps each session lean by reading `progress.json` instead of replaying history; **verification** (tests) gates completion; and **commits plus the progress file** give cleanup and resumability.
+
+### Implementation sketch
+
+The state file is the agent's long-term memory — small, machine-readable, re-read at every session start:
+
+```
+# progress.json — drives resume across context windows
+{
+  "framework": "v1 -> v2",
+  "modules": [
+    {"path": "src/auth",     "status": "done",    "commit": "a1b2c3d"},
+    {"path": "src/billing",  "status": "pending"},
+    {"path": "src/reports",  "status": "pending"}
+  ]
+}
+```
+
+The loop driver bounds the run and trusts only the real stop signal plus explicit guardrails:
+
+```python
+def run_session(state, budget_turns=200):
+    history = build_initial_context(state)   # progress.json + repo map, not full history
+    for turn in range(budget_turns):
+        resp = model.call(messages=history, tools=TOOLS)
+        log_turn(turn, resp)                 # observability: every turn recorded
+        if resp.stop_reason == "end_turn":
+            return "session_complete"
+        for call in resp.tool_uses:
+            result = execute_tool(call)      # validates, sandboxes, returns errors as results
+            history.append(result)
+    return "budget_exhausted"                # secondary guardrail, not the normal exit
+```
+
+Tool execution enforces the sandbox in code — the model cannot widen its own permissions:
+
+```python
+def execute_tool(call):
+    if call.name == "write_file" and not inside_repo(call.args["path"]):
+        return tool_result(call, is_error=True,
+                           text="Refused: writes are restricted to the repo.")
+    if call.name == "run_command" and call.args["cmd"] not in ALLOWLIST:
+        return tool_result(call, is_error=True,
+                           text=f"Refused: '{call.args['cmd']}' is not allowlisted.")
+    try:
+        return tool_result(call, text=dispatch(call))   # success
+    except ToolError as e:
+        return tool_result(call, is_error=True, text=str(e))  # failure -> model can self-correct
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Op as Operator
+    participant Ha as Harness
+    participant Mo as Model
+    participant Sb as Tool sandbox
+    participant Git as Git repo
+    Op->>Ha: Start overnight migration run
+    Ha->>Ha: Read progress.json, pick src/billing
+    Ha->>Mo: Migrate src/billing to v2 plus repo context
+    Mo-->>Ha: tool_use write_file src/billing
+    Ha->>Sb: write_file inside repo
+    Sb-->>Ha: ok
+    Ha->>Sb: run_command pytest src/billing
+    Sb-->>Ha: 2 tests failed
+    Ha->>Mo: tool_result tests failed plus output
+    Mo-->>Ha: tool_use write_file fix
+    Ha->>Sb: run_command pytest src/billing
+    Sb-->>Ha: all tests pass
+    Ha->>Git: commit migrate src/billing to v2
+    Ha->>Ha: mark src/billing done in progress.json
+    Mo-->>Ha: end_turn
+    Ha-->>Op: src/billing done, 2 modules remaining
+```
+
+Notice what the harness — not the model — guaranteed: the write stayed inside the repo (sandbox), the failed tests came back as a *result the model could fix* rather than a crash (error handling), completion was gated on green tests (verification), and progress survived for the next session (state plus commit). The model supplied only the migration edits.
+
+### Validation
+
+- **Resumability test:** kill the process mid-module and restart. The agent must re-read `progress.json`, skip the `done` modules, and resume the `pending` one — no repeated or lost work.
+- **Sandbox test:** prompt the agent to write outside the repo or run a non-allowlisted command; assert it is refused by the harness *as an error result*, and that the loop continues.
+- **Verification gate test:** point at a module whose tests fail; assert it is never marked `done` and is left `pending` for the next attempt.
+- **Budget test:** force a non-terminating situation; assert the loop halts at `budget_turns` and escalates rather than running forever.
+
+### Common pitfalls
+
+- Carrying full conversation history across sessions instead of a compact `progress.json` (cost explodes; old facts get summarized away — §15.2).
+- Enforcing the repo-only / allowlist rule in the *prompt* instead of in `execute_tool` (probabilistic, not guaranteed — §15.1).
+- Marking a module done on the model's word instead of on passing tests (§15.3, verification).
+- Using `budget_turns` as the *normal* exit signal instead of `end_turn` (the task is under-decomposed — §15.2).
+
+## 15.5 Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| Model vs. harness | The model only emits text plus `tool_use` plus `stop_reason`; the harness runs tools, assembles context, drives the loop, handles errors, and observes. Reliability lives in the harness, not the prompt (§15.1). |
+| Loop driver | Primary stop signal is `stop_reason == "end_turn"`; budgets/timeouts are *secondary* guardrails that bound the blast radius, never the normal exit (§15.2). |
+| Tool execution | A `tool_use` is a request — validate, sandbox (least privilege), and turn failures into structured `is_error` results so the model can self-correct (§15.2). |
+| Context assembly | The harness decides exactly what the model sees each turn; use compaction, caching, and externalized state, and pin facts that must never be summarized away (§15.2). |
+| Guardrails | Money/legal/safety rules and permission checks are deterministic code between request and execution — the system-wide generalization of Chapter 3 hooks (§15.2, §15.4). |
+| Long-running design | Externalized machine-readable state, incremental decomposition, explicit verification, git cleanup, and a session-startup routine make multi-window runs resumable (§15.3). |
+
+> **Beyond the exam, but built on it.** The harness is the production-grade form of the agentic loop (Domain 1), tool design and error handling (Domain 2), and context management and reliability (Domain 5). Pair it with **loop engineering** (Chapter 16): the harness gives an agent the machinery to run autonomously; the evaluator loop gives it a reason to trust the result.
 
 # Chapter 16: Loop Engineering
 
-> *Advanced — beyond the official exam scope.* Sources: [The New Stack — Loop engineering](https://thenewstack.io/loop-engineering/); Anthropic — Building Effective Agents (evaluator–optimizer) and Effective harnesses.
+> *Advanced — beyond the official exam scope.* Sources: [The New Stack — Loop engineering](https://thenewstack.io/loop-engineering/); Anthropic — [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents) (evaluator–optimizer) and [Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents).
 
-As agents grew more capable, the highest-leverage design shifted from *writing the perfect one-shot prompt* to **designing the loop the agent runs in** — "ditched prompting, now writes loops." The loop (model → tool calls → feedback → repeat) is the unit you engineer.
+As agents grew more capable, the highest-leverage design work shifted from *writing the perfect one-shot prompt* to **designing the loop the agent runs in** — "ditched prompting, now writes loops." The loop (model → tool calls → feedback → repeat) is the unit you engineer. Chapter 3 introduced the *minimal* agentic loop for the exam: a `while` that runs until `stop_reason == "end_turn"`. That loop is correct, but it is also dangerously naive in production — it assumes the model always converges, never repeats itself, and never needs to be stopped, paused, or resumed. Real agents do all of these.
 
-## Generator–evaluator (GAN-style) loops
+This chapter is the production engineering of that loop. It is **advanced material beyond the Foundations exam**, but it rests on one idea the exam *does* test (§3.1): **the model is in charge of the next step, so the harness must be in charge of the boundaries.** A loop that only stops on `end_turn` will, on a bad run, burn your entire token budget oscillating between two tools or chasing a goal it can never reach. Loop engineering is the discipline of giving an autonomous loop **edges**: stop conditions, budgets, progress detection, oscillation guards, and recovery checkpoints — so it can run unattended for minutes or hours without drifting, looping forever, or losing its work on a crash.
 
-The most consequential choice in a loop: **split the agent that produces the work from the agent that checks it.** A model grading its **own** output is too generous — it rationalizes its own mistakes. A **separate evaluator** with different instructions and a clean context catches the failures the generator reasoned itself into. This is the **evaluator–optimizer** pattern (Chapter 14) applied as the core loop, and it maps onto the normal software lifecycle — code review and QA play the evaluator role.
+We cover six concerns:
 
-## Making loops work
+- **Stop conditions** (§16.1) — the layered exit signals beyond `end_turn`.
+- **Step and turn budgets** (§16.2) — bounding cost and latency without using a step cap as your *primary* stop.
+- **Progress detection** (§16.3) — telling "still working" apart from "stuck," and oscillation guards.
+- **Generator–evaluator loops** (§16.4) — splitting the worker from the checker to get a trustworthy "done."
+- **Recovery and checkpoints** (§16.5) — surviving crashes and resuming a long loop without redoing work.
+- **End-to-end case study** (§16.6) — a long-running codebase-migration agent that puts all five together.
 
-- Give the evaluator **explicit, checkable "done" criteria** — vague criteria produce noisy loops.
-- Keep the evaluator's context **fresh and independent** of the generator's reasoning.
+## 16.1 Stop conditions: beyond `end_turn`
+
+The exam's answer to "when does the loop stop?" is `stop_reason == "end_turn"` — and as the *completion* signal that is exactly right (never parse assistant text, never use a raw iteration cap as the *meaning* of done). But `end_turn` only answers **"did the model decide it is finished?"** A production loop needs to stop for several other reasons the model will never raise on its own. Think of stop conditions as **layers**, each owned by a different part of the system:
+
+```mermaid
+flowchart TD
+    A[Loop iteration] --> B{Model says end_turn?}
+    B -->|yes| C{Evaluator passes<br/>done criteria?}
+    C -->|yes| DONE[Stop SUCCESS]
+    C -->|no| FB[Inject feedback<br/>continue loop]
+    FB --> A
+    B -->|no, tool_use| D{Budget exhausted?}
+    D -->|yes| BUD[Stop BUDGET<br/>hand off partial]
+    D -->|no| E{No progress<br/>or oscillating?}
+    E -->|yes| STUCK[Stop STUCK<br/>escalate to human]
+    E -->|no| F{Guardrail or<br/>fatal error?}
+    F -->|yes| ABORT[Stop ABORTED<br/>safe shutdown]
+    F -->|no| G[Execute tool<br/>append result]
+    G --> A
+```
+
+The five **terminal states** — `SUCCESS`, `BUDGET`, `STUCK`, `ABORTED`, and a timeout variant — matter because they drive *different* downstream behavior. A `SUCCESS` returns the result; a `BUDGET` stop hands off partial work with a clear "ran out of room here" marker; a `STUCK` stop escalates to a human (Domain 5) rather than pretending success; an `ABORTED` stop performs a safe shutdown after a guardrail trip or unrecoverable error. The single most common production bug is **collapsing all of these into one boolean** `done`, so the caller can't tell a finished task from a quit one.
+
+**Why this matters / pitfalls.** Two failure modes bracket this design. Stop *too eagerly* (only `end_turn`, no evaluator) and the agent declares victory on work that doesn't actually pass — the model is an unreliable judge of its own output (§16.4). Stop *too late* (no budget, no progress check) and a single bad run can cost real money and wall-clock time while making no progress. The fix is not a smarter prompt; it is **multiple independent stop signals**, each owned by code, not the model.
+
+## 16.2 Step and turn budgets
+
+A **budget** bounds how much the loop may consume before it must stop and hand off. The exam-correct nuance (§3.1) is that an iteration cap is an **anti-pattern as the *primary* stop condition** — it tells you nothing about whether the work is done. But a budget is still essential as a **safety ceiling**: it is the difference between a runaway loop costing $2 and costing $2,000.
+
+Budget along whichever axis actually hurts you:
+
+| Budget type | Bounds | Typical use |
+|---|---|---|
+| **Turn / iteration** | Number of model calls | Cheap guard against tight infinite loops |
+| **Token** | Total input+output tokens | The real cost ceiling; tracks context growth |
+| **Wall-clock** | Elapsed time | Latency SLAs; user-facing interactivity |
+| **Tool-call** | Calls to a specific tool | Rate limits, expensive or side-effecting tools |
+
+**Why/trade-offs.** Token budgets are usually the truest cost proxy because context grows every iteration — each tool result is appended, so late iterations are far more expensive than early ones. Set the budget from the **p95 of successful runs plus headroom**, not the average: if a task normally finishes in 12 turns but occasionally needs 30, a cap of 15 will strangle legitimate work, while a cap of 100 lets a stuck loop run 70 turns past the point of no progress. This is why a budget should be a **backstop**, not the everyday exit — progress detection (§16.3) should usually stop a stuck loop *long before* the budget does. A budget that fires often is a signal your real stop conditions are too weak.
+
+When the budget is the thing that stops you, **never silently drop the work.** Emit a partial-result handoff: what was accomplished, what remains, and the state needed to resume (§16.5). A budget stop is a pause, not a failure.
+
+## 16.3 Progress detection and oscillation
+
+This is the hardest part of loop engineering and the part the naive loop ignores entirely. The loop must distinguish three states that all *look* like "the model called another tool":
+
+- **Progressing** — each step changes state toward the goal (tests go from 8 failing to 5 failing).
+- **Stuck** — steps execute but the relevant state doesn't change (the same test keeps failing the same way).
+- **Oscillating** — the agent flips between two states forever (edit A → test fails → revert to B → test fails → edit A …).
+
+```mermaid
+flowchart TD
+    S[Capture progress signal<br/>after each step] --> C{Signal improved<br/>vs last checkpoint?}
+    C -->|yes| R[Reset stall counter<br/>save checkpoint]
+    R --> CONT[Continue loop]
+    C -->|no| I[Increment stall counter]
+    I --> O{Same state seen<br/>2 plus times before?}
+    O -->|yes| OSC[Oscillation detected<br/>break the cycle]
+    O -->|no| T{Stall counter<br/>over threshold?}
+    T -->|yes| ESC[No progress<br/>change strategy or escalate]
+    T -->|no| CONT
+    OSC --> ESC
+```
+
+**Defining a progress signal.** Progress is only measurable against a **concrete, external metric** — never the model's self-report. Good signals are domain artifacts the harness can read without asking the model: failing-test count, lines remaining to migrate, unresolved checklist items in a progress file, a build that goes from red to green. The evaluator's checkable "done" criteria (§16.4) double as the progress yardstick. If you cannot name a signal the *harness* can measure, you cannot detect being stuck, and the loop has no edges.
+
+**Oscillation guards.** Oscillation is insidious because every individual step looks productive — the model has a fresh, plausible reason each time. Detect it by **hashing the relevant state** (e.g. the set of changed files plus the test outcome) and tracking recent hashes; a repeat means a cycle. When you catch one, *change something* rather than letting it spin: inject the loop's own history ("you have tried A and B twice each; both fail the same test — try a different approach"), force a different tool, or escalate. Feeding the model its own loop history is often enough, because oscillation usually comes from the model **forgetting it already tried the other branch** — a context/memory problem as much as a reasoning one.
+
+**Why/pitfalls.** The classic mistake is using a **turn cap as a stand-in for progress detection** — it eventually stops the oscillation, but only after wasting the entire budget, and it can't tell "stuck" from "almost done on a genuinely long task." The second mistake is trusting the model's narration ("Making good progress!") as the signal; a stuck model is often the *most* confident. Always measure progress against an artifact, never against prose.
+
+## 16.4 Generator–evaluator loops
+
+The most consequential single choice in a loop: **split the agent that produces the work from the agent that checks it.** A model grading its **own** output is too generous — it rationalizes the mistakes it just made. A **separate evaluator** with different instructions and a clean context catches the failures the generator reasoned itself into. This is the **evaluator–optimizer** pattern (Chapter 14) used as the core loop, and it maps onto the normal software lifecycle: code review and QA play the evaluator role.
+
+```mermaid
+flowchart TD
+    G[Generator<br/>produces or revises work] --> E[Evaluator<br/>fresh context, own criteria]
+    E --> D{Meets all<br/>done criteria?}
+    D -->|yes| PASS[Accept output<br/>stop SUCCESS]
+    D -->|no| F[Structured feedback<br/>what failed and why]
+    F --> B{Budget or stall<br/>limit reached?}
+    B -->|yes| ESC[Escalate to human<br/>with partial plus feedback]
+    B -->|no| G
+```
+
+This single pattern resolves the "stop too eagerly" failure from §16.1: the evaluator, not the generator's `end_turn`, owns the `SUCCESS` decision. Making it work:
+
+- Give the evaluator **explicit, checkable "done" criteria** — vague criteria produce noisy loops that never converge or pass slop. "All unit tests pass and no public API changed" beats "looks correct."
+- Keep the evaluator's context **fresh and independent** of the generator's reasoning — a shared context lets the generator's rationalizations leak in, and the whole point is independence.
+- Return **structured, actionable feedback**, not just pass/fail — the feedback is the generator's next input, so "test_auth fails: token expiry off by 3600s" is worth ten "try again"s.
 - Pair it with the **harness** (Chapter 15): the verification step is what lets the loop run autonomously without drifting or declaring premature success.
-- Know when to stop: loop until the evaluator passes, a budget is hit, or you escalate to a human (Domain 5).
 
----
+**Trade-offs.** A separate evaluator costs an extra model call per round and roughly doubles per-iteration latency. Reserve it for steps where a wrong "done" is expensive (anything shipping code, money, or irreversible actions); for cheap, easily-reversible steps a programmatic check (a test runner, a schema validator) is a faster, fully-deterministic evaluator. The evaluator does not have to be a model — **the strongest evaluator is usually code.**
+
+## 16.5 Recovery and checkpoints
+
+A loop that runs for an hour *will* be interrupted — a crash, a rate limit, a deploy, a context-window rollover (Chapter 15). Without recovery, an interruption means **redoing everything**, which for a long agent is both expensive and risky (re-running side-effecting tools). Loop engineering therefore treats the loop as **resumable**: it periodically writes a **checkpoint** — durable, machine-readable state from which a fresh loop can continue where the last one stopped.
+
+A good checkpoint captures the minimum needed to resume: the **goal**, the **progress signal** (§16.3), a **completed-vs-remaining** breakdown, and a pointer to externalized work (e.g. a git commit), so the resumed loop does *not* need the full prior message history. This is the same instinct as Chapter 15's "structured state management" and "session startup routines," applied at loop granularity. Checkpoint at **meaningful boundaries** — after the evaluator accepts a unit of work, not after every token — so a checkpoint always represents a consistent, verified state you'd be happy to resume from.
+
+**Idempotency is the catch.** On resume, the loop may re-attempt a step that *partially* completed before the crash. If that step had a side effect (sent an email, charged a card, wrote a file), naïve resume **double-applies it**. The defenses are the standard ones: make side-effecting tools idempotent (keyed by a request id), record each side effect in the checkpoint *before* acting, and on resume reconcile against that record rather than blindly replaying. Recovery checkpoints and the budget handoff (§16.2) use the *same* serialized state — a budget stop is just a planned checkpoint that happens to be the last one.
+
+## 16.6 End-to-End Case Study: A Long-Running Codebase-Migration Agent
+
+The pieces above only matter assembled. Consider an agent asked to **migrate a large repository from a deprecated logging library to a new one** — hundreds of files, a multi-hour job that *will* span several context windows and may crash partway. This is the canonical loop-engineering problem: it is genuinely open-ended (you can't hardcode the steps), but progress is **verifiable** (the build and tests are ground truth), which is exactly when an agent — not a workflow — is justified (Chapter 14).
+
+### Requirements
+
+- Migrate every call to `old_logger` to `new_logger` across the repo, preserving behavior.
+- The job exceeds one context window and one process lifetime — it **must survive crashes and resume** without redoing finished files.
+- **Done** is defined by code, not by the model's say-so: the project builds, all tests pass, and no `old_logger` import remains.
+- Bound the cost: stop and hand off if a hard token budget is hit, and escalate to a human if the loop stops making progress.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    Start([Start or resume]) --> Init[Read checkpoint<br/>build remaining file list]
+    Init --> Loop{Files remaining<br/>and budget left?}
+    Loop -->|no, none left| Final[Full build plus test<br/>final evaluator]
+    Loop -->|no, budget hit| Handoff[Write checkpoint<br/>hand off partial]
+    Loop -->|yes| Gen[Generator migrates<br/>next file]
+    Gen --> Eval[Evaluator<br/>build plus tests for file]
+    Eval --> Ok{Passed?}
+    Ok -->|yes| Save[Commit file<br/>write checkpoint]
+    Save --> Loop
+    Ok -->|no| Prog{Progress on<br/>this file?}
+    Prog -->|yes| Gen
+    Prog -->|no, stalled| Esc[Escalate file<br/>to human]
+    Esc --> Loop
+    Final --> Done[Stop SUCCESS]
+```
+
+The loop's **unit of work is one file**, not the whole repo (incremental decomposition, Chapter 15): each file is generated, verified by an evaluator that actually runs the build and the file's tests, then committed and checkpointed before the next. That makes every checkpoint a consistent, verified state, and keeps each iteration's context small.
+
+### The loop, in pseudocode
+
+The structure is a `while` whose *edges* are the stop conditions — `end_turn` alone is nowhere near enough:
+
+```python
+def migration_loop(state):
+    while state.files_remaining:
+        if state.tokens_used > TOKEN_BUDGET:
+            return handoff(state, reason="budget")          # §16.2 planned checkpoint
+        f = state.files_remaining[0]
+
+        result = generate_migration(f, context=minimal(state))   # generator
+        verdict = evaluator_run_build_and_tests(f, result)       # §16.4 code-as-evaluator
+
+        if verdict.passed:
+            commit(f, result)
+            state.mark_done(f)
+            checkpoint(state)                               # §16.5 at a verified boundary
+            state.stall = 0
+        else:
+            state.stall += 1
+            if oscillating(state, f) or state.stall > STALL_LIMIT:   # §16.3
+                escalate(f, history=state.recent_attempts)  # change strategy / human
+                state.defer(f)
+        # loop continues; the model never decides to stop on its own here
+
+    return finalize(state)   # full build + tests = the real end_turn
+```
+
+Note what is *not* trusted: the model never declares the file done — the **evaluator running real tests** does (`SUCCESS` is owned by code, §16.4). The model never decides to keep looping forever — the **budget and stall guards** decide (§16.2, §16.3). And the loop never loses work — every verified file is **committed and checkpointed** (§16.5).
+
+### Execution trace (a crash and a clean resume)
+
+```mermaid
+sequenceDiagram
+    actor Op as Operator
+    participant H as Harness
+    participant G as Generator
+    participant V as Evaluator
+    participant CK as Checkpoint store
+    Op->>H: Start migration job
+    H->>G: Migrate auth.py
+    G-->>H: Edited auth.py
+    H->>V: Build plus run tests
+    V-->>H: Passed
+    H->>CK: Save checkpoint at file 41 of 300
+    Note over H: Process crashes mid file 42
+    Op->>H: Restart job
+    H->>CK: Load last checkpoint
+    CK-->>H: Resume at file 42, 259 remaining
+    H->>G: Migrate billing.py
+    G-->>H: Edited billing.py
+    H->>V: Build plus run tests
+    V-->>H: Passed
+    H->>CK: Save checkpoint at file 43 of 300
+```
+
+The crash costs **one file of rework at most** (file 42, which had not been checkpointed), not the 41 already finished. The resumed loop reads the checkpoint, not the prior conversation, so it starts cheaply with a fresh context — exactly Chapter 15's session-startup routine, expressed as loop recovery.
+
+### Validation
+
+- **Resumability test:** kill the process mid-run, restart, and assert it resumes at the last checkpoint and never re-migrates a committed file (proves idempotent recovery, §16.5).
+- **Budget test:** set an artificially low token budget and assert the loop stops with a `BUDGET` handoff carrying a resumable checkpoint — not a silent drop (§16.2).
+- **Anti-oscillation test:** seed a file the generator can't fix and assert the loop detects the stall, escalates that one file, and *keeps migrating the rest* instead of spinning (§16.3).
+- **Done-means-done test:** assert the job only reports `SUCCESS` when the full build and tests pass and no `old_logger` import remains — never on the model's word (§16.4).
+
+### Common pitfalls
+
+- Using a turn cap (`max_iterations`) as the *meaning* of done instead of a backstop — it can't tell finished from stuck (§16.1, §3.1).
+- One global `done` boolean, so the caller can't distinguish `SUCCESS` from `BUDGET` from `STUCK` (§16.1).
+- Trusting the model's "all done!" instead of an evaluator that runs the tests (§16.4).
+- Checkpointing mid-file, so a resume re-applies a partial, side-effecting edit (non-idempotent recovery, §16.5).
+- No progress signal, so an oscillating loop burns the whole budget looking busy (§16.3).
+
+## 16.7 Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| Stop conditions are layered | `end_turn` is the *completion* signal (§3.1), but a production loop also stops on **budget, stall/oscillation, and guardrail/error** — each a distinct terminal state, owned by code, not one global `done` (§16.1). |
+| Budgets are backstops, not the plan | Bound tokens/turns/time as a safety ceiling sized from p95 + headroom; if the budget fires often, your real stop conditions are too weak (§16.2). |
+| Detect progress against an artifact | Measure "stuck vs progressing" with an external metric (failing tests, files remaining), never the model's self-report; guard oscillation by hashing recent state and breaking the cycle (§16.3). |
+| Split generator from evaluator | A separate evaluator with fresh context and checkable criteria owns the `SUCCESS` decision; structured feedback drives the next round — and the strongest evaluator is usually code (§16.4). |
+| Make the loop resumable | Checkpoint durable, machine-readable state at verified boundaries so a fresh loop resumes cheaply; keep side effects idempotent so resume never double-applies (§16.5). |
+| Agents need *edges* | The model owns the next step; the harness owns the boundaries. Loop engineering is giving an autonomous loop stop conditions, budgets, progress detection, and recovery so it runs unattended without drifting or looping forever (§16.6). |
+
+> **Beyond the exam, built on it.** The Foundations exam tests the *minimal* loop (`stop_reason == "end_turn"`, no parsed text, no raw iteration cap — §3.1). Production loop engineering keeps that core and adds the edges: this is what turns the exam's correct-but-naive loop into an agent you can leave running for an hour and trust to stop in the right way.
 
 # PART IV: Complete Claude Platform Reference (Beyond the Foundations Exam)
 
@@ -6534,80 +7192,607 @@ The most consequential choice in a loop: **split the agent that produces the wor
 
 # Chapter 17: Thinking, Effort & Reasoning Control
 
-> *Reference — beyond the exam scope.* Docs: [Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) · [Effort](https://platform.claude.com/docs/en/build-with-claude/effort).
+> *Reference — beyond the exam scope.* Docs: [Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) · [Effort](https://platform.claude.com/docs/en/build-with-claude/effort) · [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking).
 
-Modern Claude models reason before answering. You control *how much* with two dials:
+Modern Claude models reason *before* they answer. For a production agent, the question is never "should the model think?" but "**how much** should it think, **when**, and **what does that cost me?**" Reasoning is the single largest lever on the quality/latency/cost triangle: too little and the agent fumbles a multi-step migration; too much and a one-line lookup burns 40 seconds and thousands of tokens. This chapter is about controlling that lever deliberately.
 
-- **Adaptive thinking** — `thinking: {type: "adaptive"}`. The model decides when and how much to think, and interleaves thinking between tool calls automatically. This is the current approach on Claude 4.6+.
-- **Effort** — `output_config: {effort: "low" | "medium" | "high" | "xhigh" | "max"}`. Controls reasoning depth *and* overall token spend. Default is `high` on Opus 4.8; **`xhigh`** is the sweet spot for coding/agentic work; `low` for cheap or latency-sensitive tasks.
+This material is **advanced and largely outside the Foundations syllabus** — the official out-of-scope list explicitly names extended-thinking internals. It earns its place here because every real agent you ship will live or die on these dials. Where the exam *does* touch the topic (it expects you to know adaptive thinking exists and that `effort` trades cost for depth), that is noted inline. By the end you should be able to:
 
-**The old way is gone.** Fixed `thinking: {type: "enabled", budget_tokens: N}` is **deprecated and returns a 400 on Opus 4.7/4.8 and Fable 5** — use adaptive thinking + effort instead. (Older models still use `budget_tokens`, which must be `< max_tokens`.)
+- Choose between **adaptive thinking** and the deprecated fixed budget, and know what 400s on which model (§17.1).
+- Tune the **effort** ladder (`low`→`max`) per route, not globally (§17.2).
+- Reason about **interleaved thinking** with tool use — why it helps agents and what it costs (§17.3).
+- Control **visibility** (`display`) and handle **redacted thinking** without breaking multi-turn replay (§17.4).
+- Bound a whole agentic loop with **task budgets** vs. the per-response `max_tokens` cap (§17.5).
+- Decide **when extended thinking helps vs. hurts** (§17.6).
 
-**Seeing the reasoning.** On Opus 4.7/4.8 and Fable 5, `thinking.display` defaults to `"omitted"` (thinking blocks come back empty). Set `thinking: {type: "adaptive", display: "summarized"}` to stream a readable summary.
+§17.7 then builds a complete reasoning-controlled **code-migration agent** end-to-end, and §17.8 distills the takeaways.
 
-**Task budgets (advanced).** `output_config: {task_budget: {type: "tokens", total: N}}` gives the model a token ceiling for a *whole agentic loop* — it sees a countdown and paces itself to finish gracefully (distinct from `max_tokens`, an enforced per-response cap the model doesn't see). Beta `task-budgets-2026-03-13`; Fable 5 / Opus 4.8 / 4.7.
+## 17.1 Two eras of thinking control: budgets vs. adaptive
 
----
+There are two generations of the thinking API, and mixing them is the most common error.
 
-**Example (Python):**
+**The old way (deprecated).** You set a fixed ceiling: `thinking: {type: "enabled", budget_tokens: N}`, where `N` had to be strictly less than `max_tokens`. You guessed the budget up front, the same for every request.
+
+**The current way.** `thinking: {type: "adaptive"}`. The model decides *per request* whether to think and how deeply, scaling its reasoning to the difficulty it perceives. There is no token budget to tune.
+
+```mermaid
+flowchart TD
+    A[Request arrives] --> B{Model family?}
+    B -->|Opus 4.7 / 4.8 / Fable 5| C[thinking type adaptive<br/>budget_tokens rejected with 400]
+    B -->|Opus 4.6 / Sonnet 4.6| D[thinking type adaptive<br/>budget_tokens deprecated but works]
+    B -->|Pre-4.6 models| E[thinking type enabled<br/>budget_tokens less than max_tokens]
+    C --> F[Depth controlled by effort]
+    D --> F
+    E --> G[Depth controlled by the fixed budget]
+```
+
+**Why this matters in production:** a fixed budget over-thinks easy requests and under-thinks hard ones — it cannot tell them apart. Adaptive thinking spends nothing on a trivial lookup and ramps up for a genuine multi-step problem, which is exactly the spend profile an agent wants across a heterogeneous workload.
+
+**The hard pitfall.** On Opus 4.7, Opus 4.8, and Fable 5, `thinking: {type: "enabled", budget_tokens: N}` is not merely discouraged — it returns a **400 error**. So do the sampling parameters `temperature`, `top_p`, and `top_k`. Code carried forward from an older model will fail outright, not degrade quietly. On Opus 4.6 and Sonnet 4.6 the budget still *works* but is deprecated (a transitional escape hatch only). On Fable 5 there is one extra twist: thinking is *always on*, so even an explicit `thinking: {type: "disabled"}` is a 400 — you omit the parameter entirely.
+
+## 17.2 The effort ladder
+
+With adaptive thinking, depth is governed by **effort**, set inside `output_config` (not at the top level):
 
 ```python
-response = client.messages.create(
+output_config={"effort": "high"}   # low | medium | high | xhigh | max
+```
+
+Effort controls reasoning depth *and* overall token spend together — and it shapes *behavior*, not just thinking length. Lower effort yields fewer, more-consolidated tool calls, less preamble, and terser confirmations; higher effort explores more before acting.
+
+| Level | Use it for | What to expect |
+|---|---|---|
+| `low` | Latency-sensitive or simple tasks, cheap subagents | Minimal reasoning; fast; scopes work tightly to what was asked |
+| `medium` | Cost-sensitive workloads that still need some reasoning | A favorable balance when you must trim tokens |
+| `high` | **Default** (omitting effort equals `high`); most intelligence-sensitive work | The recommended floor for anything that matters |
+| `xhigh` | **Coding and agentic work** — the sweet spot, and Claude Code's default | More tool use, deeper planning; pair with generous `max_tokens` |
+| `max` | Correctness matters more than cost; the hardest, latency-insensitive cases | Ceiling intelligence; can overthink with diminishing returns |
+
+**Why per-route, not global.** A single `effort` for the whole system is almost always wrong. The agent's planning loop wants `xhigh`; a fan-out of read-only "find the file" subagents wants `low`; an interactive chat reply wants `medium`. Setting one value forces you to overpay on the cheap paths or underthink on the expensive ones.
+
+**Trade-off and pitfall.** Effort matters *more* on Opus 4.7/4.8 and Fable 5 than on any prior model, and it is not monotonic with cost. On long-horizon agentic work, **higher effort up front often reduces total cost** because the agent plans better and takes fewer wasted turns — the naive assumption "lower effort = cheaper" can be false end-to-end. The reflexive habit of always reaching for `xhigh` to "maximize intelligence" is also a mistake on Opus 4.8: start at `high` and sweep your eval set, because the relationship between effort, latency, and cost differs per task.
+
+## 17.3 Interleaved thinking with tool use
+
+In a non-trivial agent, the model does not think once and then act. It **thinks between tool calls** — read a tool result, reason about what it means, decide the next call. This is *interleaved* (or interspersed) thinking, and on adaptive-thinking models it happens **automatically with no beta header** (older models gated it behind `interleaved-thinking-2025-05-14`).
+
+```mermaid
+flowchart TD
+    A[User goal] --> B[Think — plan first step]
+    B --> C[Tool call 1]
+    C --> D[Tool result 1]
+    D --> E[Think — interpret result<br/>revise the plan]
+    E --> F[Tool call 2]
+    F --> G[Tool result 2]
+    G --> H{Goal met?}
+    H -->|no| E
+    H -->|yes| I[Think — final synthesis] --> J[Answer]
+```
+
+**Why it helps.** Without interleaved reasoning the model commits to a tool plan before it has seen any results — brittle when a lookup returns something unexpected. Interleaved thinking lets it *re-plan mid-loop*: a failed test result feeds a corrected fix, an empty search feeds a broadened query. This is the difference between an agent that recovers and one that charges ahead with a stale plan.
+
+**What it costs and the pitfalls.** Each interleaved block is billed output, so a long tool loop accumulates reasoning tokens turn after turn. Two consequences for production:
+
+- **Replay discipline.** When you continue a conversation on the **same** model, you must pass thinking blocks back *exactly as received* — including empty-text blocks. The API rejects *modified* blocks, not read ones; dropping or editing them breaks the turn (ordering/signature errors).
+- **Context growth.** Interleaved blocks pile up. Pair long loops with **context editing** (`clear_thinking_20251015`) to clear stale thinking, or **compaction** when you approach the window — see Chapter 21.
+
+## 17.4 Visibility (`display`) and redacted thinking
+
+You control whether the reasoning is *shown*, separately from whether it *happens*.
+
+**`display`.** On Opus 4.7, Opus 4.8, and Fable 5, `thinking.display` defaults to `"omitted"` — thinking blocks still come back, but their text is an empty string. Set `display: "summarized"` to stream a readable summary:
+
+```python
+thinking={"type": "adaptive", "display": "summarized"}
+```
+
+This is *visibility only* — thinking happens and is billed identically under every setting; the raw chain of thought is never exposed on any model. The practical trap: if you stream reasoning to users and leave the default, the UI shows a long silent pause before output. For any "show your work" UX, set `summarized` explicitly.
+
+**Redacted thinking.** Occasionally a thinking block is encrypted by safety systems and returned as a `redacted_thinking` block — an opaque blob, not readable text. Do **not** treat this as an error and do **not** strip it: on multi-turn requests you pass it back unchanged exactly like a normal thinking block, and the model decrypts it internally to maintain continuity. Removing redacted blocks breaks the same replay contract as removing normal ones. (On Fable 5 and Mythos 5 the raw chain is *never* returned at all — you get regular `thinking` blocks that are summarized or empty, not `redacted_thinking`.)
+
+## 17.5 Task budgets: bounding the whole loop
+
+`max_tokens` caps a **single response** and the model cannot see it — hit it and output is truncated mid-thought. That is the wrong tool for "don't let this whole agentic run cost more than X." For that, use a **task budget** (beta header `task-budgets-2026-03-13`; Fable 5 / Opus 4.8 / 4.7):
+
+```python
+output_config={"effort": "high", "task_budget": {"type": "tokens", "total": 64000}}
+```
+
+The server injects a running **countdown** the model can see across the entire loop (its own generation plus the tool results it reads this turn — *not* the full history you resend). The model paces itself: it prioritizes, then wraps up gracefully as the budget drains, instead of being guillotined by `max_tokens`.
+
+| Control | Scope | Model aware? | On exceed |
+|---|---|---|---|
+| `max_tokens` | One response | No | Hard truncation mid-output |
+| `task_budget` | Whole agentic loop | **Yes** (sees a countdown) | Graceful wind-down; may finish less thoroughly, citing the budget |
+
+**Pitfalls.** The minimum `total` is **20,000** tokens. In a normal loop, leave `remaining` unset — the server tracks the countdown itself; only pass a client-computed `remaining` if you compact or rewrite history between requests (otherwise you under-report). And surfacing the countdown to the model is a double edge: on Fable 5 a visible budget can trigger "context anxiety" (the model suggests a new session or trims its own work) — if you don't need it shown, don't show it.
+
+## 17.6 When extended thinking helps — and when it hurts
+
+Reasoning is not free intelligence; it is a spend you justify.
+
+**Helps:** multi-step math and logic, complex code edits and migrations, planning a long agentic trajectory, tasks where the model verifies its own output (redlining a document, reconciling figures), and ambiguous problems that need decomposition.
+
+**Hurts (or simply wastes):** trivial lookups and classification, latency-critical paths where a 30-second pause is unacceptable, and high-volume cheap calls where the per-request reasoning cost dominates. Forcing high effort on these is pure tax.
+
+```mermaid
+flowchart TD
+    A[Incoming task] --> B{Multi-step or<br/>self-verifying?}
+    B -->|no| C{Latency or<br/>cost critical?}
+    C -->|yes| D[effort low<br/>or thinking off]
+    C -->|no| E[effort medium]
+    B -->|yes| F{Long agentic loop?}
+    F -->|yes| G[adaptive plus effort high or xhigh<br/>add a task_budget]
+    F -->|no| H[adaptive plus effort high]
+```
+
+**The subtle failure mode.** Over-thinking is a real regression, not a harmless extravagance. At `max`, models can explore past the point of usefulness and *over-engineer* — adding abstractions and defensive handling nobody asked for. The fix is to lower effort first and only then add prose constraints; reaching for more guardrails before dialing `effort` down treats the symptom, not the cause.
+
+## 17.7 End-to-End Case Study: A Reasoning-Controlled Code-Migration Agent
+
+The dials above only matter assembled into one system. Here is a realistic agent whose entire economics depend on reasoning control: a service that migrates a repository from one framework version to the next — read code, plan, edit, run tests, fix failures, until green.
+
+### Requirements
+
+- Take a repo and a target version; produce a passing migration autonomously.
+- The **coordinator** plans and edits at high reasoning depth; it makes mistakes only at the planning layer, so that is where intelligence must go.
+- A fan-out of **read-only scout subagents** locates every call site of the deprecated API — cheap, parallel, no reasoning needed.
+- **Bound the whole run's cost** so a runaway migration can't bill unboundedly — but let the agent finish gracefully, not get truncated.
+- Stream a **readable reasoning summary** to the engineer watching, without exposing raw chain of thought.
+- The loop is long (dozens of edit/test cycles); **thinking tokens must not blow the context window**.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    Eng([Engineer]) --> Coord[Coordinator agent<br/>effort xhigh, task_budget set]
+    Coord -->|Task fan-out| Scout1[Scout subagent<br/>effort low]
+    Coord -->|Task fan-out| Scout2[Scout subagent<br/>effort low]
+    Scout1 -. call sites .-> Coord
+    Scout2 -. call sites .-> Coord
+    Coord --> Edit[Apply edits]
+    Edit --> Test[Run test suite]
+    Test --> Decide{Tests green?}
+    Decide -->|no| Coord
+    Decide -->|yes| Done[Migration complete]
+    Coord -. clear_thinking on long loop .-> Coord
+```
+
+The coordinator owns the reasoning-heavy planning at `xhigh`; scouts run at `low` because pattern-matching call sites needs speed, not depth; a `task_budget` caps the cumulative spend; context editing keeps the long loop's thinking from overflowing.
+
+### Implementation
+
+Configure the coordinator for deep reasoning, a visible summary, and a whole-loop budget. Note adaptive thinking is set **explicitly** — omitting `thinking` runs *without* thinking on these models:
+
+```python
+response = client.beta.messages.create(
     model="claude-opus-4-8",
-    max_tokens=16000,
+    max_tokens=32000,                                   # per-response hard cap
+    betas=["task-budgets-2026-03-13"],
     thinking={"type": "adaptive", "display": "summarized"},
-    output_config={"effort": "high"},   # low | medium | high | xhigh | max
-    messages=[{"role": "user", "content": "..."}],
+    output_config={
+        "effort": "xhigh",                              # coding sweet spot
+        "task_budget": {"type": "tokens", "total": 200000},  # whole-loop ceiling, min 20K
+    },
+    tools=[migrate_tools],
+    messages=messages,
 )
 ```
 
+Spawn scouts at low effort — depth would be wasted on a grep-shaped task:
+
+```python
+scout = AgentDefinition(
+    name="call_site_scout",
+    description="Finds every call site of the deprecated API. Read-only.",
+    # Per-route effort: this subagent runs at low; the coordinator stays at xhigh.
+    output_config={"effort": "low"},
+    allowed_tools=["grep", "read"],
+)
+```
+
+Preserve replay discipline in the manual loop — pass thinking blocks back **unchanged**, then clear stale ones once the loop runs long:
+
+```python
+# Echo the assistant turn verbatim, including thinking/redacted_thinking blocks.
+messages.append({"role": "assistant", "content": response.content})
+# On a long edit/test loop, clear stale thinking to protect the context window.
+context_management = {"edits": [{"type": "clear_thinking_20251015"}]}
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Eng as Engineer
+    participant Co as Coordinator
+    participant Sc as Scout subagents
+    participant Te as Test runner
+    Eng->>Co: Migrate repo to v2 (effort xhigh)
+    Co->>Co: Think: plan migration (summarized)
+    Co->>Sc: Task fan-out: find deprecated call sites (effort low)
+    Sc-->>Co: 14 call sites across 6 files
+    Co->>Co: Think: edit order, interpret risks
+    Co->>Te: Run test suite
+    Te-->>Co: 3 failures
+    Co->>Co: Think: diagnose failures, revise fix
+    Co->>Te: Re-run after fixes
+    Te-->>Co: All green
+    Co-->>Eng: Migration complete (budget 70 percent used)
+```
+
+Notice the interleaved `Think` steps between tool calls — the coordinator re-plans after the scout results and again after the failing tests. The scouts never reason deeply; the coordinator never wastes a turn on file-finding. The task budget let the agent pace a dozen cycles and finish at 70% spend rather than being cut off at an arbitrary response boundary.
+
+### Validation
+
+- **Cost-bound test:** run a deliberately hard migration and assert cumulative spend stays within the `task_budget`; confirm the run *winds down* gracefully (it cites the budget) rather than truncating mid-edit.
+- **Per-route effort test:** assert the scout subagent's requests carry `effort: low` and the coordinator's carry `effort: xhigh` — a single global effort is a misconfiguration here.
+- **Replay test:** drop thinking blocks from the echoed assistant turn and confirm the next request 400s — proving you must pass them back unchanged.
+- **Context test:** run the edit/test loop long enough to trigger `clear_thinking` and assert the window doesn't overflow.
+
+### Common pitfalls
+
+- Carrying `budget_tokens` forward from an older model — a **400** on Opus 4.7/4.8, not a warning (§17.1).
+- Omitting `thinking` and expecting reasoning — on these models that runs *without* thinking; set `{type: "adaptive"}` explicitly (§17.7).
+- One global `effort` — overpays on scouts or underthinks the coordinator (§17.2).
+- Leaving `display` at the default while streaming to a UI — the engineer sees a silent pause, not a summary (§17.4).
+- Using `max_tokens` to cap the *run* — it caps one response and truncates mid-thought; use `task_budget` for the loop (§17.5).
+
+## 17.8 Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| Adaptive vs. budget | Use `thinking: {type: "adaptive"}` on 4.6+; fixed `budget_tokens` is deprecated on 4.6/Sonnet 4.6 and **400s** on Opus 4.7/4.8 and Fable 5 (§17.1). |
+| Effort ladder | `low`→`max` inside `output_config`; default is `high`, `xhigh` is the coding/agentic sweet spot. Tune **per route**, not globally; higher effort can lower end-to-end cost (§17.2). |
+| Interleaved thinking | Automatic with adaptive (no beta header); lets the agent re-plan between tool calls. Echo thinking blocks back **unchanged** on the same model (§17.3). |
+| Display & redacted | `display` defaults to `"omitted"` on 4.7/4.8/Fable 5 — set `"summarized"` to show work; pass `redacted_thinking` blocks back unchanged, never strip them (§17.4). |
+| Task budgets | `task_budget` (beta, min 20K) bounds the **whole loop** with a countdown the model sees; `max_tokens` caps one response and truncates. Leave `remaining` unset in a normal loop (§17.5). |
+| When to think | Multi-step / self-verifying → think; trivial / latency-critical → `low` or off. Over-thinking at `max` causes over-engineering — lower effort before adding guardrails (§17.6). |
+
+> **Beyond the exam.** The Foundations exam only expects you to know adaptive thinking exists and that `effort` trades cost for reasoning depth. Everything else here — task budgets, interleaved replay discipline, redacted thinking, per-route effort — is production craft for agents that must be fast, correct, *and* affordable at once.
+
 # Chapter 18: Prompt Caching
 
-> *Reference — the exam only expects you to "know it exists"; here is the working knowledge.* Docs: [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+> Documentation: [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 
-Caching reuses a stable prompt prefix across requests to cut cost (~90%) and latency.
+Every production agent re-sends the same large prefix on every turn — a multi-thousand-token system prompt, a frozen tool catalog, retrieved documents, the whole prior conversation. Without caching you pay full input price to *re-process* those identical bytes on every single request, and the user waits while the model re-reads context it has already seen. **Prompt caching** lets the API reuse the work it did on a stable prefix: a cache *read* costs roughly **0.1×** the normal input price and skips re-processing, cutting both cost (up to ~90% on the cached span) and time-to-first-token.
 
-**The one rule everything follows from:** caching is a **prefix match** — any byte change *anywhere* in the prefix invalidates everything after it. Render order is **`tools` → `system` → `messages`**, so put stable content first and volatile content (timestamps, per-request IDs, the varying question) last.
+This chapter is **PART III — advanced, production agent engineering, beyond the Foundations exam scope**. The exam only expects you to *know prompt caching exists*. But the moment you operate a real agent, caching stops being optional: it is the difference between an agent that costs cents per turn and one that costs dollars, and the silent failure mode (a cache that never hits) is one of the most common — and most invisible — production cost regressions. The one place it touches the exam directly is **context and cost reliability**: an agent with a large stable `system` + `tools` prefix is exactly the shape caching was built for, and Domain reasoning about cost-efficient context management assumes you understand it.
 
-- Mark a breakpoint with `cache_control: {type: "ephemeral"}` on the last stable block (5-minute TTL; `{..., ttl: "1h"}` for one hour). Max **4** breakpoints per request.
-- **Economics:** cache reads ≈ 0.1× input price; writes ≈ 1.25× (5m) or 2× (1h). Break-even is ~2 requests at the 5-minute TTL.
-- **Verify** with `usage.cache_read_input_tokens` — if it is 0 across identical-prefix requests, a **silent invalidator** is at work: `datetime.now()`/UUIDs in the system prompt, unsorted `json.dumps()`, or a changing tool set.
-- **Don't** change tools or switch models mid-conversation — both invalidate the whole cache.
+By the end you should be able to reason about five things and assemble them into a cache-efficient agent:
 
----
+- **The prefix-match invariant** (§18.1) — why one changed byte invalidates everything after it.
+- **`cache_control` breakpoints and TTL** (§18.2) — where to place markers, and 5-minute vs 1-hour.
+- **The cost model** (§18.3) — ~0.1× read / 1.25×–2× write, and where break-even is.
+- **Silent invalidators** (§18.4) — how to *prove* the cache is working, and what quietly breaks it.
+- **Caching for agents** (§18.5) — the stable `system` + `tools` prefix, and mid-session workarounds.
 
-**Example (Python):**
+§18.6 then builds a complete cache-optimized support agent end-to-end, and §18.7 distills the working knowledge.
+
+## 18.1 The One Invariant: Caching Is a Prefix Match
+
+Everything in this chapter follows from a single rule:
+
+> **Prompt caching is a prefix match. Any byte change *anywhere* in the prefix invalidates everything after it.**
+
+The cache key is derived from the *exact rendered bytes* of the prompt up to each breakpoint. The API renders a request in a fixed order — **`tools` → `system` → `messages`** — and walks that rendered sequence looking for the longest prefix it has already cached. A single differing byte at position N — a timestamp in the system header, a reordered JSON key in a tool schema, one extra tool in the list — means everything from position N onward is *not* in the cache and must be processed at full price.
+
+```mermaid
+flowchart TD
+    A[Build request] --> B[Render in fixed order<br/>tools then system then messages]
+    B --> C{Prefix bytes match<br/>a cached entry?}
+    C -->|yes, up to position N| D[Read cached span<br/>about 0.1x input price]
+    C -->|no match| E[Process at full price<br/>and write a new cache entry]
+    D --> F[Process only the<br/>uncached remainder]
+    E --> F
+    F --> G[Return response<br/>plus usage cache counters]
+```
+
+The practical consequence is an ordering discipline: **stable content must physically precede volatile content.** Put the frozen system prompt and a deterministic tool list first; put the timestamps, per-request IDs, and the varying user question *last*, after the final breakpoint. Get the ordering right and most caching works for free. Get it wrong — interpolate today's date into the *top* of the system prompt — and no amount of `cache_control` markers can save you, because the very first block already differs on every request.
+
+**Why a hard prefix match, not fuzzy reuse?** Because the cache stores the model's internal processing state at each prefix boundary, and that state is only valid for *exactly* those preceding bytes. There is no partial credit: the rule is brutal but completely predictable, which is what lets you engineer around it.
+
+## 18.2 `cache_control` Breakpoints and TTL
+
+A **breakpoint** marks where a cacheable span ends. You set one by attaching `cache_control` to a content block:
+
+```python
+{"type": "text", "text": LARGE_STABLE_CONTEXT, "cache_control": {"type": "ephemeral"}}
+```
+
+A breakpoint can sit on any content block — a `system` text block, a tool definition, or a message block (`text`, `image`, `tool_use`, `tool_result`, `document`). Because rendering is `tools` → `system` → `messages`, **a marker on the last `system` block caches the tools *and* the system prompt together** (tools render before system, so they are inside the same prefix).
+
+**Two TTLs:**
+
+- `{"type": "ephemeral"}` — **5-minute** sliding TTL (the default). Each read refreshes it.
+- `{"type": "ephemeral", "ttl": "1h"}` — **1-hour** TTL, for bursty traffic with gaps longer than five minutes.
+
+**Constraints that bite in practice:**
+
+- **Maximum 4 breakpoints per request.** Spend them on stability boundaries (see §18.5), not arbitrarily.
+- **Minimum cacheable prefix is model-dependent.** On Opus 4.8 / 4.7 / 4.6 it is **4096 tokens**; on Sonnet 4.6 it is 2048; on Sonnet 4.5 it is 1024. A prefix shorter than the minimum **silently won't cache** — no error, just `cache_creation_input_tokens: 0`. A 3K-token prompt caches on Sonnet 4.5 but not on Opus 4.8.
+- **20-block lookback window.** Each breakpoint walks backward *at most 20 content blocks* to find a prior cache entry. A single turn that appends more than 20 blocks — common in agentic loops with many `tool_use`/`tool_result` pairs — pushes the previous cache out of reach, and the next request silently misses. Fix: place an intermediate breakpoint roughly every 15 blocks in long turns.
+
+**Top-level auto-caching.** If you don't need fine-grained placement, pass `cache_control` at the top level of `messages.create()` and the API caches the last cacheable block automatically. This is the simplest option for a single large `system` prompt; reach for explicit per-block markers only when you need to cache several distinct spans (e.g. tools, then a session prefix, then a turn).
+
+## 18.3 The Cost Model: When Caching Actually Pays
+
+Caching is not free — a *write* costs more than a normal token. You must read enough times to amortize that premium.
+
+| Operation | Price (relative to base input) |
+|---|---|
+| Cache **read** | **~0.1×** |
+| Cache **write**, 5-minute TTL | **1.25×** |
+| Cache **write**, 1-hour TTL | **2×** |
+| Uncached input | 1× |
+
+**Break-even** depends on the TTL:
+
+- **5-minute TTL:** the first request writes (1.25×) and the second reads (0.1×): 1.35× total vs 2× uncached. **Two requests** against the same prefix already pay off.
+- **1-hour TTL:** write is 2×, so you need 2× + 0.1× = 2.1× to beat 3× uncached — roughly **three requests**. The 1-hour TTL buys *survival across idle gaps*, but the doubled write means it needs more reads to win. Use it only when traffic is bursty enough that a 5-minute entry would expire between bursts.
+
+```mermaid
+flowchart TD
+    A[Will the same prefix<br/>be reused soon?] -->|no| B[Do not cache<br/>a lone write only adds the 1.25x premium]
+    A -->|yes| C{Gap between reuses<br/>longer than 5 minutes?}
+    C -->|no| D[5-minute TTL<br/>pays off from the 2nd request]
+    C -->|yes, bursty| E[1-hour TTL<br/>pays off from about the 3rd request]
+    D --> F[Place the breakpoint at the<br/>end of the SHARED prefix]
+    E --> F
+```
+
+**The most expensive mistake here is caching a prefix that is never reused** — every request writes a fresh entry at 1.25×, nothing is ever read, and you have made the workload *more* expensive than no caching at all. If the first 1K tokens differ on every request, there is no reusable prefix: leave caching off.
+
+**`input_tokens` is the uncached remainder only.** Total prompt size = `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`. If a long-running agent reports `input_tokens` of 4K after hours of work, the rest was served from cache — check the *sum*, not the single field, before concluding anything about cost.
+
+## 18.4 Verification and Silent Invalidators
+
+A broken cache fails *silently*: no error, just a bill that quietly stays at full price. The only way to know caching works is to **measure it**. The `usage` object on every response reports three counters:
+
+| Field | Meaning |
+|---|---|
+| `cache_creation_input_tokens` | Tokens **written** this request (you paid the ~1.25× premium) |
+| `cache_read_input_tokens` | Tokens **served from cache** this request (you paid ~0.1×) |
+| `input_tokens` | Tokens processed at **full price** (not cached) |
+
+**The diagnostic:** fire two requests with an identical prefix. If `cache_read_input_tokens` is **0** on the second, a *silent invalidator* changed the prefix bytes between them. Diff the rendered prompts to find it. The usual culprits:
+
+| Pattern | Why it breaks caching |
+|---|---|
+| `datetime.now()` / `time.time()` in the system prompt | The prefix changes every request |
+| `uuid4()` / request IDs early in the content | Same — every request is byte-unique |
+| `json.dumps(d)` without `sort_keys=True`, or iterating a `set` | Non-deterministic serialization → prefix bytes differ run to run |
+| Session/user ID interpolated into the `system` prompt | A per-user prefix — no cross-request, no cross-user sharing |
+| Conditional system sections (`if flag: system += ...`) | Every flag combination is a distinct prefix |
+| A tool set that varies per user (`tools=build_tools(user)`) | Tools render at position 0 — nothing caches across users |
+
+**The invalidation hierarchy** is worth internalizing, because not every change is fatal. The cache has three tiers (tools, system, messages), and a change invalidates only its own tier *and below*:
+
+- Changing **tool definitions** (add / remove / reorder) or **switching models** → invalidates **everything** (a full rebuild).
+- Changing the **system prompt** → invalidates system + messages, but tools survive.
+- Changing **message content**, `tool_choice`, images, or toggling `thinking` → invalidates only the messages tier; tools + system survive.
+
+So you *can* flip `tool_choice` per request or toggle `thinking` without losing the expensive tools+system cache. The two changes to guard with your life are **tool-set edits** and **model switches** mid-conversation — both throw away the entire cache.
+
+## 18.5 Caching for Agents: The Stable Prefix
+
+An agent is the ideal caching workload because it has exactly the structure caching rewards: a **large, stable prefix** (a long system prompt plus a fixed tool catalog) followed by a growing conversation. The strategy:
+
+1. **Freeze the system prompt.** Never interpolate "current date: X", "user: Y", or "mode: Z" into it — those sit at the front of the prefix and invalidate everything downstream. Inject dynamic context *later*, in `messages`.
+2. **Serialize tools deterministically.** Sort tool definitions by name so the rendered bytes are identical every run. Cache tools + system together with one breakpoint on the last system block.
+3. **Cache the conversation incrementally.** Put a breakpoint on the last block of the most-recent turn; each new request reuses the entire prior conversation prefix, and earlier breakpoints stay valid as read points so hits accrue as the conversation grows.
+
+But agents also create three classic *invalidators*, each with a specific workaround:
+
+```mermaid
+flowchart TD
+    P[Cached prefix<br/>system plus tools] --> Q{What does the agent<br/>need to change mid-session?}
+    Q -->|inject an operator instruction| R[Append a role system message<br/>to messages, do not edit top-level system]
+    Q -->|run a cheaper model for a subtask| S[Spawn a subagent on that model<br/>keep the main loop on one model]
+    Q -->|discover new tools| T[Use tool search<br/>schemas are appended, not swapped]
+    R --> U[Cached prefix stays intact]
+    S --> U
+    T --> U
+```
+
+- **Mid-session operator instructions.** Editing the top-level `system` prompt changes the prefix ahead of the *entire* conversation history — every cached turn re-processes uncached. Instead, on supporting models (Claude Opus 4.8) append a `{"role": "system", ...}` message to `messages[]`: it sits *after* the cached history, leaves the prefix intact, and carries non-spoofable operator authority (the prompt-injection-safe alternative to embedding instructions in a user turn).
+- **Switching models mid-session.** Caches are model-scoped. If a sub-task wants a cheaper model, don't switch the main loop — spawn a **subagent** on that model and keep the primary conversation on one model (this is how Claude Code's Explore subagents use Haiku).
+- **Adding tools mid-session.** Adding or removing a tool invalidates everything. If you need on-demand tools, use **tool search** — it *appends* discovered schemas rather than swapping the tool list, preserving the existing prefix.
+
+**Two timing facts for fan-out.** A cache entry becomes readable only after the first response *begins streaming* — so N parallel requests with the same prefix all pay full write price (none can read what the others are still writing). Send one request, await its first streamed token, *then* fire the remaining N−1. And to kill cold-start latency on the very first real request, **pre-warm** with a `max_tokens: 0` request at startup: the API runs prefill, writes the cache at your breakpoint, and returns immediately with empty content — re-warm just under the TTL if traffic has gaps.
+
+## 18.6 End-to-End Case Study: A Cache-Optimized Support Agent
+
+The pieces only matter assembled. Here is a realistic agent whose economics are dominated by a large stable prefix — the exact shape where caching turns an unaffordable design into a cheap one.
+
+### Requirements
+
+- A customer-support agent with a **large, stable system prompt** (~6K tokens of policy, tone, and escalation rules) and a **fixed tool catalog** (`get_customer`, `lookup_order`, `search_kb`, `escalate`).
+- It serves **high request volume** — many short conversations per minute against the same prefix.
+- Each request must inject the **current time** and a **per-request trace ID** for observability, plus the varying customer question.
+- A daily metrics job must **summarize each closed conversation** with a separate model call.
+
+The naive build interpolates the timestamp and trace ID into the system prompt header and rebuilds the tool list per request. That design caches *nothing*: the prefix differs on every call, so every one of the 6K policy tokens is re-billed at full price, every turn.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    Req([Incoming request]) --> Build[Assemble prompt]
+    Build --> Tools[tools<br/>sorted by name, frozen]
+    Tools --> Sys[system<br/>6K frozen policy<br/>cache_control here]
+    Sys --> Hist[messages<br/>prior turns<br/>cache_control on last block]
+    Hist --> Vol[Volatile tail<br/>time, trace id, new question]
+    Vol --> API[messages.create]
+    API --> Chk{cache_read_input_tokens<br/>greater than 0?}
+    Chk -->|yes| Hit[Cache hit<br/>policy served at about 0.1x]
+    Chk -->|no| Miss[Audit for a silent invalidator]
+```
+
+The order is the whole design: **frozen tools and system first, the volatile time/trace/question last.** The breakpoint on the last system block caches tools + 6K policy together; a second breakpoint on the last conversation block lets multi-turn chats reuse history.
+
+### Implementation
+
+Build the request so every volatile value lives *after* the cached prefix, never inside it:
+
+```python
+SYSTEM = [{
+    "type": "text",
+    "text": POLICY_PROMPT,                       # ~6K tokens, byte-identical every request
+    "cache_control": {"type": "ephemeral"},      # caches tools + system together
+}]
+
+TOOLS = sorted(tool_defs, key=lambda t: t["name"])   # deterministic order — no set/dict churn
+
+def handle(turn_history, question, trace_id):
+    # Volatile context goes in the LAST user block, AFTER the cached prefix —
+    # never interpolated into POLICY_PROMPT.
+    user_block = {
+        "type": "text",
+        "text": f"[time={now_iso()} trace={trace_id}]\n{question}",
+    }
+    messages = turn_history + [{"role": "user", "content": [user_block]}]
+    return client.messages.create(
+        model="claude-opus-4-8",
+        max_tokens=1024,
+        tools=TOOLS,
+        system=SYSTEM,
+        messages=messages,
+    )
+```
+
+When the operator needs to push a mid-session instruction (e.g. "VIP customer — skip the upsell"), do **not** edit `POLICY_PROMPT`. Append a system-role message *after* the cached history so the 6K prefix is never touched:
+
+```python
+messages = turn_history + [
+    {"role": "user", "content": [user_block]},
+    {"role": "system", "content": "VIP account — resolve directly, do not offer upsells."},
+]   # Opus 4.8: no beta header; preserves the cached prefix
+```
+
+For the daily summarizer, the **fork must reuse the parent's exact prefix** — copy `system`, `tools`, and `model` verbatim and append only the summary instruction, or the metrics job misses the cache entirely and re-bills 6K tokens per conversation:
+
+```python
+summary = client.messages.create(
+    model="claude-opus-4-8",     # SAME model as the live agent
+    max_tokens=512,
+    tools=TOOLS,                 # SAME tools, byte-identical
+    system=SYSTEM,               # SAME 6K prefix → reads the warm cache
+    messages=closed_convo + [{"role": "user", "content": "Summarize this conversation in 3 bullets."}],
+)
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant A as Agent harness
+    participant C as Claude API
+    participant Cache as Prefix cache
+    U->>A: First question of the burst
+    A->>C: tools + system 6K + question
+    C->>Cache: write prefix, 1.25x
+    C-->>A: response, cache_creation about 6K
+    U->>A: Second question, same prefix
+    A->>C: tools + system 6K + new question
+    C->>Cache: read prefix, 0.1x
+    C-->>A: response, cache_read about 6K
+    A->>A: assert cache_read greater than 0
+```
+
+The first request of a burst pays the 1.25× write; every request after it within the TTL pays 0.1× on the 6K policy span. At high volume the write cost is amortized across hundreds of reads — the steady-state cost of the policy prefix collapses to roughly a tenth of the naive design.
+
+### Validation
+
+- **Cache-hit test:** send two identical-prefix requests; assert `cache_read_input_tokens > 0` on the second. This is the single most important regression test for the agent's cost.
+- **Invalidator guard:** snapshot the rendered `tools` + `system` bytes in a unit test and fail the build if they change unexpectedly — this catches a stray `datetime.now()` or a reordered tool before it silently doubles the bill in production.
+- **Fork-reuse test:** assert the summarizer's `system`/`tools`/`model` are byte-identical to the live agent's, so it reads rather than re-writes.
+
+### Common pitfalls
+
+- Interpolating the timestamp / trace ID into the *top* of the system prompt instead of the volatile tail (§18.1) — the classic silent invalidator.
+- Rebuilding the tool list with a `dict`/`set` so its order drifts between requests (§18.4) — tools render at position 0, so this invalidates *everything*.
+- Editing the system prompt to inject a mid-session instruction instead of appending a `role: "system"` message (§18.5) — re-bills the whole history uncached.
+- The summarizer fork using a different `model` or a trimmed `system`, missing the parent cache (§18.5).
+- Caching when there is no reusable prefix — paying 1.25× writes for zero reads (§18.3).
+
+## 18.7 Working Knowledge — Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| Prefix-match invariant | Caching is a prefix match; one changed byte anywhere invalidates everything after it. Render order is `tools` → `system` → `messages` — stable content first, volatile last (§18.1). |
+| Breakpoints & TTL | `cache_control: {type: "ephemeral"}` = 5-min; add `ttl: "1h"` for bursty gaps. Max 4 breakpoints; min prefix 4096 tokens on Opus 4.8 or it silently won't cache (§18.2). |
+| Cost model | Read ~0.1×, write 1.25× (5m) / 2× (1h). Break-even ≈ 2 requests at 5m, ≈ 3 at 1h. Caching an un-reused prefix is *more* expensive than not caching (§18.3). |
+| Verification | Confirm with `usage.cache_read_input_tokens`; 0 across identical prefixes means a silent invalidator (`datetime.now()`, unsorted `json.dumps()`, a changing tool set) (§18.4). |
+| Agent prefix | Freeze system, sort tools, cache them together; inject mid-session context via a `role: "system"` message; never change tools or model mid-conversation (§18.5). |
+
+> **Beyond the exam, essential in production.** The Foundations exam only asks you to know prompt caching exists. But for any agent with a large stable `system` + `tools` prefix, the cache-hit test (`cache_read_input_tokens > 0`) is the cost-reliability check that separates a viable production agent from one that quietly bleeds money on re-processed context.
+
+# Chapter 19: Structured Outputs & Strict Tool Use
+
+> *Reference — beyond the exam scope (the exam covers `tool_use` JSON schemas; this is the formal feature).* Docs: [Structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs) | [Tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview).
+
+When an agent's output is read by a human, "mostly well-formed JSON" is good enough — a person tolerates a stray `Here is the JSON:` preamble or a trailing comma. When the output is read by **another program**, that tolerance disappears: a single malformed character means a `json.loads()` exception, a dropped record, or a corrupted downstream write. This chapter is about turning the model's reply into a **contract** — a payload your code can parse without defensive string-munging, every single time, at production scale.
+
+This is *advanced, production-engineering* material. The Foundations exam tests the **principle** in **Domain 4 — Prompt Engineering and Structured Output (20%)**: that `tool_use` with a JSON Schema is the most reliable way to guarantee schema-conformant output, that `tool_choice` steers whether and which tool is called, and the recurring trap that **schemas fix syntax, not semantics**. Chapter 2 introduced `tool_use` schemas as the mechanism; this chapter covers the two *formal, enforced* features that supersede prompt-only "respond in JSON" — **structured outputs** and **strict tool use** — plus the validation/retry layer and the cache and citation trade-offs the exam doesn't reach but production does.
+
+By the end you should be able to choose the right enforcement mechanism for a given job, design a schema that prevents (rather than invites) fabrication, wrap it in a validator that catches what a schema cannot, and reason about the failure modes that survive all of the above.
+
+## 19.1 Three Levels of "Make It JSON"
+
+There is a ladder of reliability here, and the exam's favourite wrong answer is always a rung too low.
+
+```mermaid
+flowchart TD
+    Need[Need machine-readable<br/>output from Claude] --> Q1{Is the model<br/>calling a function<br/>or returning an answer?}
+    Q1 -->|calling a function| Strict[Strict tool use<br/>strict true on the tool<br/>section 19.3]
+    Q1 -->|final answer must be JSON| SO[Structured outputs<br/>output_config.format<br/>section 19.2]
+    Need --> Q2{Already have a<br/>plain prompt<br/>asking for JSON?}
+    Q2 -->|yes| Weak[Prompt-only — works<br/>most of the time,<br/>NOT a guarantee]
+    Weak -. upgrade .-> Strict
+    Weak -. upgrade .-> SO
+    Strict --> Val[Validate semantics<br/>and retry<br/>section 19.4]
+    SO --> Val
+    Val --> Ship[Parseable contract<br/>for downstream systems]
+```
+
+- **Level 0 — prompt only.** "Respond with JSON matching this shape." The model *usually* complies, but nothing stops a preamble, a markdown fence, a trailing comma, or an extra field. Fine for a throwaway script; a liability for a pipeline. On Claude Opus 4.6 and later this is also the path that **assistant-prefill** used to patch (`{"role": "assistant", "content": "{"}`) — and prefills now **400**, so the prompt-only crutch is gone. The formal features below are the replacement.
+- **Level 1 — enforced shape.** Structured outputs (§19.2) or strict tool use (§19.3). The API *constrains decoding* so the output is schema-valid by construction. No preamble, no fence, no missing field.
+- **Level 2 — validated meaning.** A schema guarantees the JSON *parses* and the fields *exist*; it does not guarantee the numbers are *right*. §19.4 adds the layer that checks semantics and retries with the specific error fed back.
+
+The recurring exam diagnostic — *"the model's JSON sometimes fails to parse, what is the single most reliable fix?"* — is answered by moving from Level 0 to Level 1. The follow-up — *"the JSON parses but a total is wrong, why didn't a stricter schema fix it?"* — is the Level 1 → Level 2 distinction.
+
+## 19.2 Structured Outputs — Constraining the Response
+
+**Structured outputs** constrain the model's *final response* to a JSON Schema. You attach `output_config.format` to the request, and the text block that comes back is **guaranteed schema-valid JSON** — the API uses constrained decoding, so an invalid token is never emitted in the first place.
 
 ```python
 response = client.messages.create(
     model="claude-opus-4-8",
     max_tokens=1024,
-    system=[{
-        "type": "text",
-        "text": LARGE_STABLE_CONTEXT,
-        "cache_control": {"type": "ephemeral"},   # cache the prefix up to here
-    }],
-    messages=[{"role": "user", "content": question}],   # volatile part goes last
+    messages=[{"role": "user", "content": "Extract the invoice fields: ..."}],
+    output_config={
+        "format": {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "number": {"type": "string"},
+                    "total": {"type": "number"},
+                },
+                "required": ["number", "total"],
+                "additionalProperties": False,
+            },
+        }
+    },
 )
-print(response.usage.cache_read_input_tokens)  # > 0 means a cache hit
+# output_config.format guarantees the first block is text with valid JSON
+import json
+data = json.loads(next(b.text for b in response.content if b.type == "text"))
 ```
 
-# Chapter 19: Structured Outputs & Strict Tool Use
-
-> *Reference — beyond the exam scope (the exam covers `tool_use` JSON schemas; this is the formal feature).* Docs: [Structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).
-
-Two features guarantee machine-readable output:
-
-- **Structured outputs** — `output_config: {format: {type: "json_schema", schema: {...}}}` constrains the *response* to your schema (constrained decoding), so the text block is always schema-valid JSON. Prefer `client.messages.parse()` (validates and returns typed objects). The old top-level `output_format` parameter is **deprecated** — use `output_config.format`.
-- **Strict tool use** — `strict: true` on a tool definition guarantees `tool_use.input` validates *exactly* against the schema (needs `additionalProperties: false` + `required`). This is the enforced version of Chapter 2's `tool_use` schemas.
-
-**When to use which:** strict tool use when the model should *call a function*; structured outputs when the model's *final answer* must be JSON. They compose.
-
-**Schema limits:** no recursive schemas, no numeric (`minimum`/`maximum`) or string-length constraints, and `additionalProperties` must be `false`. **Incompatible with citations.** A new schema has a one-time compile cost, then caches for 24h.
-
----
-
-**Example (Python):**
+**Prefer `client.messages.parse()`** — it takes a Pydantic model (or Zod schema in TypeScript), sends the derived schema, *validates the response against it*, and hands back a typed object. You skip the manual `json.loads` and get an instance your IDE understands:
 
 ```python
 from pydantic import BaseModel
@@ -6624,6 +7809,260 @@ msg = client.messages.parse(
 )
 invoice = msg.parsed_output       # a validated Invoice instance
 ```
+
+> **API note.** The canonical request-level parameter is `output_config.format`. The old top-level `output_format` parameter on `messages.create()` is **deprecated** — but `.parse()` still accepts `output_format=<Model>` as its convenience argument, which is why both spellings appear above. Supported on Claude Fable 5, Opus 4.8, Sonnet 4.6, and Haiku 4.5 (and legacy Opus 4.5/4.1).
+
+**Why it beats prompt-only.** With Level 0, the model is *free* — it can decide a friendly preamble would help, wrap the JSON in a fence for "readability", or omit a field it judged irrelevant. Constrained decoding removes that freedom at the token level: the grammar of your schema is the only thing the decoder can produce.
+
+## 19.3 Strict Tool Use — Constraining the Call
+
+**Strict tool use** is the enforced version of Chapter 2's `tool_use` schemas. Set `strict: true` on a tool definition and the model's `tool_use.input` is guaranteed to validate *exactly* against the tool's `input_schema`:
+
+```python
+response = client.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Book a flight to Tokyo for 2 on March 15"}],
+    tools=[{
+        "name": "book_flight",
+        "description": "Book a flight to a destination",
+        "strict": True,                       # the enforcement switch
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "destination": {"type": "string"},
+                "date": {"type": "string", "format": "date"},
+                "passengers": {"type": "integer"},
+            },
+            "required": ["destination", "date", "passengers"],
+            "additionalProperties": False,    # mandatory under strict
+        },
+    }],
+)
+```
+
+Two requirements the exam-adjacent docs hammer: under `strict: true` the schema **must** set `additionalProperties: false` and list every field in `required`. The most common mistake is putting `strict` on `tool_choice` — it does nothing there. **`strict` is a sibling of `name` / `description` / `input_schema` on the tool definition itself.**
+
+### Steering with `tool_choice`
+
+`tool_choice` decides *whether and which* tool is called — orthogonal to `strict`, which decides *how rigorously* the chosen call is validated:
+
+| `tool_choice` | Behaviour | Use when |
+|---|---|---|
+| `{"type": "auto"}` (default) | Model may return prose **or** call a tool | The turn might legitimately not need a tool |
+| `{"type": "any"}` | Model **must** call one of the tools (its pick) | You want guaranteed structured output and several schemas exist |
+| `{"type": "tool", "name": "extract"}` | Model **must** call exactly that tool | You always want one specific shape back |
+| `{"type": "none"}` | Model **cannot** call a tool | Force prose for this turn |
+
+**The trap the exam plants:** forcing a tool (`any` or a named tool) means the model *always* calls something — so the forced tool must be **safe to call unconditionally**. Never force a side-effectful tool (`send_email`, `process_payment`) just to coerce structure; force an **extraction/formatting** tool instead, and let an `auto` turn decide on the irreversible action. A second, quieter consequence: **forcing a specific tool disables extended thinking** for that turn — the model jumps straight to filling the schema.
+
+### Structured outputs vs strict tool use — which, when
+
+```mermaid
+flowchart TD
+    Start[What does the model<br/>need to produce?] --> A{A function call<br/>my harness executes?}
+    A -->|yes| Tool[Strict tool use<br/>read tool_use.input]
+    A -->|no — a final answer| B{Final answer is<br/>structured data?}
+    B -->|yes| Resp[Structured outputs<br/>read the text block]
+    B -->|no — free prose| Plain[Plain messages,<br/>no constraint]
+    Tool --> Compose[They compose — a turn can<br/>force a tool AND constrain<br/>the final text block]
+    Resp --> Compose
+```
+
+Rule of thumb: **strict tool use when the model should *call a function*; structured outputs when the model's *final answer* must be JSON.** They compose in one request — force an extraction tool *and* constrain the wrap-up text block — which is exactly the pattern in the case study below.
+
+## 19.4 Schemas Fix Syntax, Not Semantics — Validation and Retry
+
+This is the chapter's load-bearing caveat and the exam's sharpest distinction. A strict schema guarantees:
+
+- the output **parses** (no syntax error),
+- every `required` field **is present**,
+- each field has the **declared type**.
+
+It guarantees **nothing** about correctness: a `total` of `1200.00` is a valid `number` whether or not the line items actually sum to `1200`. A date can land in the wrong field and still be a well-formed `date` string. **Syntax is structural; semantics is not** — and no schema feature closes the gap, because the schema language deliberately omits the constraints that would help (see §19.5).
+
+The production pattern is **validate-then-retry-with-error-feedback**:
+
+```mermaid
+flowchart TD
+    Ext[Extract via strict tool use<br/>or structured outputs] --> Val{Semantic checks pass?<br/>totals reconcile,<br/>fields well-formed}
+    Val -->|yes| Accept[Accept — emit the<br/>parseable contract]
+    Val -->|no| Src{Is the needed value<br/>present in the source?}
+    Src -->|yes — correctable| Retry[Retry with document plus<br/>the bad extraction plus<br/>the SPECIFIC error]
+    Retry --> Ext
+    Src -->|no — absent from source| Stop[Stop retrying — return null,<br/>flag for human,<br/>or fetch the external record]
+```
+
+Two design moves make this work:
+
+1. **Build the check into the schema.** Extract both `stated_total` (the figure printed on the document) *and* `calculated_total` (the model's own sum of the line items), then compare them **in code**. A mismatch is a reconciliation error you can act on — and it's far more reliable than asking the model "is this right?" after the fact.
+2. **Feed back the *specific* error, not "try again".** A retry that says *"stated_total is 1200 but the line items sum to 1180 — recheck the line items"* guides a real correction. A bare "that was wrong" wastes a round trip.
+
+**The trap that separates levels: retries cannot conjure absent data.** If a field is simply *not in the source* — the document never states the tax ID, the figure lives only in an external system — retrying just burns tokens and may pressure the model into *fabricating* a plausible value. The right move is to **recognise the absent-data case and stop**: return `null`, flag for a human, or fetch the external record. Retries fix *correctable* mistakes; they do not fix *missing* information.
+
+## 19.5 Schema Limits, Caching, and Citations — The Production Trade-offs
+
+The enforced features carry constraints the exam doesn't cover but that will surface the first time you ship.
+
+**Schema limits (constrained decoding).** The JSON Schema you can enforce is a *subset* of full JSON Schema:
+
+- **Supported:** the basic types, `enum`, `const`, `anyOf` / `allOf`, `$ref` / `$defs`, and string `format`s (`date-time`, `date`, `email`, `uri`, `uuid`, …).
+- **Not supported:** recursive schemas, numeric constraints (`minimum` / `maximum` / `multipleOf`), and string-length constraints (`minLength` / `maxLength`). `additionalProperties` must be `false`.
+
+The omission of numeric/length constraints is *why* §19.4 exists: you cannot express "total must be positive" or "code must be 5 characters" in the enforced schema, so those checks live in your validator. (The Python and TypeScript SDKs quietly strip unsupported keywords from the wire schema and re-check them client-side, which softens the edge but does not move the guarantee onto the model.)
+
+**Schema compilation and caching.** A *new* schema incurs a one-time **compile cost** on its first request; the compiled grammar then **caches for 24 hours**, so steady-state requests pay nothing extra. The practical implication for a high-throughput extraction service: keep your schema **stable**. A schema that is rebuilt with reordered keys or an interpolated value per request looks "new" every time and re-pays the compile cost — the same stability discipline that prompt caching demands (Chapter 18).
+
+**Incompatible with citations.** Structured outputs (`output_config.format`) and **citations are mutually exclusive** — enabling `citations: {enabled: true}` on a document *and* `output_config.format` in the same request returns a **400**. The architectural consequence is real: if a job needs both a machine-parseable shape *and* per-claim source attribution, you cannot get both from one call. Split it — one pass extracts cited facts (citations on, no format constraint), a second pass shapes the validated facts into the contract (format constraint, no citations) — or move the structure into a strict *tool call*, which is not subject to the citations restriction.
+
+**Other edges worth knowing:** a `stop_reason` of `"refusal"` or `"max_tokens"` means the returned content may **not** satisfy your schema even with the feature on — always check `stop_reason` before trusting the parse. Structured outputs *do* work with the Batches API, streaming, token counting, and extended thinking.
+
+## 19.6 End-to-End Case Study: An Invoice-to-Ledger Extraction Service
+
+The pieces only matter assembled. Here is a realistic service that ingests scanned vendor invoices and writes ledger entries into an accounting system — the canonical "the output is read by a program, not a person" job, where a single bad field corrupts the books.
+
+### Requirements
+
+- Ingest invoice PDFs and emit a **strictly-typed ledger record** the accounting API can `POST` without any string-cleaning.
+- **Hard contract:** the downstream API rejects anything that isn't schema-valid, so a parseable shape is non-negotiable.
+- **Reconcile** the stated invoice total against the sum of line items; a mismatch must be caught, not written.
+- When a field is **absent** from the scan (e.g. no PO number printed), record `null` and flag for human review — never fabricate.
+- Source attribution (which line of the PDF each figure came from) is needed for the audit trail — but **separately** from the strict record, because citations and structured outputs cannot coexist.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    PDF([Vendor invoice PDF]) --> Extract[Extract pass<br/>force the extract_invoice tool<br/>strict schema]
+    Extract --> Parse[Parse tool_use.input<br/>guaranteed schema-valid]
+    Parse --> Recon{Reconcile<br/>stated vs calculated total}
+    Recon -->|match| Ledger[Build ledger record<br/>POST to accounting API]
+    Recon -->|mismatch and value present| Retry[Retry with the specific<br/>reconciliation error]
+    Retry --> Extract
+    Recon -->|field absent from scan| Human([Flag for human review])
+    Extract -. separate cited pass .-> Cite[Citations pass<br/>for the audit trail]
+```
+
+The **strict extraction tool** carries the contract; **code** does the reconciliation that the schema cannot; the **absent-data branch** routes to a human instead of retrying into a hallucination; and the **audit trail runs as a separate cited call** precisely because §19.5 forbids citations + structured outputs in one request.
+
+### Implementation
+
+Define the extraction as a **strict tool**, force it with `tool_choice`, and have the model emit *both* totals so code can reconcile them:
+
+```python
+extract_invoice = {
+    "name": "extract_invoice",
+    "description": "Extract structured fields from a vendor invoice.",
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "invoice_number": {"type": "string"},
+            "po_number": {"type": ["string", "null"]},     # nullable — absent on some invoices
+            "currency": {"type": "string"},
+            "line_items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "description": {"type": "string"},
+                        "amount": {"type": "number"},
+                    },
+                    "required": ["description", "amount"],
+                    "additionalProperties": False,
+                },
+            },
+            "stated_total": {"type": "number"},            # the figure printed on the invoice
+            "calculated_total": {"type": "number"},        # the model's own sum of line_items
+        },
+        "required": ["invoice_number", "po_number", "currency",
+                     "line_items", "stated_total", "calculated_total"],
+        "additionalProperties": False,
+    },
+}
+
+response = client.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=2048,
+    messages=[{"role": "user", "content": [
+        {"type": "document", "source": {"type": "base64",
+                                        "media_type": "application/pdf", "data": pdf_b64}},
+        {"type": "text", "text": "Extract every field. If the PO number is not printed, return null."},
+    ]}],
+    tools=[extract_invoice],
+    tool_choice={"type": "tool", "name": "extract_invoice"},   # guarantee the structured call
+)
+```
+
+Note the two schema design choices that *prevent* fabrication: `po_number` is **nullable** so an absent value has a legal home (a `required` non-nullable field would pressure the model to invent one), and the explicit `instruction` reinforces the null path. The reconciliation logic lives in **code**, not the prompt:
+
+```python
+def reconcile(extraction) -> "Result":
+    items_sum = round(sum(li["amount"] for li in extraction["line_items"]), 2)
+    if abs(items_sum - extraction["stated_total"]) > 0.01:
+        # Semantic error the schema cannot catch — retry with the SPECIFIC discrepancy.
+        return Result.retry(
+            reason=f"stated_total is {extraction['stated_total']} but line items "
+                   f"sum to {items_sum} — recheck the line items"
+        )
+    if extraction["po_number"] is None:
+        # Absent data — do NOT retry (would invite a fabricated PO). Route to a human.
+        return Result.flag_for_human(extraction, missing="po_number")
+    return Result.accept(extraction)
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Op as Ingestion worker
+    participant Cl as Claude
+    participant V as Validator (code)
+    participant Led as Accounting API
+    participant Hu as Human reviewer
+    Op->>Cl: invoice PDF plus extract_invoice tool, tool_choice forces it
+    Cl-->>Op: tool_use.input — schema-valid, stated_total 1200, items sum 1180
+    Op->>V: reconcile(extraction)
+    V->>V: 1180 not equal 1200 — mismatch
+    V-->>Cl: retry with "stated 1200 but items sum 1180, recheck line items"
+    Cl-->>Op: corrected extraction — items sum 1200, po_number null
+    Op->>V: reconcile(extraction)
+    V->>V: totals match, but po_number is absent
+    V->>Hu: flag for review — never fabricate a PO
+    V->>Led: POST the schema-valid ledger record
+```
+
+Notice the division of labour: **constrained decoding** guaranteed the *shape* (the worker never wrote a `json.loads` over prose), **code** caught the *reconciliation* error the schema could not, and the **absent PO** went to a human rather than into a retry loop that would have pressured a fabricated value.
+
+### Validation
+
+- **Contract test:** assert every emitted record validates against the downstream API's schema — and that the worker never calls `json.loads` on free text (it reads `tool_use.input` directly).
+- **Reconciliation test:** feed an invoice whose stated total is deliberately wrong; assert the pipeline *retries with the specific discrepancy* and does **not** write the bad record.
+- **Absent-data test:** feed an invoice with no PO number; assert the record carries `po_number: null` and is flagged for a human — and that the system did **not** retry (proving it distinguishes *absent* from *correctable*).
+- **Citations test:** assert the audit-trail pass runs as a **separate** call; assert that combining `citations` with `output_config.format` in one request raises a 400 (proving the split is necessary, not optional).
+
+### Common pitfalls
+
+- Putting `strict` on `tool_choice` instead of on the tool definition (it does nothing there — §19.3).
+- Forcing a side-effectful tool to coerce structure; force an *extraction* tool and gate the irreversible write separately (§19.3).
+- Treating a valid parse as a correct value — skipping the reconciliation layer (§19.4).
+- Retrying when the data is simply *absent*, which invites a fabricated value instead of a `null` (§19.4).
+- Requesting `citations` and `output_config.format` together and getting a 400 — they are mutually exclusive (§19.5).
+
+## 19.7 Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| Three levels | Prompt-only (probabilistic) → enforced shape (structured outputs / strict tool use) → validated meaning (retry). The reliable fix is moving up a rung (§19.1). |
+| Structured outputs | `output_config.format` constrains the *final response* to a schema via constrained decoding; prefer `messages.parse()` for a validated typed object. `output_format` (top-level) is deprecated (§19.2). |
+| Strict tool use | `strict: true` on the **tool** (not `tool_choice`) guarantees `tool_use.input` validates exactly; requires `additionalProperties: false` + full `required` (§19.3). |
+| `tool_choice` steering | `auto` (may use a tool) / `any` (must use one) / forced (must use that one). Forcing always calls something and disables thinking — so force a *safe extraction* tool, never a side-effectful one (§19.3). |
+| Syntax vs semantics | A schema guarantees the JSON parses and fields exist; it does **not** guarantee values are correct. Validate semantics in code and retry with the *specific* error (§19.4). |
+| Absent vs correctable | Retries fix correctable mistakes; they cannot conjure absent data. Recognise the absent case and return null / flag for human instead of looping (§19.4). |
+| Schema limits | No recursion, no numeric (`minimum`/`maximum`) or string-length constraints; `additionalProperties` must be `false` — which is exactly why a code validator is still required (§19.5). |
+| Caching & citations | A new schema compiles once then caches 24h — keep schemas stable. Structured outputs are **incompatible with citations** (400); split into two passes when you need both (§19.5). |
+
+> **Maps to Domain 4 (20%)** for the core principle — `tool_use` + JSON Schema is the reliable structured-output mechanism, `tool_choice` steers it, and schemas fix syntax not semantics. The formal `output_config.format` / `strict: true` features, the 24-hour schema cache, and the citations incompatibility are production refinements beyond the exam — but the validate-then-retry discipline they sit inside is the same one Domain 4 tests.
 
 # Chapter 20: Server-Side & Advanced Tools
 
