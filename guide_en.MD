@@ -8066,125 +8066,1861 @@ Notice the division of labour: **constrained decoding** guaranteed the *shape* (
 
 # Chapter 20: Server-Side & Advanced Tools
 
-> *Reference — beyond the exam scope.* Docs: [Tool use overview](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview).
+> *Reference — beyond the exam scope.* Docs: [Tool use overview](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview) · [Server tools](https://platform.claude.com/docs/en/agents-and-tools/tool-use/server-tools) · [Web search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool) · [Code execution](https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool).
 
-Beyond your own custom tools, Claude offers built-in and advanced tool patterns:
+In Chapters 2–4 you built **client tools**: you wrote a JSON schema, Claude emitted a `tool_use` block, *your* code executed it, and you returned a `tool_result`. That round trip is the foundation of the exam. Production agents add a second category that the foundations exam barely touches but that reshapes cost, latency, and security: **server tools** that Anthropic executes *inside the API turn*, on Anthropic's own infrastructure, with no handler code in your application.
 
-**Tool-use patterns**
-- **Parallel tool use** (default) — one assistant turn can emit several `tool_use` blocks; execute them concurrently and return **all** `tool_result`s in a **single** user message (splitting them trains the model to stop parallelizing).
-- **Tool runner** (SDK helper) — drives the call → execute → loop automatically (Python `@beta_tool` + `tool_runner`, TS `betaZodTool` + `toolRunner`), so you don't hand-write the agent loop.
-- **Programmatic tool calling (PTC)** — Claude calls your tools from *inside* code execution; intermediate results stay in the running script (out of the context window) and only the final output returns. Large token savings on long tool chains.
+The distinction is not cosmetic. It changes **who runs the code**, **where the data goes**, **how the turn is shaped**, and **what you pay**. This chapter is for the architect who has to answer: *Should this capability be a tool I host, or one Anthropic hosts? What does each choice cost me in dollars, in data-retention exposure, and in control?*
 
-**Server-side tools** (run on Anthropic's infrastructure — just declare them in `tools`):
-- **Web search** (`web_search_20260209`) — live search with citations and dynamic filtering.
-- **Web fetch** (`web_fetch_20260209`) — fetch/parse a specific URL already present in the conversation.
-- **Code execution** (`code_execution`) — sandboxed Python/bash container (data-science libs preinstalled; containers reusable ~30 days). Free when paired with web tools.
-- **Tool search** (`tool_search_tool_regex` / `_bm25`) — discover tools on demand from a large library; mark the rest `defer_loading: true`. Schemas are *appended*, preserving the cache.
+- **The two execution models** (§20.1) — client tools (`stop_reason: "tool_use"`, you execute) vs server tools (`server_tool_use`, Anthropic executes, no `tool_result` from you).
+- **The server-tool catalogue** (§20.2) — web search, web fetch, code execution, tool search, advisor.
+- **Anthropic-schema client tools** (§20.3) — bash, text editor, computer use, memory: published schemas, but *you* still execute them.
+- **The server-side loop, `pause_turn`, and mixed turns** (§20.4) — the one piece of control flow that surprises everyone.
+- **Cost & security trade-offs** (§20.5) — pricing meters, ZDR, the sandbox boundary, domain filtering.
 
-**Client-side / Anthropic-defined tools** (you execute):
-- **Bash** (`bash_20250124`) and **text editor** (`text_editor_20250728`) — schema-less; reference implementations provided; sandbox them.
-- **Memory tool** (`memory_20250818`) — Claude reads/writes a `/memories` directory for cross-session state; you implement the backend.
-- **Computer use** — screenshots + mouse/keyboard control of a GUI (beta).
-- **Advisor** (`advisor_20260301`, beta) — pairs a cheaper executor model with a smarter advisor consulted mid-generation (advisor model must be ≥ executor).
+§20.6 then builds a complete **compliance-research assistant** that mixes server and client tools in a single turn, and §20.7 distils the engineering judgement.
 
----
+## 20.1 Two Execution Models: Who Runs the Code
+
+Every tool you give Claude falls into one of two buckets, and the *only* thing that distinguishes them is **where the code runs**.
+
+```mermaid
+flowchart TD
+    Start[Add a tool to the tools array] --> Q{Who executes it?}
+    Q -->|Your application| Client[Client tool]
+    Q -->|Anthropic infra| Server[Server tool]
+    Client --> C1[Claude emits tool_use<br/>stop_reason is tool_use]
+    C1 --> C2[Your code runs it<br/>you return tool_result]
+    C2 --> C3[Loop continues next request]
+    Server --> S1[Claude emits server_tool_use<br/>id prefixed srvtoolu]
+    S1 --> S2[Anthropic runs it inside the turn]
+    S2 --> S3[Result block returned in same turn<br/>you return NO tool_result]
+```
+
+**Client tools** — both your own custom tools *and* Anthropic-schema tools like `bash` and `text_editor` — produce a `tool_use` block and `stop_reason: "tool_use"`. The turn **stops**, control returns to you, your code runs the operation, and you send a `tool_result` back on the next request. You own execution, the runtime, the network, and the blast radius.
+
+**Server tools** — `web_search`, `web_fetch`, `code_execution`, `tool_search`, `advisor` — produce a `server_tool_use` block whose `id` carries the `srvtoolu_` prefix. Anthropic runs the tool *within the same assistant turn*, on its own infrastructure, and the result block (e.g. `web_search_tool_result`) appears in the **same response**, paired to the call by `tool_use_id`. **You never write a handler and you never return a `tool_result`.**
+
+> **Why this matters.** A client tool is a *seam* in your control flow — every call is an opportunity to validate, log, redact, or block (this is exactly where the Chapter 3 hooks live). A server tool is a *black box that runs to completion before you see anything*. You trade control for convenience: no infrastructure to host, but no `PreToolUse` hook to gate the call either.
+
+## 20.2 The Server-Tool Catalogue
+
+All five run on Anthropic's infrastructure; you enable them by **declaring them in `tools`** — nothing else to deploy.
+
+| Tool | Type identifier | What it does |
+|---|---|---|
+| Web search | `web_search_20250305` (basic), `web_search_20260209`+ (dynamic filtering) | Live web search with **citations**; results carry `encrypted_content` that must be echoed back in multi-turn conversations. |
+| Web fetch | `web_fetch_20250910` (basic), `web_fetch_20260209`+ | Retrieve/parse a specific URL or PDF (typically one already in the conversation). |
+| Code execution | `code_execution_20250825` (+ `_20260120`, `_20260521`) | Sandboxed **Python + bash** container; data-science libraries preinstalled; containers reusable ~30 days. |
+| Tool search | `tool_search_tool_regex` / `tool_search_tool_bm25` | Discover tools on demand from a large library; mark the rest `defer_loading: true` so their schemas are *appended* later (preserving the prompt cache). |
+| Advisor | `advisor_20260301` (beta) | Pairs a cheaper executor model with a smarter advisor consulted mid-generation (advisor must be ≥ executor in capability). |
+
+Two relationships are worth committing to memory:
+
+- **Code execution is the engine behind "dynamic filtering."** With `web_search_20260209`+ (or the matching web-fetch version), Claude writes code that post-processes raw search results *before they enter the context window* — keeping only what's relevant. That is why those web-tool versions silently provision a code-execution container, and why **code execution is free when paired with web search or web fetch**.
+- **`tool_search` exists for scale, not features.** If an agent has access to hundreds of tools, putting every schema in the prompt is expensive and dilutes attention. Defer most of them and let Claude search for the few it needs; the discovered schemas are appended, so earlier cache breakpoints survive (Chapter 18).
+
+## 20.3 Anthropic-Schema Client Tools (You Still Execute)
+
+A subtle middle category trips up architects: **Anthropic publishes the schema, but your application executes the call.** These look "built-in" but behave like client tools — `stop_reason: "tool_use"`, you run them, you return a `tool_result`.
+
+- **Bash** (`bash_20250124`) and **text editor** (`text_editor_20250728`) — schema-less, Anthropic-trained tools with reference implementations. **You** provide the shell and the filesystem. *Sandbox them* — they run with whatever privileges your handler grants.
+- **Memory tool** (`memory_20250818`) — Claude reads/writes a `/memories` directory for cross-session state; **you implement the backend** (a directory, a bucket, a database). It is the durable-memory primitive behind long-running agents (Chapter 21).
+- **Computer use** — screenshots plus mouse/keyboard control of a GUI (beta). You run the desktop environment and replay the actions Claude requests.
+
+> **The trap.** `code_execution` (server) and `bash`/`text_editor` (client) *look* interchangeable — both "run code." They are not. The server `code_execution` container runs on Anthropic's infrastructure with **internet disabled** and no access to your systems. The client `bash` tool runs **on a machine you control**, with whatever network and data you expose. If you enable both, Claude is in a *multi-computer* environment and can confuse them; Anthropic recommends a system-prompt note clarifying that state does **not** persist between the two and that client tools are the path to the user's local system.
+
+## 20.4 The Server-Side Loop, `pause_turn`, and Mixed Turns
+
+This is the one piece of control flow that the docs warn about repeatedly, and the most common production bug. Server tools run inside a **server-side agentic loop**: Claude can search, read results, search again, and only then write its answer — all within a single `messages.create` call.
+
+Two situations break the simple "one request, one response" mental model:
+
+**1. `pause_turn` — the loop is taking too long.** On a long-running turn (e.g. `web_search` with `max_uses: 10`), the API may pause and return `stop_reason: "pause_turn"`. The fix is mechanical: **re-send the response content back as-is** (the assistant message you just received) in your next request, with the **same `tools` array**. Drop the tool and the request 400s, because the paused turn may end on a `server_tool_use` block whose tool hasn't run yet. A continued turn can pause again — loop until you get a different `stop_reason`, capping continuations like any retry loop.
+
+**2. Mixed server + client turn — `tool_use`, not `pause_turn`.** If Claude calls a server tool **and** one of *your* client tools in the same parallel group, the API does **not** run the server tool. It returns immediately with `stop_reason: "tool_use"`, a `server_tool_use` block **without** its result, and your client `tool_use` block. You detect this by finding a `server_tool_use` id with no matching result. You run your client tool, then send a follow-up user message containing **only `tool_result` blocks** — nothing else. The API attaches your results to the still-open turn, *then* runs the deferred server tool, and continues.
+
+```mermaid
+flowchart TD
+    Req[messages.create with server and client tools] --> Resp[Assistant response]
+    Resp --> Q{stop_reason?}
+    Q -->|end_turn| Done[Done — server tool ran inline]
+    Q -->|pause_turn| Re[Re-send response as-is<br/>same tools array]
+    Re --> Req
+    Q -->|tool_use| Mix[Client tool_use present<br/>plus server_tool_use with no result]
+    Mix --> Exec[Run YOUR client tool]
+    Exec --> Only[Send user message of<br/>ONLY tool_result blocks]
+    Only --> Req
+```
+
+> **Two failure modes to memorise.** (a) Putting *anything* — even a text block — after the `tool_result` blocks in the follow-up tells the API the turn is over, leaving the deferred server tool unresolved → 400. (b) Dropping the server tool from the `tools` array on a continuation → 400 (`but no web_fetch tool was provided`). Both are "I changed the shape of the conversation mid-turn" bugs.
+
+## 20.5 Cost & Security Trade-offs
+
+Server tools move work off your infrastructure, but they introduce **usage meters** and a **data-retention surface** that client tools don't have.
+
+**Pricing (additive, on top of tokens):**
+
+| Tool | Meter | Notes |
+|---|---|---|
+| Web search | **$10 per 1,000 searches** | Each search = one use regardless of results. Errors are **not** billed. Citation `cited_text`/`title`/`url` don't count as tokens; result content does. |
+| Code execution | **Free with web search/fetch**; otherwise **1,550 free hours/month, then $0.05/hour/container** | 5-minute minimum per session; billed even if not invoked when files are preloaded. |
+| Client tools | Standard tokens only | No usage meter — you already pay for the compute you host. |
+
+Use `max_uses` to **bound** web-search cost deterministically (a research agent might allow 15–20; a latency-sensitive lookup, 3). Remember that every search result retrieved becomes **input tokens** on this and subsequent turns — an unbounded research loop is a token bill, not just a search bill.
+
+**Security & data retention:**
+
+- **The code-execution sandbox is genuinely isolated:** internet **completely disabled**, no outbound requests, full isolation from host and other containers, filesystem scoped to your API key's workspace, containers expire after 30 days. Code Claude writes **cannot exfiltrate** to the network or reach your systems.
+- **ZDR (Zero Data Retention) is the sharp edge.** Basic `web_search_20250305` and `web_fetch_20250910` are ZDR-eligible. The `_20260209`+ dynamic-filtering versions are **not**, because they use code execution internally — and **code execution is never ZDR-eligible**. To run a 2026-era web tool under ZDR, you must disable dynamic filtering with `"allowed_callers": ["direct"]`. *This is the trade-off an architect under a data-retention contract has to make explicit:* dynamic filtering's token savings vs ZDR compliance.
+- **Domain filtering is your network ACL for the web.** `allowed_domains` / `blocked_domains` (one or the other, never both) gate which sites Claude can reach. No scheme, subdomains auto-included, no `*.` wildcard in the host. **Use ASCII-only domains** — a Cyrillic `а` in `аmazon.com` is a homograph attack that slips past a naïve allow-list.
+
+## 20.6 End-to-End Case Study: A Compliance-Research Assistant
+
+The pieces above only matter when a real agent has to choose between hosted and self-hosted execution *in the same turn*. Here is a production assistant for a regulated firm — the kind of system where "who ran the code and where did the data go" is an audit question, not a footnote.
+
+### Requirements
+
+- An analyst asks, in natural language, whether a counterparty is subject to any **new sanctions or adverse media** this quarter, and how that compares to the firm's **internal exposure** to that counterparty.
+- **Live web research** is required (sanctions lists change daily) — and it must **only** touch an approved set of regulator and wire-service domains.
+- The firm's **exposure figures live in an internal database** that must **never** leave the firm's network — so that lookup is a **client tool** the firm hosts.
+- The final answer must **compute** a risk score (exposure × severity) and **cite every external claim**.
+- The firm is under a **data-retention obligation** on the web-research path.
+
+### Architecture
+
+The split falls out of the requirements: web research and number-crunching are **server tools** (no infra to run, citations for free); the exposure lookup is a **client tool** because the data is sovereign.
+
+```mermaid
+flowchart TD
+    Analyst([Analyst]) --> App[Application + API call]
+    App -->|tools array| Claude[Claude turn]
+    Claude --> WS[Server tool web_search<br/>allowed_domains regulators only]
+    Claude --> CE[Server tool code_execution<br/>risk score in sandbox]
+    Claude --> DB[Client tool query_internal_db]
+    WS -. citations + encrypted_content .-> Claude
+    CE -. computed score .-> Claude
+    DB --> Handler[Firm-hosted handler<br/>inside the network]
+    Handler -. tool_result exposure .-> Claude
+    Claude --> Answer[Cited risk briefing]
+```
+
+`query_internal_db` is the **only** seam the firm controls — and that is deliberate: the sovereign data path is exactly the one that must stay client-side, where the firm's own auth, logging, and network boundary apply.
+
+### Configuration
+
+Declare the three tools. Note the **domain allow-list** on web search and the **ZDR-safe caller** setting; the client tool carries a normal `input_schema`:
+
+```python
+tools = [
+    {
+        "type": "web_search_20260209",
+        "name": "web_search",
+        "max_uses": 8,                          # bound the $10/1k meter
+        "allowed_domains": [                     # regulator + wire services only
+            "treasury.gov", "sanctionssearch.ofac.treas.gov",
+            "reuters.com", "ec.europa.eu",
+        ],
+        "allowed_callers": ["direct"],          # disable dynamic filtering -> ZDR-eligible
+    },
+    {"type": "code_execution_20250825", "name": "code_execution"},
+    {
+        "name": "query_internal_db",            # CLIENT tool: firm hosts the handler
+        "description": "Return the firm's current exposure to a counterparty. Internal only.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"counterparty_id": {"type": "string"}},
+            "required": ["counterparty_id"],
+        },
+    },
+]
+```
+
+Two deliberate decisions: `allowed_callers: ["direct"]` trades dynamic-filtering token savings for **ZDR eligibility** on the research path (§20.5); the exposure figure flows through a **client** tool so it never touches Anthropic's infrastructure.
+
+### Execution trace
+
+Watch the turn shape change. Claude wants to search the web (server) **and** query the internal DB (client) at once — so the turn stops with `tool_use`, the firm runs its sovereign lookup, and the deferred web search runs on the continuation:
+
+```mermaid
+sequenceDiagram
+    actor An as Analyst
+    participant App as Application
+    participant Cl as Claude turn
+    participant DB as Firm DB handler
+    An->>App: "Sanctions risk on counterparty C-204 vs our exposure?"
+    App->>Cl: messages.create(web_search + code_execution + query_internal_db)
+    Cl-->>App: stop_reason tool_use<br/>server_tool_use web_search (no result) + tool_use query_internal_db
+    App->>DB: query_internal_db(C-204)
+    DB-->>App: exposure 4.2M USD
+    App->>Cl: user message of ONLY tool_result(exposure)
+    Cl->>Cl: deferred web_search runs server-side
+    Cl->>Cl: code_execution computes risk score in sandbox
+    Cl-->>App: stop_reason end_turn<br/>cited briefing + score
+```
+
+The single most important line: when Claude mixed a server call with the client call, `stop_reason` was **`tool_use`, not `pause_turn`** — and the follow-up message carried **only** the `tool_result` for the DB lookup. Any extra block there would have stranded the deferred `web_search` and 400'd the request (§20.4).
+
+### Validation
+
+- **Turn-shape test:** assert that when the model issues `query_internal_db` alongside `web_search`, the response is `stop_reason == "tool_use"` with a `server_tool_use` block that has **no** matching result; assert the continuation (only `tool_result`) ends `end_turn`.
+- **Network-isolation test:** point `query_internal_db` at a value that only exists inside the network and confirm it appears in the answer — proving the sovereign path stayed client-side.
+- **Domain-guard test:** assert a search that *would* hit a non-allow-listed domain returns no result from it; audit the allow-list for non-ASCII homographs.
+- **ZDR test:** confirm the web tool is configured `allowed_callers: ["direct"]`; without it the `_20260209` version is **not** ZDR-eligible.
+- **Cost test:** confirm `max_uses` caps searches; assert the run's `server_tool_use.web_search_requests` stays within budget.
+
+### Common pitfalls
+
+- Expecting `pause_turn` when a **client** tool is mixed in — it's `tool_use`; the server tool is *deferred*, not paused (§20.4).
+- Adding a text block after the `tool_result` in the follow-up → the turn closes early and the deferred `web_search` 400s.
+- Using a `_20260209`+ web tool under a ZDR contract **without** `allowed_callers: ["direct"]` — dynamic filtering pulls in code execution, which is never ZDR-eligible (§20.5).
+- Routing the sovereign exposure figure through `code_execution` (server) instead of a client tool — the internal data would leave the network.
+- Forgetting to echo `encrypted_content` from web-search results on later turns, breaking citations.
+
+## 20.7 Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| Two execution models | Client tools → `tool_use`, *you* execute and return `tool_result`; server tools → `server_tool_use` (`srvtoolu_`), Anthropic executes inside the turn, **no `tool_result`** (§20.1). |
+| Server catalogue | Web search, web fetch, code execution, tool search, advisor — declared in `tools`, no infra to host (§20.2). |
+| Anthropic-schema client tools | `bash`, `text_editor`, `memory`, computer use ship schemas but **you execute** them — sandbox accordingly (§20.3). |
+| `pause_turn` vs mixed `tool_use` | Long server loop → `pause_turn`, re-send as-is (same tools). Server **+ client** in one turn → `tool_use`; reply with **only** `tool_result` blocks (§20.4). |
+| Cost meters | Web search **$10/1k** (bound with `max_uses`); code execution **free with web tools**, else **$0.05/hr/container** after 1,550 free hrs (§20.5). |
+| Security boundary | Code-execution sandbox has **internet disabled**; ZDR excludes dynamic-filtering web tools unless `allowed_callers: ["direct"]`; keep sovereign data on **client** tools; ASCII-only domain allow-lists (§20.5). |
+
+> **Engineering judgement, not exam recall.** The architect's call is *placement*: host a capability as a client tool when you need a control seam or the data is sovereign; let Anthropic host it as a server tool when you want zero infrastructure and can accept a black-box call. Get the turn shape (`pause_turn` vs `tool_use`) and the data-retention posture right, and server tools are a force multiplier rather than a liability.
 
 # Chapter 21: Long-Context Techniques (Compaction, Context Editing, Memory)
 
-> *Reference — beyond the exam scope.* Docs: [Compaction](https://platform.claude.com/docs/en/build-with-claude/compaction) · [Context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing).
+> *Reference — beyond the exam scope.* Docs: [Compaction](https://platform.claude.com/docs/en/build-with-claude/compaction) · [Context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing) · [Memory tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool) · [Context windows](https://platform.claude.com/docs/en/build-with-claude/context-windows).
 
-For agents that run long enough to strain the context window, three distinct API mechanisms (don't confuse them):
+Chapter 11 taught the *discipline* of context management for the exam: a budget, its failure modes (context rot, lost-in-the-middle, tool-result bloat), and the hand-rolled techniques — facts blocks, trimming hooks, sliding windows — that an architect reaches for. **This chapter is the production-engineering layer underneath it: the three concrete API mechanisms Anthropic ships so you don't hand-roll all of it**, and the rules for combining them on an agent that runs for hours or days. It is firmly *beyond the Foundations exam* (PART IV), but it is exactly what separates a demo agent from one that survives a real long-horizon task.
 
-- **Compaction** — *summarizes* older history server-side when nearing the limit, then continues from the summary. Beta `compact-2026-01-12` (`context_management.edits: [{type: "compact_20260112"}]`). **Critical:** append the whole `response.content` (including the compaction block) back on the next request, or you lose the compacted state.
-- **Context editing** — *clears* (not summarizes) stale content: `clear_tool_uses_20250919` drops old tool results, `clear_thinking_20251015` drops thinking blocks. Beta `context-management-2025-06-27`. Use when old tool output is dead weight.
-- **Memory (cross-session)** — the memory tool (Chapter 20) or Managed Agents **memory stores** persist information *outside* the window, surviving context resets and whole sessions.
+The window is finite even at a million tokens, and the three mechanisms attack the problem at three different layers:
 
-**Choosing:** context editing prunes within a session; compaction summarizes when you're near the limit; memory persists across sessions. Long-running agents often use all three (plus prompt caching, Chapter 18).
+- **Compaction** (§21.2) — when you approach the limit, the API *summarizes* older turns server-side and continues from the summary. Lossy, automatic, in-session.
+- **Context editing** (§21.3) — *clears* (does not summarize) stale tool results and thinking blocks from the transcript before the model sees them. Lossless structure, removes dead weight, in-session.
+- **The memory tool** (§21.4) — Claude reads and writes files *outside* the window, so state survives compaction, context resets, and whole sessions. Cross-session persistence.
 
----
+§21.1 frames the budget and the 200K-vs-1M decision; §21.5 covers the interactions that bite in production (prompt caching, what to keep vs drop); §21.6 builds a complete **multi-day codebase-migration agent** end-to-end; §21.7 distills the decision rules.
+
+## 21.1 The Budget, and Why 1M Does Not Make This Go Away
+
+Every request renders in a fixed order — **`tools` → `system` → `messages`** — and the running total of those segments is the budget you manage. The current lineup gives you two ceilings to design against:
+
+| Model | Context window | Note |
+|---|---|---|
+| Claude Opus 4.8 / 4.7 / 4.6, Sonnet 4.6, Fable 5 | **1M tokens** | 1M at standard pricing on Opus — no long-context premium |
+| Claude Haiku 4.5 | **200K tokens** | The cheap, fast tier — and the one you hit *first* |
+
+**The trap is treating a bigger window as a fix.** It is not, for three reasons an architect must internalize:
+
+- **Recall degrades with length (context rot).** Attention relates every token pair — an n² cost that stretches thin over long inputs. A fact at 600K tokens is *attended to* worse than the same fact at 6K. A bigger budget *delays* failure; it does not repeal it.
+- **Cost and latency scale with what you resend.** The API is stateless: every turn you resend the entire history. A 700K-token transcript is billed (at cache-read or full rates) on *every* subsequent turn. Letting history grow unbounded toward 1M is a cost decision, not just a quality one.
+- **The subagent / cheap-model tier is 200K.** The moment you delegate a sub-task to Haiku (§21.5), or run on Haiku for cost, your effective window is 200K — and the techniques in this chapter stop being optional.
+
+```mermaid
+flowchart TD
+    Budget[Context window budget<br/>finite even at 1M] --> Fixed[tools plus system<br/>stable prefix]
+    Budget --> Hist[messages history<br/>grows every turn]
+    Hist --> Big[Tool results and thinking<br/>the bulk and the noise]
+    Big --> Near{Near the<br/>trigger threshold?}
+    Near -->|no, but stale| Edit[Context editing<br/>clear dead tool results]
+    Near -->|yes, near limit| Compact[Compaction<br/>summarize older turns]
+    Edit --> Persist[Durable facts to<br/>the memory tool]
+    Compact --> Persist
+    Persist --> Continue[Continue the run]
+```
+
+**Exam-adjacent framing, production reality:** Chapter 11 gives you the symptom-to-cause map; this chapter gives you the *managed* mitigations. When the question is "the agent forgot a decision after a 5-hour run," the Foundations answer is a durable facts block (§11.2). The production answer adds: *and persist it with the memory tool so it survives the next compaction and the next session entirely.*
+
+## 21.2 Compaction — Summarize When You Near the Limit
+
+Compaction is server-side, lossy summarization that triggers automatically as the conversation approaches a threshold (default ~150K tokens). The API condenses earlier turns into a **compaction block**, then continues from that summary instead of the full history. You opt in per request.
+
+```python
+client.beta.messages.create(
+    betas=["compact-2026-01-12"],                       # required beta header
+    model="claude-opus-4-8",
+    max_tokens=16000,
+    messages=messages,
+    context_management={"edits": [{"type": "compact_20260112"}]},
+)
+# Append the WHOLE content back — the compaction block included:
+messages.append({"role": "assistant", "content": response.content})
+```
+
+**The one rule that breaks everything if you miss it:** append the entire `response.content` — not just the text — back onto `messages` on the next turn. The compaction block lives *inside* `response.content`; the API uses it to replace the compacted history on the following request. Extract only `block.text` and append that string, and you silently throw away the compacted state — the next request re-sends the *full* uncompacted history and compaction effectively never happened.
+
+**Why use it (and what it costs):**
+- **Why:** it is the only mechanism that lets a single conversation outlive the window without you writing a summarizer. It is the right tool when the *narrative* of the conversation still matters and you can tolerate lossy recall of old detail.
+- **Cost — progressive summarization loss.** Each compaction compresses precise values (amounts, IDs, line numbers, file paths) into prose ("the user reported a failing test"). Numbers blur. **This is the central pitfall:** never let load-bearing facts live *only* in compactible history. Lift them into a durable facts block (§11.2) re-injected every turn, or — better for long horizons — into the memory tool (§21.4), both of which sit outside the summarized transcript.
+
+**Availability:** beta, on Fable 5, Opus 4.8 / 4.7 / 4.6, and Sonnet 4.6. Beta header `compact-2026-01-12`; you must call `client.beta.messages.*`.
+
+## 21.3 Context Editing — Clear Stale Tool Results, Don't Summarize
+
+Context editing is the scalpel to compaction's blunt instrument. It **clears** content rather than summarizing it: old `tool_use`/`tool_result` pairs and old `thinking` blocks are *removed* from the transcript before the model sees the next turn. The conversation structure stays intact and lossless for everything you keep; the dead weight is simply gone.
+
+```python
+client.beta.messages.create(
+    betas=["context-management-2025-06-27"],            # different beta header from compaction
+    model="claude-opus-4-8",
+    max_tokens=16000,
+    tools=tools,
+    messages=messages,
+    context_management={"edits": [
+        {"type": "clear_tool_uses_20250919"},           # drop old tool results
+        {"type": "clear_thinking_20251015"},            # drop old thinking blocks
+    ]},
+)
+```
+
+Two strategies, used together or apart:
+- **`clear_tool_uses_20250919`** — clears old tool *results*. Add `clear_tool_inputs: true` to also drop the `tool_use` parameters that produced them. This is the high-value one: a 30-file investigation accumulates dozens of huge file dumps the model has already extracted what it needs from.
+- **`clear_thinking_20251015`** — clears old `thinking` blocks. On a long edit/test loop, stale reasoning is pure ballast once the action it justified is done.
+
+**Compaction vs context editing — the distinction the docs are emphatic about:** *compaction summarizes (lossy, keeps a gist), context editing clears (lossless for survivors, keeps nothing of the cleared block).* They use **different beta headers and different `edits` types** (`compact_20260112` + `compact-2026-01-12` vs `clear_*` + `context-management-2025-06-27`) — mixing them up is the classic implementation bug.
+
+**Why use it, and the pitfall:**
+- **Why:** old tool output is the single largest, noisiest occupant of a long-running window (§11.1). Clearing it is cheaper and *more faithful* than summarizing it — you keep the live conversation verbatim instead of blurring everything.
+- **Pitfall — clearing something you still need.** Once a tool result is cleared it is gone; if a later turn needs that data, the model must re-fetch it (a tool call) or it is lost. The fix is the same separation as always: extract durable facts (the finding, the ID, the line number) into a facts block or memory *before* the raw result ages out. Clear the 2,000-token file dump; keep the one line that mattered.
+
+## 21.4 The Memory Tool — State That Outlives the Window
+
+Compaction and context editing both operate *within* a session. The memory tool is the cross-session mechanism: Claude reads and writes files in a `/memories` directory, and that directory persists across context resets and entirely separate sessions. It is a **client-side** tool — Anthropic defines the schema and Claude's usage pattern, but **you implement the storage backend** (local disk, a database, object storage).
+
+```python
+response = client.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=16000,
+    tools=[{"type": "memory_20250818", "name": "memory"}],   # schema-less, Anthropic-defined
+    messages=[{"role": "user", "content": "Resume the migration from where we left off."}],
+)
+# Claude emits memory tool_use blocks; YOUR handler executes them against /memories
+# and returns tool_result. The SDKs ship BetaAbstractMemoryTool / betaMemoryTool helpers.
+```
+
+Claude drives it with six commands — `view`, `create`, `str_replace`, `insert`, `delete`, `rename` — to maintain its own notes: a migration checklist, a per-file status table, decisions and their rationale, lessons learned. Across sessions the pattern is "check memory first, write findings as you go."
+
+**Why it is the keystone for long horizons:**
+- It is the *only* one of the three that survives a session boundary. Compaction state and a facts block both die when the process ends; a memory file does not.
+- It turns "remember this" into durable, inspectable state you can audit and even seed before the first run.
+
+**Pitfalls and the security boundary (this is the part architects get wrong):**
+- **Never store secrets** (API keys, tokens, passwords) in memory files, and be deliberate about PII — these files persist and may be re-read for the life of the agent. The reference backends have *no built-in access control*.
+- **In multi-user systems, scope `/memories` per user and authenticate every read/write.** A shared memory directory leaks one user's context into another's session. This is a real, deletion-regulation-adjacent concern (GDPR/CCPA), not a hypothetical.
+- **Let it grow unbounded and it becomes the bloat problem in a new place.** Keep memory to durable identifiers, decisions, and lessons — not a running transcript.
+
+> Managed Agents have a parallel construct — workspace-scoped **memory stores** mounted into the session container — that solves the same cross-session problem with Anthropic-managed storage and per-mutation version history. Same goal; you don't implement the backend.
+
+## 21.5 Interactions That Bite: Caching and What to Keep vs Drop
+
+The three mechanisms do not live in a vacuum — they collide with prompt caching (Chapter 18) and with each other.
+
+**Prompt caching is a prefix match, and editing history can move the prefix.** Caching keys on the exact bytes up to a `cache_control` breakpoint, in render order `tools → system → messages`. Two consequences:
+- **Compaction and context editing rewrite the `messages` prefix**, which invalidates cache reads from the edited point onward. That is usually an acceptable trade — you spend one cold prefill to reclaim tens of thousands of tokens every subsequent turn — but it means you should not trigger editing more aggressively than you need to.
+- **Caches are per-model and per-tool-set.** Switching models or changing the tool list mid-session blows the whole cache (tools render at position 0). This is *why* the subagent pattern matters for long-context work: keep the main loop on one model with a stable tool set so its cache survives, and push cheap or context-isolated sub-tasks to a Haiku subagent whose 200K window and separate cache don't touch the main one.
+
+**What to keep vs drop — the architect's allocation rule.** Treat the window as tiers by survival priority:
+
+```mermaid
+flowchart TD
+    Turn[New turn arrives] --> Q1{Is this a durable<br/>fact, ID, or decision?}
+    Q1 -->|yes| Keep[Write to memory<br/>and the facts block]
+    Q1 -->|no| Q2{Is it a stale tool<br/>result or old thinking?}
+    Q2 -->|yes| Clear[Let context editing<br/>clear it]
+    Q2 -->|no| Q3{Near the<br/>compaction threshold?}
+    Q3 -->|yes| Summ[Let compaction<br/>summarize the narrative]
+    Q3 -->|no| Live[Keep verbatim<br/>in the live window]
+```
+
+- **Always keep, outside the summarizable transcript:** identifiers, amounts, file:line locations, and committed decisions — in a facts block and/or memory. These must never be subject to summarization loss.
+- **Drop first (context editing):** raw tool dumps and resolved thinking — high token count, low remaining signal.
+- **Summarize last (compaction):** the conversational narrative, when you genuinely need its gist and are at the limit.
+- **Reference, don't inline:** for huge artifacts, store them (Files API, memory, a path) and pass a *reference*; let the model fetch on demand rather than parking the payload in the window every turn.
+
+## 21.6 End-to-End Case Study: A Multi-Day Codebase Migration Agent
+
+The mechanisms only matter assembled. Here is a realistic long-horizon agent that exercises all three — the kind of run that lasts days and would be impossible to hold in a single window.
+
+### Requirements
+
+- Migrate a large repository from one framework version to the next: hundreds of files, run across **multiple sessions over several days** (it cannot finish in one).
+- Per file: read it, edit it, run the tests, record the result. File reads and test logs are **large and mostly disposable** once the file is done.
+- **Hard requirement:** state — which files are done, which failed and why, decisions made about ambiguous APIs — must survive every context reset and every session boundary. Forgetting a completed file means redoing it; forgetting a decision means inconsistency across the codebase.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    Start([New session starts]) --> Mem[Read memory<br/>migration checklist and status]
+    Mem --> Pick[Pick next pending file]
+    Pick --> Read[Read file and run tests<br/>large, disposable output]
+    Read --> Decide{Tests pass?}
+    Decide -->|yes| Note[Write done plus decisions<br/>to memory]
+    Decide -->|no| Fail[Write failure plus reason<br/>to memory]
+    Note --> Clear[Context editing clears<br/>the file dump and test log]
+    Fail --> Clear
+    Clear --> Near{Near 150K<br/>this session?}
+    Near -->|yes| Compact[Compaction summarizes<br/>the session narrative]
+    Near -->|no| Pick
+    Compact --> Pick
+```
+
+The main loop runs on **Opus 4.8** (1M window, stable tool set, cacheable prefix). Heavy parallel reads of independent files can be fanned out to **Haiku 4.5** subagents (200K each) so they never crowd the main window — each returns only the extracted finding.
+
+### Implementation sketch
+
+Enable all three on the main request — compaction for the narrative, context editing to shed each file's dump, and the memory tool for durable state:
+
+```python
+def migration_turn(messages):
+    return client.beta.messages.create(
+        betas=["compact-2026-01-12", "context-management-2025-06-27"],
+        model="claude-opus-4-8",
+        max_tokens=32000,
+        tools=[
+            {"type": "memory_20250818", "name": "memory"},        # durable, cross-session
+            {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
+            {"type": "bash_20250124", "name": "bash"},            # run tests
+        ],
+        context_management={"edits": [
+            {"type": "compact_20260112"},                          # summarize when near limit
+            {"type": "clear_tool_uses_20250919", "clear_tool_inputs": True},  # drop file/test dumps
+        ]},
+        messages=messages,
+    )
+
+# CRITICAL: append the full content (compaction block included) every turn.
+resp = migration_turn(messages)
+messages.append({"role": "assistant", "content": resp.content})
+```
+
+The memory file Claude maintains is the source of truth across days:
+
+```
+/memories/migration.md
+  STATUS (one row per file)
+    src/api/client.ts     DONE    2 call sites updated
+    src/api/refund.ts     FAILED  test t_refund_over_limit: unparameterized SQL, needs manual review
+    src/api/orders.ts     PENDING
+  DECISIONS
+    - getX(opts) -> getX(opts, ctx): always pass ctx from the request scope, never a global
+    - Skip generated files under build/; never edit them
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Eng as Engineer
+    participant Ag as Migration agent
+    participant Mem as Memory backend
+    participant Repo as Repo and tests
+    participant API as Context mgmt
+    Eng->>Ag: "Resume the migration."
+    Ag->>Mem: view /memories/migration.md
+    Mem-->>Ag: 142 done, orders.ts pending, ctx-passing decision
+    Ag->>Repo: read orders.ts, edit, run tests
+    Repo-->>Ag: large file dump plus test log (passes)
+    Ag->>Mem: str_replace orders.ts -> DONE
+    Ag->>API: clear_tool_uses drops the dump and log
+    Note over Ag,API: near 150K -> compaction summarizes the session
+    Ag-->>Eng: "orders.ts done; 143/300 complete."
+```
+
+Notice the division of labor: **memory holds the facts that must survive**, **context editing sheds the disposable bulk each turn**, and **compaction keeps the session coherent** when it nears the limit. The engineer can close the laptop and resume next day — the memory file makes the agent stateless-but-durable.
+
+### Validation
+
+- **Cross-session test:** kill the process after file 142, start a fresh session, assert the agent reads memory and resumes at 143 — never re-doing a completed file.
+- **Fact-survival test:** after a compaction event, assert the `ctx`-passing decision is still applied to the *next* file — proving the decision lived in memory, not in the summarized-away narrative.
+- **Bloat test:** assert the window stays roughly flat per file (editing clears the dumps) instead of growing monotonically toward the limit.
+- **Isolation/security test:** run two repos under two users; assert each agent only reads its own `/memories` directory.
+
+### Common pitfalls
+
+- Appending only `response.content` text and dropping the compaction block — the run silently re-sends full history and compaction never takes effect (§21.2).
+- Storing the migration status *only* in conversation and trusting compaction to keep it — the summarizer blurs "143 done" into "most files migrated" (§21.2).
+- Confusing the two beta headers / `edits` types — `compact_20260112` is summarization, `clear_*` is clearing; they are not interchangeable (§21.3).
+- A shared `/memories` directory across users — one tenant's decisions leak into another's run (§21.4).
+
+## 21.7 Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| Three distinct mechanisms | Compaction *summarizes* (in-session, lossy); context editing *clears* (in-session, lossless for survivors); memory *persists* (cross-session). Don't confuse them (§21.0–§21.4). |
+| Compaction | Beta `compact-2026-01-12`, `compact_20260112`; auto-triggers near ~150K. **Append the whole `response.content` (compaction block included) every turn** or you lose the compacted state (§21.2). |
+| Context editing | Beta `context-management-2025-06-27`; `clear_tool_uses_20250919` (+`clear_tool_inputs`) and `clear_thinking_20251015`. Different header/types from compaction (§21.3). |
+| Memory tool | `memory_20250818`, client-side, `/memories`; survives sessions. **No secrets; scope per user; don't let it bloat** (§21.4). |
+| 1M does not repeal context rot | Bigger windows delay failure; recall still degrades and you still pay to resend. The cheap/subagent tier is 200K (§21.1). |
+| Caching interaction | Editing history moves the cached prefix; keep the main loop on one model + stable tools, push cheap work to a Haiku subagent (§21.5). |
+| Keep vs drop | Keep IDs/amounts/decisions in memory + facts block; drop raw tool dumps via context editing; summarize the narrative last; reference huge artifacts instead of inlining (§21.5). |
+
+> **Production posture, not exam material.** The Foundations exam tests the *discipline* (Chapter 11). This chapter is how you implement it at scale: let the API summarize, clear, and persist for you — but keep load-bearing facts in memory, never in the parts the API is free to summarize or clear away.
 
 # Chapter 22: Documents & Multimodal Input
 
-> *Reference — the exam lists Vision and token counting as out-of-scope; this is for real-world work.* Docs: [Files API](https://platform.claude.com/docs/en/build-with-claude/files) · [PDF support](https://platform.claude.com/docs/en/build-with-claude/pdf-support).
+> *Reference — the exam lists Vision and token counting as out-of-scope; this is for real-world work.* Docs: [Vision](https://platform.claude.com/docs/en/build-with-claude/vision) · [PDF support](https://platform.claude.com/docs/en/build-with-claude/pdf-support) · [Files API](https://platform.claude.com/docs/en/build-with-claude/files) · [Citations](https://platform.claude.com/docs/en/build-with-claude/citations) · [Token counting](https://platform.claude.com/docs/en/build-with-claude/token-counting).
 
-- **Files API** (beta `files-api-2025-04-14`) — upload a file once, then reference it by `file_id` across many requests instead of re-sending bytes. (Not on Bedrock/Vertex.)
-- **Vision** — `{"type": "image", "source": {...}}` content blocks (base64, URL, or `file_id`); JPEG/PNG/GIF/WebP. Opus 4.7+ supports high-resolution images (up to 2576px long edge) with pixel-accurate coordinates — useful for computer use and document understanding.
-- **PDF input** — `{"type": "document", ...}` blocks process PDFs natively (text *and* visual layout); base64 (no beta) or via the Files API; up to ~600 pages / 32MB.
-- **Citations** — `citations: {enabled: true}` on a document makes responses carry `cited_text` plus char/page locations for verifiable, grounded answers. (Incompatible with structured outputs.)
-- **Token counting** — the `count_tokens` endpoint gives exact, model-specific counts *before* you send. Never estimate Claude tokens with `tiktoken` (it is OpenAI's tokenizer and is wrong for Claude).
+This chapter opens **PART III — Modern Agent Engineering**, the "beyond the foundations exam" material. The certification treats vision and token counting as out-of-scope, but no production document agent ships without them. The moment your agent has to *read* — a scanned invoice, a 200-page contract, a screenshot of a dashboard, a chart with no underlying data table — text-only prompting stops being enough. You move into **multimodal input**: `image` and `document` content blocks, three competing ways to get bytes into a request, grounded answers via citations, and a cost model where a single image can cost more than a page of prose.
 
----
+The hard part is not "Claude can see images." It is the **engineering around** the bytes:
+
+- **Which source type** (§22.2) — base64, URL, or Files API `file_id` — and why the wrong choice quietly triples your bill on multi-turn agents.
+- **Content-block structure** (§22.3) — where images and documents sit relative to your text, and why order matters.
+- **Citations** (§22.4) — turning "trust me" answers into verifiable, span-anchored claims for compliance.
+- **The token cost of pixels and pages** (§22.5) — the formula the exam doesn't teach but your finance team will ask about.
+
+§22.6 builds a complete invoice-and-contract intake agent end-to-end, and §22.7 distills the production rules.
+
+## 22.1 The Multimodal Content Model
+
+A Claude message's `content` is not a string — it is an ordered **list of content blocks**. Text is just one block type. For documents and multimodal input, three block types matter:
+
+```mermaid
+flowchart TD
+    Msg[User message<br/>content is an ordered list] --> T[text block<br/>the prompt or labels]
+    Msg --> I[image block<br/>JPEG PNG GIF WebP]
+    Msg --> D[document block<br/>PDF native text plus layout]
+    I --> S{source type}
+    D --> S
+    S -->|base64| B[bytes inline<br/>no beta header]
+    S -->|url| U[hosted reference<br/>no beta header]
+    S -->|file_id| F[Files API<br/>beta header required]
+```
+
+Two block types carry non-text input:
+
+- **`image`** — `{"type": "image", "source": {...}}`. Formats: JPEG, PNG, GIF (first frame only — animation is ignored), WebP. Claude *understands* images; it cannot *generate* or *edit* them.
+- **`document`** — `{"type": "document", "source": {...}}`. Natively processes PDFs as **text *and* visual layout** — each page is rendered to an image *and* its extracted text is supplied alongside, so Claude can reason about charts, tables, and figures, not just the text stream.
+
+**Why this matters for design:** an agent that "reads documents" is really an agent that assembles content blocks in the right order with the right source types. Everything downstream — cost, latency, cache behavior, citation availability — is decided by how you build that list.
+
+## 22.2 Three Source Types: base64 vs URL vs Files API
+
+Every `image` and `document` block specifies a `source` with one of three types. They are functionally interchangeable for a single request but have very different operational profiles — and choosing wrong is the most common production mistake in this chapter.
+
+| Source type | Beta header | Bytes travel | Best for | Pitfall |
+|---|---|---|---|---|
+| **base64** | none | inline, every request | one-shot calls; local files; ZDR-strict flows | re-sent on **every** turn — payload bloats in multi-turn |
+| **url** | none | fetched server-side | publicly hosted assets | URL must be reachable; you don't control caching of the fetch |
+| **file_id** (Files API) | `files-api-2025-04-14` | uploaded **once**, referenced by id | the same file across many requests / many turns | beta header needed on **both** upload and the message |
+
+**The base64 trap.** The API is stateless — every request re-sends the full conversation history. If a 5 MB PDF or a screenshot is embedded as base64, those bytes ride along on **every** turn of an agentic loop. A 10-turn conversation re-uploads the same document 10 times. Request size grows, latency climbs, and on partner platforms you can hit the 32 MB request ceiling before you ever hit the page limit.
+
+**The Files API fix.** Upload once, get a `file_id`, reference it by id forever:
+
+```python
+# Upload once (beta header required on the upload call)
+uploaded = client.beta.files.upload(
+    file=("contract.pdf", open("contract.pdf", "rb"), "application/pdf"),
+)
+
+# Reference by id across many requests — bytes are NOT re-sent
+response = client.beta.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=16000,
+    betas=["files-api-2025-04-14"],   # required here too
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Summarize the termination clause."},
+            {"type": "document", "source": {"type": "file", "file_id": uploaded.id}},
+        ],
+    }],
+)
+```
+
+The content-block type must **match the file's MIME type**: a PDF/text file → `document` block; an image file → `image` block. The beta header is required on the upload **and** on every `messages.create` that references the file — forgetting it on one of the two is a frequent 400.
+
+**Decision rule:** one request → base64 (simplest). Same asset reused across turns or requests → Files API (`file_id`). Public URL you trust → `url`. On **Amazon Bedrock and Google Vertex AI, only base64 is available** — the Files API and `url` sources are not, so a Bedrock/Vertex document agent has no choice but to inline bytes (and must budget for the repeated payload).
+
+## 22.3 Prompt Structure for Multimodal Requests
+
+Content-block **order** is not cosmetic — it measurably affects quality.
+
+```mermaid
+flowchart TD
+    Start[Build user content list] --> Doc[Put document or image blocks FIRST]
+    Doc --> Label[Label each one<br/>Image 1 Image 2]
+    Label --> Q[Put the text question LAST]
+    Q --> Multi{multiple images?}
+    Multi -->|yes| Sep[Introduce each with its own text label]
+    Multi -->|no| Send[Send request]
+    Sep --> Send
+```
+
+The documented best practice: **images and documents come before the text that asks about them.** The same long-context principle that says "put the big document before the query" applies to pixels — image-then-text outperforms text-then-image. Images interpolated *with* text still work, but if your use case allows it, lead with the visual.
+
+**Labeling multiple inputs.** When a request carries several images or pages, introduce each with a short text label so you can refer to them by name:
+
+```python
+content = [
+    {"type": "text", "text": "Image 1 (the invoice):"},
+    {"type": "image", "source": {"type": "file", "file_id": invoice_id}},
+    {"type": "text", "text": "Image 2 (the purchase order):"},
+    {"type": "image", "source": {"type": "file", "file_id": po_id}},
+    {"type": "text", "text": "Do the line-item totals on the invoice match the PO?"},
+]
+```
+
+Without labels, "compare the second one to the first" is ambiguous; with them, the model — and your follow-up turns — can reference `Image 1` precisely. In multi-turn conversations Claude retains access to every image from earlier turns, so you do **not** re-attach them in follow-ups (and if you used base64, re-attaching is exactly the cost trap from §22.2).
+
+**Prompt-caching interaction.** A large document placed early in the content is an ideal cache target: put a `cache_control: {"type": "ephemeral"}` breakpoint on the document block, keep the volatile question *after* it, and repeated queries against the same document read the cached prefix at ~10% of input cost. This is the single biggest lever for high-volume document workloads (§22.6).
+
+## 22.4 Citations: Verifiable, Grounded Answers
+
+For any workload where a wrong-but-confident answer has consequences — legal, financial, compliance — a plain text answer is a liability. **Citations** make the model anchor each claim to an exact span of the source document.
+
+Set `citations: {enabled: true}` on the `document` block (it must be enabled on **all** document blocks in the request, or none):
+
+```python
+response = client.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=16000,
+    messages=[{
+        "role": "user",
+        "content": [
+            {
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64},
+                "title": "Master Services Agreement",
+                "citations": {"enabled": True},
+            },
+            {"type": "text", "text": "What is the notice period for termination?"},
+        ],
+    }],
+)
+```
+
+The response text is split into multiple `text` blocks; the blocks that make a claim carry a `citations` array. Each citation includes `cited_text`, `document_index`, `document_title`, and a **location** keyed by type:
+
+- `page_location` → `start_page_number` / `end_page_number` (1-indexed) for PDFs.
+- `char_location` → `start_char_index` / `end_char_index` for plain text.
+- `content_block_location` for custom content.
+
+You can render the cited span and link it back to page 14 of the contract — the answer is now auditable, not "trust me."
+
+**Two trade-offs the exam-beyond reader must know:**
+
+1. **Citations are incompatible with structured outputs.** Enabling `citations` *and* `output_config.format` (a JSON schema) returns a 400. You cannot have a span-anchored answer that is *also* schema-constrained JSON in one call — pick the one the use case needs, or run two passes (extract structured fields in one call, gather citations in another).
+2. **All-or-nothing per request.** Citations must be enabled on every document block or none — you cannot cite one document and ignore another in the same request.
+
+## 22.5 The Token Cost of Images and PDF Pages
+
+This is the section the foundations exam skips and your bill does not. Claude does not charge images by the megabyte — it charges by **visual tokens**, and the model is precise and predictable.
+
+**Images.** Claude views an image in **28×28-pixel patches**; each patch is one visual token. An image therefore costs:
+
+```
+visual_tokens = ceil(width / 28) * ceil(height / 28)
+```
+
+Images larger than the model's native limit are **downscaled before processing**, which caps the cost. The limit depends on the model's resolution tier:
+
+| Tier | Models | Max long edge | Max visual tokens |
+|---|---|---|---|
+| **High-resolution** | Fable 5, Mythos 5, Opus 4.8, Opus 4.7 | 2576 px | 4784 |
+| **Standard** | all other models | 1568 px | 1568 |
+
+High-resolution support is **automatic** on the listed models — no beta header, no opt-in. It unlocks accuracy on dense documents, screenshots, and computer-use, and the coordinates Claude returns map 1:1 to actual pixels. The catch: a full-resolution image on a high-res model can cost **up to ~3× the visual tokens** of the same image on a standard-tier model (up to 4784 vs 1568). A 1000×1000 image costs `ceil(1000/28)² = 36 × 36 = 1296` tokens on either tier; a 4K screenshot costs ~1560 tokens standard but the full 4784 on a high-res model. If you don't need the fidelity, **downsample before sending**.
+
+**PDF pages cost twice.** Each page is processed as *both* text and image, so a page is billed as:
+
+- **Text tokens:** typically **1,500–3,000 per page**, depending on density. No additional PDF fee — standard input pricing.
+- **Image tokens:** each page is rendered to an image and billed by the same visual-token formula above.
+
+A 50-page contract is therefore not "50 × text" — it is 50 pages of text tokens *plus* 50 page-images. Dense PDFs can exhaust the context window before they hit the 600-page limit (100 pages on 200K-context models).
+
+**Count before you send — never estimate with `tiktoken`.** The `count_tokens` endpoint gives an exact, model-specific count *before* the real call. `tiktoken` is OpenAI's tokenizer; it is wrong for Claude (it undercounts ordinary text by ~15–20%, and far more on code or non-English), and it does not understand visual tokens at all.
+
+```python
+count = client.messages.count_tokens(
+    model="claude-opus-4-8",
+    messages=[{"role": "user", "content": [
+        {"type": "document", "source": {"type": "base64",
+         "media_type": "application/pdf", "data": pdf_b64}},
+        {"type": "text", "text": "Summarize this contract."},
+    ]}],
+)
+print(count.input_tokens)   # exact, includes per-page text + image tokens
+```
+
+## 22.6 End-to-End Case Study: An Invoice & Contract Intake Agent
+
+The pieces above only matter assembled. Here is a complete, realistic document agent — the kind a finance or procurement team actually deploys.
+
+### Requirements
+
+- Ingest supplier **invoices** (often scanned images / photos) and the governing **contracts** (multi-page PDFs).
+- For each invoice: extract structured fields (supplier, invoice number, total, line items) **and** verify each charged rate against the contract.
+- Every "the contract says X" claim must be **auditable** — anchored to a page in the contract PDF.
+- The same contract is queried across **dozens** of invoices that month — pay to read it once, not dozens of times.
+- Keep the per-document token cost predictable and reported.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    Intake([Invoice plus contract arrive]) --> Up[Upload both to Files API<br/>get file_id each]
+    Up --> Cnt[count_tokens<br/>budget per document]
+    Cnt --> Extract[Pass 1 extract fields<br/>structured outputs schema]
+    Up --> Verify[Pass 2 verify rates<br/>citations enabled]
+    Extract --> Merge[Merge fields plus cited findings]
+    Verify --> Merge
+    Merge --> Out[Structured record<br/>plus page-anchored evidence]
+```
+
+Two passes, because §22.4's rule forbids combining them: **Pass 1** uses `output_config.format` for clean structured extraction; **Pass 2** uses `citations` for page-anchored verification. The contract is uploaded **once** to the Files API and both passes (and every later invoice that month) reference it by `file_id` — and its document block carries a `cache_control` breakpoint so the page-images are read from cache, not re-processed.
+
+### Implementation
+
+Upload both documents once and budget the request before spending:
+
+```python
+invoice = client.beta.files.upload(
+    file=("invoice.png", open("invoice.png", "rb"), "image/png"),
+)
+contract = client.beta.files.upload(
+    file=("msa.pdf", open("msa.pdf", "rb"), "application/pdf"),
+)
+
+# Budget before the real calls — exact, model-specific
+count = client.beta.messages.count_tokens(
+    model="claude-opus-4-8",
+    betas=["files-api-2025-04-14"],
+    messages=[{"role": "user", "content": [
+        {"type": "image",    "source": {"type": "file", "file_id": invoice.id}},
+        {"type": "document", "source": {"type": "file", "file_id": contract.id}},
+        {"type": "text", "text": "placeholder"},
+    ]}],
+)
+log.info("input_tokens for this document=%d", count.input_tokens)
+```
+
+**Pass 1 — structured extraction** (no citations, so structured outputs is allowed):
+
+```python
+fields = client.beta.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=4096,
+    betas=["files-api-2025-04-14"],
+    output_config={"format": {"type": "json_schema", "schema": INVOICE_SCHEMA}},
+    messages=[{"role": "user", "content": [
+        {"type": "image", "source": {"type": "file", "file_id": invoice.id}},
+        {"type": "text", "text": "Extract supplier, invoice_number, total, and line_items."},
+    ]}],
+)
+```
+
+**Pass 2 — cited verification** (citations enabled; contract block cached for reuse):
+
+```python
+findings = client.beta.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=8000,
+    betas=["files-api-2025-04-14"],
+    messages=[{"role": "user", "content": [
+        {
+            "type": "document",
+            "source": {"type": "file", "file_id": contract.id},
+            "title": "Master Services Agreement",
+            "citations": {"enabled": True},
+            "cache_control": {"type": "ephemeral"},   # read once, reuse all month
+        },
+        {"type": "image", "source": {"type": "file", "file_id": invoice.id}},
+        {"type": "text", "text":
+            "For each invoice line item, state whether the charged rate matches "
+            "the contract. Cite the contract clause for every rate you reference."},
+    ]}],
+)
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Ops as AP clerk
+    participant App as Intake agent
+    participant Files as Files API
+    participant Claude as Claude
+    Ops->>App: invoice.png plus msa.pdf
+    App->>Files: upload both, get file_ids
+    Files-->>App: invoice_id, contract_id
+    App->>Claude: Pass 1 image plus schema
+    Claude-->>App: structured fields JSON
+    App->>Claude: Pass 2 contract cited plus invoice
+    Claude-->>App: findings with page citations
+    App-->>Ops: record plus evidence on contract page 14
+```
+
+The clerk gets back a structured record *and* a list of findings, each linked to the exact contract page — a human can spot-check "rate mismatch on line 3, cited to p.14" in seconds instead of re-reading the contract.
+
+### Validation
+
+- **Cost-budget test:** assert `count_tokens` runs *before* every real call and the per-document `input_tokens` is logged — a 50-page contract must be budgeted as text + 50 page-images, not as text alone.
+- **Cache test:** fire the second invoice of the month and assert `usage.cache_read_input_tokens > 0` on the contract prefix — if it's zero, the contract is being re-read every invoice (check that the document block bytes/`file_id` and the prefix are byte-identical).
+- **Citation test:** assert every "the contract says" finding carries a `citations` array with a `page_location`; a finding with no citation is an ungrounded claim and must be rejected.
+- **Source-type test:** confirm the contract is referenced by `file_id`, not re-embedded as base64, across all invoices that month.
+
+### Common pitfalls
+
+- Embedding the contract as **base64 on every invoice** — re-uploads megabytes per turn and forfeits caching (§22.2).
+- Trying to get **citations and structured JSON in one call** — returns 400; you must split into two passes (§22.4).
+- Forgetting the **Files API beta header** on either the upload or the message — a frequent 400 (§22.2).
+- Budgeting a PDF as **text-only** and being surprised by the bill — each page also costs image tokens (§22.5).
+- Estimating tokens with **`tiktoken`** instead of `count_tokens` — wrong for Claude and blind to visual tokens (§22.5).
+
+## 22.7 Production Focus — Key Takeaways
+
+| Concept | What production work demands |
+|---|---|
+| Content blocks | `content` is an ordered list; `image` (JPEG/PNG/GIF/WebP) and `document` (PDF text + layout) carry non-text input (§22.1). |
+| Source types | base64 (one-shot), `url` (hosted), `file_id` (reused across turns/requests). Bedrock/Vertex = base64 only (§22.2). |
+| The base64 trap | base64 bytes re-send on every turn; switch reused assets to the Files API (`file_id`) to stop the bloat (§22.2). |
+| Prompt order | Put documents/images **before** the text question; label multiple inputs `Image 1`, `Image 2` (§22.3). |
+| Citations | `citations: {enabled: true}` → `cited_text` + page/char location; all-or-nothing; **incompatible with structured outputs** (§22.4). |
+| Image cost | `ceil(w/28) × ceil(h/28)` visual tokens; high-res tier (Opus 4.7+) up to 4784 vs 1568 standard — downsample if fidelity isn't needed (§22.5). |
+| PDF cost | Each page bills **text (1,500–3,000) + image tokens**; 600-page / 32 MB limit (100 pages on 200K models) (§22.5). |
+| Token counting | Use `count_tokens` for an exact, model-specific count; never `tiktoken` (wrong for Claude, blind to visual tokens) (§22.5). |
+
+> **Beyond the foundations exam.** Vision and token counting are out of scope for certification, but every production document agent lives or dies on them. If you can build the intake agent above — right source type, ordered blocks, citations for evidence, two passes around the structured-output incompatibility, and a token budget that counts pixels and pages — you can ship a document agent that is correct, auditable, and affordable.
 
 # Chapter 23: The Claude Agent SDK
 
-> *Reference — beyond the exam scope.* Docs: [Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview).
+> *Reference — beyond the exam scope.* Docs: [Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview) · [Agent loop](https://code.claude.com/docs/en/agent-sdk/agent-loop) · [Sessions](https://code.claude.com/docs/en/agent-sdk/sessions) · [Permissions](https://code.claude.com/docs/en/agent-sdk/permissions) · [Hooks](https://code.claude.com/docs/en/agent-sdk/hooks).
 
-The **Claude Agent SDK** (Python `claude-agent-sdk`, TypeScript `@anthropic-ai/claude-agent-sdk`) is **Claude Code as a library** — the same built-in tools, agent loop, and context management, callable from your own code. (It was formerly the "Claude Code SDK"; `claude -p` is its CLI form.)
+The **Claude Agent SDK** (Python `claude-agent-sdk`, TypeScript `@anthropic-ai/claude-agent-sdk`) is **Claude Code as a library** — the same built-in tools, agent loop, and context management that power the Claude Code CLI, callable from your own code. (It was formerly the "Claude Code SDK"; `claude -p` is its CLI form.)
 
-- **Agent loop** — gather context → take action (tools) → verify → repeat until done. The SDK runs the loop *in your process*; you don't hand-write it.
-- **Built-in tools** — Read/Write/Edit/Bash/Grep/Glob and more, ready to use.
-- **Subagents** — `AgentDefinition`s for isolated/parallel/specialized work that protects the main context.
-- **Hooks** — lifecycle callbacks (PreToolUse, PostToolUse, session start/end, compaction) to log, block, modify, or gate actions.
-- **Sessions** — persistent state; resume with full context or fork to explore alternatives.
-- **MCP & permissions** — declare MCP servers; per-tool allow/deny/ask with custom callbacks (human-in-the-loop).
+Chapter 3 established the *foundations* you need for the exam: the agentic loop and its only reliable stop signal (`stop_reason == "end_turn"`), hub-and-spoke orchestration, explicit context passing to subagents, hooks-vs-prompts, and least privilege. Chapter 15 generalised the idea of a **harness** — everything you write *around* the model — and Chapter 24 covers **Managed Agents**, where Anthropic runs the loop and a sandbox for you. **This chapter sits between them: it is the SDK in depth — the harness Anthropic already wrote, running in *your* process, and how to drive it in production.** Where Chapter 3 asked "what is an agent," this chapter asks "what exactly does `query()` do, and how do I operate it at scale."
 
-**Three surfaces, one mental model:** **Client SDK** (`anthropic`) = raw Messages API, you write the loop. **Agent SDK** = the loop + tools run in *your* process. **Managed Agents** (Chapter 24) = Anthropic hosts the loop *and* a sandbox. Pick by who runs the loop and who provides the compute.
+This is advanced, beyond-exam material. The framing throughout is **production agent engineering**: not the smallest example that runs, but the decisions that decide whether an SDK agent is cheap, safe, observable, and resumable when it runs unattended.
 
----
+This chapter covers:
+
+- **The two entrypoints and the message stream** (§23.1) — `query()` vs `ClaudeSDKClient`, and the typed events the SDK yields.
+- **Sessions and the session lifecycle** (§23.2) — persistence to disk, capture, resume, continue, and fork.
+- **The built-in harness** (§23.3) — turns, automatic compaction, budgets, and how the loop ends.
+- **Permissions, hooks, and the precedence chain** (§23.4) — the deterministic control surface the SDK gives you.
+- **Custom tools and MCP wiring** (§23.5) — in-process tools via `@tool` and external servers via `mcp_servers`.
+- **End-to-end case study** (§23.6) — a CI triage agent built on the SDK.
+- **Key takeaways** (§23.7).
+
+## 23.1 Two Entrypoints, One Message Stream
+
+The SDK exposes exactly two ways to start an agent, and choosing correctly is the first production decision.
+
+```mermaid
+flowchart TD
+    Need[Need to run an agent] --> Multi{More than one prompt<br/>sharing context?}
+    Multi -->|no, one task| Q[Use query<br/>async iterator, one shot]
+    Multi -->|yes, multi-turn| C[Use ClaudeSDKClient<br/>holds the session]
+    Q --> Stream[Iterate the message stream]
+    C --> Stream
+    Stream --> Init[SystemMessage init<br/>session_id, model]
+    Init --> Turns[AssistantMessage and UserMessage<br/>one pair per turn]
+    Turns --> Result[ResultMessage<br/>subtype, cost, usage]
+```
+
+**`query()`** is an async generator. You give it a `prompt` and `ClaudeAgentOptions`, and you `async for` over the messages it yields until a `ResultMessage` arrives. It is the right tool for one-shot, independent tasks — a CI job, a cron script, a single "fix the failing tests" run. Each call is self-contained.
+
+```python
+import asyncio
+from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
+
+async def main():
+    async for message in query(
+        prompt="Find and fix the bug in auth.py",
+        options=ClaudeAgentOptions(allowed_tools=["Read", "Edit", "Bash"]),
+    ):
+        if isinstance(message, ResultMessage) and message.subtype == "success":
+            print(message.result)
+
+asyncio.run(main())
+```
+
+The TypeScript shape is the same generator pattern with camelCase options:
+
+```typescript
+import { query } from "@anthropic-ai/claude-agent-sdk";
+
+for await (const message of query({
+  prompt: "Find and fix the bug in auth.ts",
+  options: { allowedTools: ["Read", "Edit", "Bash"] },
+})) {
+  if (message.type === "result" && message.subtype === "success") {
+    console.log(message.result);
+  }
+}
+```
+
+**`ClaudeSDKClient`** (Python) is a long-lived object that holds a session across multiple `client.query()` calls — each new prompt automatically continues the same conversation, with no session-ID handling on your part. Use it for multi-turn chat in one process, or whenever a follow-up must see what the previous turn did. Use it as an async context manager so connect/teardown are handled, and call `client.receive_response()` to iterate the messages for the current query (it stops after the `ResultMessage`). It also exposes `interrupt()` to cancel mid-task and `set_permission_mode()` to tighten or loosen permissions live.
+
+```python
+from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
+
+async with ClaudeSDKClient(options=ClaudeAgentOptions(allowed_tools=["Read", "Edit"])) as client:
+    await client.query("Analyze the auth module")
+    async for msg in client.receive_response():
+        ...
+    await client.query("Now refactor it to use JWT")   # same session, full context
+    async for msg in client.receive_response():
+        ...
+```
+
+> **TypeScript has no client object.** Instead of `ClaudeSDKClient`, the TS SDK keeps each `query()` call separate and you pass `continue: true` on later calls to pick up the most recent session in the directory. (The experimental V2 `createSession()` API was removed in TS SDK 0.3.142 — use `query()` plus session options.)
+
+**The message stream is the contract.** Whichever entrypoint you use, the SDK yields the same five core message types, and reading them correctly is what separates a robust integration from a fragile one:
+
+| Message | When it fires | What you do with it |
+|---|---|---|
+| `SystemMessage` (`subtype="init"`) | First message of the session | Capture `session_id` (Python: `message.data["session_id"]`; TS: `message.session_id`). |
+| `AssistantMessage` | After each Claude response | Progress: text + which tools were requested this turn. |
+| `UserMessage` | After each tool execution | The tool result fed back to Claude (also your own streamed inputs). |
+| `StreamEvent` | Only with partial messages enabled | Token-level deltas for live UIs. |
+| `ResultMessage` | End of the loop | The terminal record: `subtype`, `result`, `total_cost_usd`, `usage`, `session_id`. |
+
+**Pitfall — breaking on the result.** A few trailing system events (e.g. `prompt_suggestion`) can arrive *after* the `ResultMessage`. Iterate the stream to completion rather than `break`ing the moment you see a result, or you may cancel the generator mid-flush. **Pitfall — checking message types loosely.** In Python use `isinstance(message, ResultMessage)`; in TypeScript check `message.type === "result"`, and remember TS wraps the API message so content blocks live at `message.message.content`, not `message.content`.
+
+## 23.2 Sessions and the Session Lifecycle
+
+A **session** is the conversation history the SDK accumulates while the agent works: your prompt, every tool call, every tool result, and every response. **The SDK writes it to disk automatically** — in Python always, in TypeScript unless you set `persistSession: false`. Returning to a session restores full context: files already read, analysis already done, decisions already made. (Sessions persist the *conversation*, not the filesystem — to snapshot and revert file changes, use file checkpointing.)
+
+```mermaid
+flowchart TD
+    Start[First query] --> Run[Agent runs turns]
+    Run --> Write[SDK writes JSONL<br/>under encoded cwd]
+    Write --> Cap[Capture session_id<br/>from ResultMessage]
+    Cap --> Choice{Return later?}
+    Choice -->|same session, add on| Resume[resume with the id]
+    Choice -->|most recent, no id| Cont[continue conversation]
+    Choice -->|branch, keep original| Fork[resume plus fork_session]
+    Fork --> NewId[New session_id<br/>original untouched]
+```
+
+**Capture the ID** from `ResultMessage.session_id` (present on every result, success or error). **Resume** by passing that id to `resume` — the agent picks up with full prior context. Common reasons: follow up on a completed analysis without re-reading files; recover from an `error_max_turns` or `error_max_budget_usd` stop by resuming with a higher limit; or restore a conversation after your process restarted.
+
+```python
+# First run: capture the id
+session_id = None
+async for message in query(prompt="Analyze the auth module", options=opts):
+    if isinstance(message, ResultMessage):
+        session_id = message.session_id
+
+# Later: resume with full context
+async for message in query(
+    prompt="Now implement the refactoring you suggested",
+    options=ClaudeAgentOptions(resume=session_id, allowed_tools=["Read", "Edit", "Write"]),
+):
+    ...
+```
+
+**Continue vs resume vs fork** is a frequently tested distinction:
+
+- **Continue** (`continue_conversation=True` / `continue: true`) picks up the *most recent* session in the current directory — no ID tracking. Good when the app runs one conversation at a time.
+- **Resume** takes a *specific* session ID. Required for multi-user apps (one session per user) or returning to a session that is not the most recent.
+- **Fork** (`resume=id` **plus** `fork_session=True`) creates a *new* session that starts with a copy of the original's history and diverges. The original's ID and history stay unchanged, so you can explore an alternative ("what if we used OAuth2?") while keeping the option to return to the original thread.
+
+**The #1 resume pitfall: a mismatched `cwd`.** Sessions are stored at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`, where `<encoded-cwd>` is the absolute working directory with every non-alphanumeric character replaced by `-`. If your resume call runs from a different directory, the SDK looks in the wrong place and silently starts fresh. The session file must also exist on the current machine.
+
+**Resuming across hosts** (CI workers, ephemeral containers, serverless) therefore needs deliberate handling. You have two options, and the second is usually more robust: (a) mirror the JSONL file to shared storage and restore it to the same path before resuming (a `SessionStore` adapter automates this); or (b) **don't rely on transcript resume at all** — capture the results you need (analysis output, decisions, diffs) as application state and feed them into a fresh session's prompt. Shipping transcript files around is fragile; passing forward a small, structured summary is the production pattern (this is the externalised-state principle from Chapter 15, applied to sessions). Both SDKs also expose `list_sessions()` / `get_session_messages()` for building custom pickers, cleanup, or transcript viewers.
+
+## 23.3 The Built-in Harness: Turns, Compaction, and Stopping
+
+Chapter 15 made the point that an agent is the model *plus* a harness. **The Agent SDK's value is that it ships a production harness so you don't hand-write the loop.** Understanding what that harness does on each turn is how you debug and tune it.
+
+A **turn** is one round trip inside the loop: Claude produces output that includes tool calls, the SDK executes those tools, and the results feed back to Claude — *without yielding control to your code*. Turns repeat until Claude produces a response with **no** tool calls, at which point the loop ends and you get the `ResultMessage`. A "what files are here?" prompt might be one turn; "refactor the auth module and update the tests" might be dozens.
+
+**Context accumulates within a session and does not reset between turns** — system prompt, tool definitions, conversation history, every tool input and output. The stable prefix (system prompt, tool schemas, CLAUDE.md) is **automatically prompt-cached**, so repeated turns bill the prefix at a fraction of full cost. This is the SDK doing the Chapter 18 caching work for you; you mainly have to avoid sabotaging it (don't churn the system prompt every turn).
+
+**Automatic compaction** is the harness feature that makes long runs possible. When the context window approaches its limit, the SDK summarises older history to free space, keeping recent exchanges and key decisions, and emits a `SystemMessage` with `subtype: "compact_boundary"`. The trade-off is real: **compaction can summarise away specific early instructions.** Two consequences for production:
+
+- **Put persistent rules in CLAUDE.md, not the opening prompt.** CLAUDE.md is re-injected on every request (loaded via `setting_sources` / `settingSources`), so it survives compaction; an instruction buried in turn 1 of the rolling history may not. You can even add a free-form "what to preserve when summarising" section that the compactor reads like any other context.
+- **Use the `PreCompact` hook** to archive the full transcript before it is summarised, if you need an audit trail of what was dropped.
+
+**Stopping** is where SDK agents most often go wrong in production, and the rule is exactly Chapter 3's, made concrete. The *primary* exit is the model finishing on its own (the final turn has no tool calls). On top of that you set **secondary guardrails** that bound the blast radius if the model never finishes:
+
+- `max_turns` / `maxTurns` — caps tool-use round trips. Hitting it yields `ResultMessage` with `subtype: "error_max_turns"`.
+- `max_budget_usd` / `maxBudgetUsd` — caps spend. Hitting it yields `subtype: "error_max_budget_usd"`.
+
+```mermaid
+flowchart TD
+    R[ResultMessage] --> S{Inspect subtype}
+    S -->|success| Use[Read result<br/>field is present]
+    S -->|error_max_turns| Resume[Resume session<br/>with higher limit]
+    S -->|error_max_budget_usd| Cost[Stop or raise budget]
+    S -->|error_during_execution| Retry[API or cancel failure<br/>retry or alert]
+    Use --> Track[Record cost, usage, session_id]
+    Resume --> Track
+    Cost --> Track
+    Retry --> Track
+```
+
+**Always branch on `subtype` before reading `result`.** The `result` text field is present **only** on `success`; every other subtype (`error_max_turns`, `error_max_budget_usd`, `error_during_execution`, `error_max_structured_output_retries`) omits it but still carries `total_cost_usd`, `usage`, `num_turns`, and `session_id` so you can track cost and resume. There is also a `stop_reason` (`end_turn`, `max_tokens`, `refusal`, …); checking `stop_reason == "refusal"` is how you detect the model declining a request. **Pitfall:** treating an iteration cap as the *normal* exit. If your agent routinely hits `max_turns`, the task is under-decomposed (Chapter 15) — the fix is to break the work into smaller units or delegate to subagents, not just to raise the limit.
+
+## 23.4 Permissions, Hooks, and the Precedence Chain
+
+Chapter 3 framed the headline rule: **deterministic business/safety rules belong in code, not the prompt.** The SDK gives you three layers of deterministic control, and in production you need to know the exact order they are evaluated, because that order decides which layer wins.
+
+```mermaid
+flowchart TD
+    Req[Claude requests a tool] --> Hooks[1. Hooks<br/>PreToolUse can deny outright]
+    Hooks --> Deny[2. Deny rules<br/>disallowed_tools, settings]
+    Deny --> Ask[3. Ask rules<br/>route to callback]
+    Ask --> Mode[4. Permission mode]
+    Mode --> Allow[5. Allow rules<br/>allowed_tools, settings]
+    Allow --> Cb[6. canUseTool callback<br/>runtime decision]
+    Cb --> Exec[Execute the tool]
+    Hooks -. deny .-> Blocked[Blocked]
+    Deny -. match .-> Blocked
+```
+
+**The three control layers, from coarsest to finest:**
+
+1. **Allow / deny rules** — `allowed_tools` / `allowedTools` pre-approve listed tools so they run without prompting; `disallowed_tools` / `disallowedTools` block tools regardless of mode. A bare name (`"Bash"`) removes the tool from Claude's context entirely; a scoped rule (`"Bash(rm *)"`) keeps `Bash` but denies matching calls in *every* mode, including `bypassPermissions`. MCP globs are allowed only after a literal server prefix (`mcp__github__get_*`); an unanchored `"*"` in `allowed_tools` is ignored with a warning.
+2. **Permission mode** — global policy for tools not covered by a rule: `default` (unmatched tools fall to your callback; no callback means deny), `acceptEdits` (auto-approve file edits and common fs commands inside the working dir), `plan` (explore and propose without editing — file edits never auto-approve), `dontAsk` (deny anything not pre-approved; never prompts), and `bypassPermissions` (approve everything that reaches it — for isolated CI/containers only). You can change it mid-session with `set_permission_mode()`, e.g. start in `default` and switch to `acceptEdits` once you trust the approach.
+3. **`canUseTool` callback** — the runtime decision for anything unresolved. It receives `(tool_name, input_data, context)` and returns allow or deny:
+
+```python
+from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
+
+async def can_use_tool(tool_name, input_data, context):
+    if tool_name == "Bash":
+        # Approve with changes: scope every command into a sandbox dir
+        safe = {**input_data, "command": input_data["command"].replace("/tmp", "/tmp/sandbox")}
+        return PermissionResultAllow(updated_input=safe)
+    return PermissionResultDeny(message="Not permitted; try a read-only approach instead.")
+```
+
+The callback can do more than yes/no: **approve with changes** (sanitise paths, add constraints — Claude isn't told you edited the input), **suggest an alternative** (deny with a message that guides Claude), or **approve and remember** (echo a `PermissionUpdate` suggestion so matching calls skip the prompt next time). In TypeScript the return shape is `{ behavior: "allow", updatedInput }` / `{ behavior: "deny", message }`.
+
+**Why the order matters in practice.** Two facts catch people out. First, **`allowed_tools` does not constrain `bypassPermissions`** — that mode approves *every* tool, not just the listed ones, because unlisted tools fall through to the mode check. If you need bypass speed but want specific tools blocked, use `disallowed_tools` (deny rules are checked *before* the mode). Second, **hooks run first** and a `deny` from a hook is final, which is why hooks — not the callback — are the right home for hard, non-negotiable rules.
+
+**Hooks** are the deterministic version of "the model usually obeys." A `PreToolUse` hook fires *before* a tool runs and can block, modify, or approve it; it returns a `hookSpecificOutput` with a `permissionDecision`:
+
+```python
+from claude_agent_sdk import HookMatcher
+
+async def block_secret_writes(input_data, tool_use_id, context):
+    path = input_data["tool_input"].get("file_path", "")
+    if path.split("/")[-1] in {".env", "secrets.yaml"}:
+        return {"hookSpecificOutput": {
+            "hookEventName": input_data["hook_event_name"],
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "Refusing to write secret files.",
+        }}
+    return {}   # empty = allow unchanged
+
+options = ClaudeAgentOptions(
+    hooks={"PreToolUse": [HookMatcher(matcher="Write|Edit", hooks=[block_secret_writes])]}
+)
+```
+
+Key production facts about hooks: the `matcher` filters by **tool name only** (to filter by path, check `tool_input` inside the callback); when several hooks match, they run in parallel and **`deny` always wins**; hooks run in *your* process and **don't consume context**; and a `PostToolUse` hook can rewrite a tool's output (`updatedToolOutput`) before Claude sees it — the natural place to normalise or redact results. **Pitfall:** hooks may not fire when the agent hits `max_turns`, because the session ends first — never rely on a `Stop` hook for cleanup that *must* happen. **Pitfall (Python):** `SessionStart`/`SessionEnd` aren't available as Python callback hooks; load them as shell-command hooks via `setting_sources=["project"]` instead.
+
+## 23.5 Custom Tools and MCP Wiring
+
+Built-in tools (Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch, Agent, …) cover a lot, but production agents need *your* systems. The SDK offers two paths, and choosing between them is a real architectural decision.
+
+**In-process custom tools** — define a function with the `@tool` decorator and expose it through `create_sdk_mcp_server`. The tool runs *inside your Python/TypeScript process*, sharing memory and connections — no subprocess, no network hop. This is the lowest-latency, best-isolated option for tools you own:
+
+```python
+from claude_agent_sdk import tool, create_sdk_mcp_server, ClaudeAgentOptions
+
+@tool("refund", "Issue a refund for an order", {"order_id": str, "amount": float})
+async def refund(args):
+    result = await billing.refund(args["order_id"], args["amount"])
+    return {"content": [{"type": "text", "text": f"Refunded {result.id}"}]}
+
+billing_server = create_sdk_mcp_server(name="billing", version="1.0.0", tools=[refund])
+
+options = ClaudeAgentOptions(
+    mcp_servers={"billing": billing_server},
+    allowed_tools=["mcp__billing__refund"],   # note the mcp__<server>__<tool> naming
+)
+```
+
+**External MCP servers** — declare a command (stdio) or URL (HTTP) and the SDK runs/connects to it. This is how you plug in the ecosystem (databases, browsers like Playwright, GitHub) without writing the integration:
+
+```python
+options = ClaudeAgentOptions(
+    mcp_servers={"playwright": {"command": "npx", "args": ["@playwright/mcp@latest"]}}
+)
+```
+
+**The trade-off:** in-process tools are fastest and keep secrets in your process, but they only run code you wrote in the host language; external MCP servers are reusable and language-agnostic but add a process/network boundary and their own auth. A subtle cost: **every MCP server's tool schemas can consume context on every request.** The SDK defers MCP schemas via **tool search** by default (loading them on demand), but when tool search is off — or on Vertex AI or a non-first-party base URL — a few servers with many tools each can burn significant context before the agent does any work. Scope subagents' `tools` to the minimum, and prefer tool search for large servers.
+
+MCP tools name themselves `mcp__<server>__<action>` (the `<server>` segment is the key you used in `mcp_servers`). That naming is what your `allowed_tools` entries, hook matchers (`^mcp__`), and deny rules target.
+
+## 23.6 End-to-End Case Study: A CI Failure-Triage Agent
+
+The pieces above only matter assembled. Here is a realistic SDK agent — distinct from Chapter 3's refund agent and Chapter 15's overnight migrator — that runs **inside a CI pipeline** to triage a failed build: reproduce the failure, find the cause, propose a fix on a branch, and either pass the diff to humans or stop. It must be fully autonomous (no interactive prompts), strictly bounded in cost, deterministically forbidden from touching certain files, and observable from the pipeline logs.
+
+### Requirements
+
+- Triggered headlessly on a red build; **no human is at a keyboard**, so it cannot fall back to a permission prompt.
+- May read the repo, run the test suite, and `git` on a *new* branch — but **must never** push to `main` or modify CI config or secrets. This is enforced in code.
+- **Hard cost ceiling:** the job must stop at a fixed dollar budget rather than run away on a flaky test.
+- Every action must be **auditable** from the CI logs, and the result must say plainly whether a fix was produced.
+- If it can't fix the build within budget, it must **resume cleanly** in a follow-up job rather than start over.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    CI([CI red build]) --> Q[query with options]
+    Q --> Mode[permission_mode dontAsk<br/>no interactive fallback]
+    Mode --> Allow[allowed_tools<br/>Read, Grep, Bash, Edit, Agent]
+    Allow --> Hook{{PreToolUse hook<br/>block main push and CI files}}
+    Hook --> Loop[Built-in agent loop<br/>reproduce, locate, fix]
+    Loop --> Sub[Agent tool delegates<br/>log-analysis subagent]
+    Loop --> Budget{{max_budget_usd<br/>secondary guardrail}}
+    Budget --> Res[ResultMessage<br/>branch the subtype]
+    Res --> Done([Fix on branch or clean stop])
+```
+
+The SDK supplies the loop, the tools, and compaction; **the hook supplies the non-negotiable rules and `dontAsk` removes the interactive escape hatch** — both deterministic, neither in the prompt.
+
+### Implementation
+
+Configure a headless, bounded, deterministically-fenced agent. `dontAsk` is the key headless choice: anything not pre-approved is *denied* rather than left waiting on a `canUseTool` callback that no human will answer.
+
+```python
+from claude_agent_sdk import query, ClaudeAgentOptions, HookMatcher, ResultMessage, AgentDefinition
+
+FORBIDDEN = ("git push", "git push origin main", ".github/workflows", "secrets")
+
+async def guard(input_data, tool_use_id, context):
+    if input_data["hook_event_name"] != "PreToolUse":
+        return {}
+    blob = str(input_data.get("tool_input", {}))
+    if any(f in blob for f in FORBIDDEN):
+        return {"hookSpecificOutput": {
+            "hookEventName": input_data["hook_event_name"],
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "Pushing main, editing CI, or touching secrets is forbidden.",
+        }}
+    return {}
+
+options = ClaudeAgentOptions(
+    system_prompt="You triage CI failures. Reproduce, find the cause, fix on a new branch. Never claim a fix you have not run.",
+    allowed_tools=["Read", "Grep", "Glob", "Bash", "Edit", "Agent"],
+    permission_mode="dontAsk",          # headless: deny instead of prompt
+    max_budget_usd=5.00,                # hard cost ceiling -> error_max_budget_usd
+    setting_sources=["project"],        # load CLAUDE.md conventions; survives compaction
+    agents={                            # least-privilege subagent for noisy log analysis
+        "log-analyst": AgentDefinition(
+            description="Reads CI logs and extracts the failing test and stack trace.",
+            prompt="Return the failing test name and root-cause stack frame as text.",
+            tools=["Read", "Grep"],     # cannot edit or run commands
+        )
+    },
+    hooks={"PreToolUse": [HookMatcher(matcher="Bash|Edit|Write", hooks=[guard])]},
+)
+```
+
+Drive it and branch on the terminal subtype — the production part most demos skip:
+
+```python
+async def triage():
+    session_id = None
+    async for message in query(prompt="The build is red. Triage and fix it.", options=options):
+        if isinstance(message, ResultMessage):
+            session_id = message.session_id
+            if message.subtype == "success":
+                print(f"FIX READY on branch:\n{message.result}")
+            elif message.subtype == "error_max_budget_usd":
+                # Out of budget, not out of progress: resume in a follow-up job.
+                print(f"BUDGET HIT. Resume session {session_id} to continue.")
+            else:
+                print(f"STOPPED: {message.subtype}")
+            if message.total_cost_usd is not None:
+                print(f"cost=${message.total_cost_usd:.4f} turns={message.num_turns}")
+    return session_id
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor CI as CI runner
+    participant SDK as Agent SDK harness
+    participant Mo as Model
+    participant Gd as PreToolUse guard
+    participant La as log-analyst subagent
+    CI->>SDK: query, the build is red
+    SDK->>Mo: prompt plus tools
+    Mo-->>SDK: tool_use Agent, log-analyst
+    SDK->>La: isolated context, CI log path
+    La-->>SDK: failing test plus stack frame
+    SDK->>Mo: tool_result, the cause
+    Mo-->>SDK: tool_use Bash, git push origin main
+    SDK->>Gd: evaluate before executing
+    Gd-->>SDK: deny, pushing main is forbidden
+    SDK->>Mo: tool_result denied plus reason
+    Mo-->>SDK: tool_use Edit fix plus Bash run tests on branch
+    Mo-->>SDK: end_turn
+    SDK-->>CI: ResultMessage success, fix on branch
+```
+
+Notice what the harness — not the model — guaranteed: the forbidden `git push origin main` was **blocked by the hook before execution** and came back as a result the model could route around (it switched to a branch); the noisy log analysis ran in an **isolated subagent** so the main context never filled with raw log lines; and had the model looped, `max_budget_usd` would have stopped it with a resumable `error_max_budget_usd` rather than an open-ended bill.
+
+### Validation
+
+- **Headless test:** run with no `canUseTool` callback and confirm an unapproved tool is *denied* (not hung) — proving `dontAsk` removed the interactive fallback.
+- **Guard test:** prompt the agent to push `main` or edit `.github/workflows`; assert the hook denies it *as a result* and the loop continues on a branch.
+- **Budget test:** point at a permanently flaky suite; assert the run stops at `error_max_budget_usd` and that resuming the captured `session_id` continues instead of restarting.
+- **Least-privilege test:** assert the `log-analyst` subagent cannot call `Bash` or `Edit`.
+
+### Common pitfalls
+
+- Leaving `permission_mode` at `default` in a headless job — every unapproved tool stalls forever waiting on a callback no one will answer (use `dontAsk`).
+- Putting "don't push to main" in the **system prompt** instead of the hook — probabilistic, not guaranteed (§23.4).
+- Treating `error_max_budget_usd` as failure and discarding the session instead of **resuming** it (§23.2).
+- Forgetting that `setting_sources=["project"]` is what loads CLAUDE.md — without it, your conventions vanish at the first compaction (§23.3).
+
+## 23.7 Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| Two entrypoints | `query()` for one-shot async-iterator tasks; `ClaudeSDKClient` (Python) to hold a multi-turn session. TS uses `query()` + `continue: true` (§23.1). |
+| Message stream | Five types: `SystemMessage(init)` → `Assistant`/`User` per turn → `ResultMessage`. Iterate to completion; branch on `result.subtype` (§23.1, §23.3). |
+| Sessions | Persisted as JSONL under the encoded `cwd`; capture `session_id`, then **resume** (by id), **continue** (most recent), or **fork** (`resume`+`fork_session`). Mismatched `cwd` silently breaks resume (§23.2). |
+| Built-in harness | The SDK runs the loop, prompt-caches the stable prefix, and **auto-compacts** at the context limit — put durable rules in CLAUDE.md, not turn 1 (§23.3). |
+| Stopping | Primary exit = model finishes (no tool calls); `max_turns`/`max_budget_usd` are *secondary* guardrails surfacing as `error_*` subtypes you resume from (§23.3). |
+| Control surface | Precedence: hooks → deny rules → ask rules → mode → allow rules → `canUseTool`. Hard rules go in hooks (`deny` wins, runs first); `bypassPermissions` ignores `allowed_tools` (§23.4). |
+| Tools & MCP | In-process `@tool` + `create_sdk_mcp_server` (fast, secrets stay local) vs external `mcp_servers` (reusable, language-agnostic). MCP tools are `mcp__server__action`; watch schema context cost (§23.5). |
+
+> **Beyond the exam, built on it.** Chapter 3 gives you the agent concepts the exam tests; this chapter is those concepts as the SDK actually implements them — the loop is `query()`, the hooks are real callbacks with a precedence order, the context management is automatic compaction, and "least privilege" is a six-step rule chain. Master this and you can ship an SDK agent that is cheap, safe, observable, and resumable — then graduate to **Managed Agents** (Chapter 24) when you want Anthropic to run the loop and the sandbox for you.
 
 # Chapter 24: Managed Agents
 
 > *Reference — beyond the exam scope.* Docs: [Managed Agents overview](https://platform.claude.com/docs/en/managed-agents/overview). Beta header `managed-agents-2026-04-01`.
 
-**Managed Agents** is Anthropic-hosted: Anthropic runs the agent loop **and** provisions a per-session container where the agent's tools (bash, file ops, code) execute. You supply config and drive an event stream.
+Chapters 1–13 taught you to *build* an agent: the loop, tools, hooks, subagents, context. **This chapter is about who runs that agent in production.** When you ship an agent, you make an infrastructure decision that the Foundations exam never raises but every real deployment forces: do you run the agentic loop and its tool sandbox **yourself** (the Agent SDK from Chapter 23, hosted on your own compute), or do you let **Anthropic host both** (Managed Agents)? This is a *control-vs-convenience* trade-off, and getting it wrong is expensive in either direction — too much convenience and you lose the ability to inspect and constrain a system that spends money and touches data; too much control and you rebuild sandboxing, secret injection, retries, and observability that a managed platform already solved.
 
-**Object model (memorize this):**
-- **Agent** (`/v1/agents`) — a *persisted, versioned* config: `model`, `system`, `tools`, `mcp_servers`, `skills`. **Create once, reference by ID.**
-- **Session** (`/v1/sessions`) — one run that references an agent by ID + an environment. **Every run.**
-- **Environment** (`/v1/environments`) — a reusable container template.
+This chapter is **forward-looking**. The object model, the create-once rule, and the SSE event shapes below are **established** in the `managed-agents-2026-04-01` beta. The *operational practices* — how you scale, observe, and choose between hosting models — are **evolving**; treat them as a reasoning framework, not a frozen API contract. By the end you should be able to:
 
-> ⚠️ **The #1 rule:** `model`/`system`/`tools` live on the **agent**, never the session; the session only takes a pointer (`agent: {id, version}`). Create the agent once in setup and reuse the ID — calling `agents.create()` per run is the classic anti-pattern.
+- **Place the three runtimes on one axis** (§24.1) — Client SDK, Agent SDK, Managed Agents — and pick by "who runs the loop, who owns the compute."
+- **Reason about the object model** (§24.2) — Agent vs Session vs Environment, and *why* config lives on the agent, never the session.
+- **Drive a session correctly** (§24.3) — open-stream-before-send, reconnect-with-dedupe, and webhooks vs held-open streams.
+- **Choose a hosting topology** (§24.4) — fully managed vs self-hosted sandbox, and what each buys and costs.
+- **Operate agents in production** (§24.5) — vaults, memory stores, scheduled deployments, and observability.
 
-**Key capabilities:**
-- **Events & streaming** — an SSE stream (`agent.message`, `agent.thinking`, `agent.tool_use`, `session.status_*`); open the stream *before* sending, and reconnect-with-dedupe (SSE has no replay).
-- **Multi-agent** — `multiagent: {type: "coordinator", agents: [...]}`; a coordinator delegates to subagent *threads* that share the container.
-- **Outcomes** — send a `user.define_outcome` event with a rubric; a separate grader runs an iterate → grade → revise loop until it passes.
-- **Memory stores** — workspace-scoped persistent docs mounted into the container, surviving sessions (versioned, redactable).
-- **Vaults** — credential store (MCP OAuth with auto-refresh, static bearer, env-var secrets); secrets are injected at egress and never visible in the sandbox.
-- **Scheduled deployments** — cron-fire sessions automatically (this is what powers the cloud "routines").
-- **Self-hosted sandboxes** — `config: {type: "self_hosted"}` runs tool execution in *your* infra via an outbound-polling worker; Anthropic still runs the loop.
-- **Webhooks** — HMAC-signed state-change notifications instead of holding a stream open.
+§24.6 builds an end-to-end case study — a fleet of production code-review agents — and §24.7 distills the decisions.
 
----
+## 24.1 Where Managed Agents Sit: One Axis, Three Runtimes
 
-**Example (Python):**
+Anthropic exposes three ways to run model-driven work. They are not competitors; they are points on a single axis defined by **two questions: who executes the agentic loop, and who provides the tool-execution compute (the sandbox)?**
+
+```mermaid
+flowchart TD
+    Start[I need to run an agent] --> Q1{Who runs<br/>the loop?}
+    Q1 -->|I write the while-loop| Client[Client SDK<br/>anthropic<br/>raw Messages API]
+    Q1 -->|Library runs it in my process| SDK[Agent SDK<br/>loop plus tools<br/>in my process]
+    Q1 -->|Anthropic runs it| Q2{Who owns the<br/>sandbox compute?}
+    Q2 -->|Anthropic-hosted container| Managed[Managed Agents<br/>fully hosted]
+    Q2 -->|My infra via polling worker| SelfHost[Managed Agents<br/>self-hosted sandbox]
+    Client -. more control, more glue code .-> SDK
+    SDK -. less ops, less control .-> Managed
+```
+
+| Runtime | Who runs the loop | Who owns compute | You write | You operate |
+|---|---|---|---|---|
+| **Client SDK** (`anthropic`) | You | You | The `while` on `stop_reason`, every tool, retries, context trimming | Everything |
+| **Agent SDK** (Ch 23) | The library, **in your process** | You | Config + tool implementations; loop is provided | Your host, scaling, logs |
+| **Managed Agents** | **Anthropic** | **Anthropic** (or your infra, self-hosted) | Config + an event stream | Almost nothing (fully managed) |
+
+**Why this matters for the exam mental model:** Chapter 23 said "Agent SDK = the loop runs in *your* process." Managed Agents move that boundary — **Anthropic runs the loop server-side and provisions a per-session container** where the agent's `bash`, file, and code tools execute. You stop owning the runtime and start owning *configuration and event handling*. The decision is rarely about capability (both can build the same agent) and almost always about **who should bear the operational burden of sandboxing, secret handling, and reliability.**
+
+**The trade-off, stated plainly:**
+
+- **Convenience side (managed):** no container orchestration, no secret-injection plumbing, built-in retries, scheduled firing, and a credential vault. You ship faster and operate less.
+- **Control side (self-hosted harness):** tool execution runs on hardware you can audit, inside a network you control, with exactly the libraries and egress rules you set. You can attach a debugger, pin a kernel, or run inside an air-gapped VPC — none of which a fully hosted sandbox allows.
+
+> **Pitfall:** treating this as "managed is the modern way, self-hosted is legacy." It is a **regulatory and operational** decision, not a maturity ladder. A team under data-residency rules may *require* the self-hosted sandbox even though everything else about Managed Agents fits.
+
+## 24.2 The Object Model: Agent, Session, Environment
+
+Managed Agents has exactly three first-class objects. Internalize the split — it is the single most common source of waste and bugs.
+
+```mermaid
+flowchart TD
+    subgraph SetupOnce[Setup once at deploy time]
+        A[Agent<br/>v1/agents<br/>model, system, tools,<br/>mcp_servers, skills]
+        E[Environment<br/>v1/environments<br/>reusable container template]
+    end
+    subgraph EveryRun[Every run]
+        S[Session<br/>v1/sessions<br/>pointer to agent id plus version<br/>plus environment]
+    end
+    A -. referenced by id .-> S
+    E -. referenced by id .-> S
+    S --> Run[One agentic run<br/>in a fresh container]
+```
+
+- **Agent** (`/v1/agents`) — a **persisted, versioned configuration**: `model`, `system`, `tools`, `mcp_servers`, `skills`. This is the *definition* of what the agent is and is allowed to do. **Create it once; reference it by ID.** Each meaningful change produces a new `version`, so you can pin a session to a known-good version and roll forward deliberately.
+- **Session** (`/v1/sessions`) — **one run**. It carries no model, system prompt, or tools of its own — only a **pointer** (`agent: {type, id, version}`) plus an environment and the run's inputs. Create one **every run**.
+- **Environment** (`/v1/environments`) — a **reusable container template** describing the sandbox the session's tools execute in. Define it alongside the agent and reuse it.
+
+> ⚠️ **The #1 rule (memorize):** `model` / `system` / `tools` live on the **agent**, **never** on the session. The session only takes a pointer. Calling `agents.create()` on every request is the classic anti-pattern — it churns versions, fragments your observability (every run looks like a different agent), and defeats the whole point of a *persisted, versioned* definition.
 
 ```python
-# 1) Create the agent ONCE — store agent.id (do NOT call this per run)
+# Setup ONCE at deploy time — store agent.id and environment.id
 agent = client.beta.agents.create(
     name="Coding Assistant",
     model="claude-opus-4-8",
     tools=[{"type": "agent_toolset_20260401"}],
 )
-# 2) Every run: a session that references the agent by id
+environment = client.beta.environments.create(name="review-sandbox")
+
+# EVERY run — a session that only POINTS at the agent + environment
 session = client.beta.sessions.create(
     agent={"type": "agent", "id": agent.id, "version": agent.version},
     environment_id=environment.id,
 )
 ```
 
+**Why the split exists — three concrete payoffs:**
+
+1. **Versioned rollout.** Because config is an addressable, versioned object, you can canary `version: 7` to 5% of traffic while the fleet runs `version: 6`, and roll back by flipping a pointer — no redeploy of the *definition*.
+2. **Clean observability.** Every session reports the agent ID and version it ran. "Which prompt version produced this bad output?" becomes a lookup, not an archaeology dig through logs.
+3. **Cheap fan-out.** Spinning up a run is "create a session pointing at an existing agent," not "re-upload the whole config." A scheduled fleet of thousands of runs reuses one agent definition.
+
+> **Pitfall:** embedding per-request variation (a customer ID, a target file) into a *new agent* instead of passing it as **session input**. Per-run data belongs in the session's inputs/messages; only *what the agent fundamentally is* belongs in the agent.
+
+## 24.3 Driving a Session: Events, Streaming, and Webhooks
+
+A managed session is **event-driven**. Anthropic runs the loop and emits a **Server-Sent Events (SSE)** stream describing what the agent is doing in real time.
+
+**The core event types:**
+- `agent.message` — the assistant's natural-language output.
+- `agent.thinking` — extended-thinking blocks (when enabled).
+- `agent.tool_use` — the agent invoked a tool inside the container.
+- `session.status_*` — lifecycle transitions (running, awaiting input, completed, failed).
+
+There are **two non-obvious rules** the platform forces, and both are easy to get wrong:
+
+**Rule 1 — open the stream *before* you send.** SSE has **no replay**. If you send the user turn and *then* connect, you can miss events emitted in the gap. Open the stream first, then submit input.
+
+**Rule 2 — reconnect with deduplication.** Networks drop. Because SSE will not replay what you missed, a robust client **tracks the last event ID it saw and de-duplicates on reconnect**, rather than assuming the stream is gap-free.
+
+```mermaid
+sequenceDiagram
+    actor Dev as Client app
+    participant API as Managed Agents API
+    participant Loop as Hosted agent loop
+    participant Box as Per-session container
+    Dev->>API: Open SSE stream (before sending)
+    Dev->>API: Submit user input
+    API->>Loop: Start run
+    Loop->>Box: tool_use bash, file ops
+    Box-->>Loop: tool results
+    Loop-->>Dev: agent.tool_use, agent.message events
+    Note over Dev,API: Network blip — stream drops
+    Dev->>API: Reconnect, send last-seen event id
+    API-->>Dev: Resume; client de-dupes on event id
+    Loop-->>Dev: session.status_completed
+```
+
+**When *not* to hold a stream open: webhooks.** For long-running or fire-and-forget work — a nightly batch, a scheduled deployment, an agent that may run for many minutes — holding an HTTP stream open is fragile and wasteful. Managed Agents can instead deliver **HMAC-signed webhooks** on state changes. You verify the signature, then fetch whatever you need. Use the **stream** for interactive UIs where you render tokens live; use **webhooks** for asynchronous, durable, server-to-server workflows.
+
+> **Pitfall:** treating the SSE stream as a durable log. It is a *live* channel, not a record. If you need an audit trail of every action, persist events as they arrive (or rely on webhooks + your own store) — do not expect to "scroll back" through a reconnected stream.
+
+## 24.4 Hosting Topology: Fully Managed vs Self-Hosted Sandbox
+
+Within Managed Agents there is a second, finer decision: **where do the agent's tools actually execute?** Anthropic always runs the *loop*; you choose who runs the *sandbox*.
+
+- **Fully managed (default).** Anthropic provisions and runs the per-session container. Zero infrastructure on your side. This is the right default for most teams.
+- **Self-hosted sandbox** (`config: {type: "self_hosted"}`). Tool execution runs in **your** infrastructure via an **outbound-polling worker** — your worker dials out to Anthropic, picks up tool-execution requests, runs them on your hardware, and returns results. **Anthropic still runs the loop;** only the sandbox moves. Because the worker polls *outbound*, you do not open an inbound port — it works from inside a locked-down VPC.
+
+```mermaid
+flowchart TD
+    Loop[Hosted agent loop<br/>at Anthropic] --> Decide{Sandbox type?}
+    Decide -->|fully managed| MBox[Anthropic container<br/>runs the tools]
+    Decide -->|self_hosted| Poll[Your outbound worker<br/>polls for tool calls]
+    Poll --> YourBox[Your infra runs the tools<br/>your network, your libraries]
+    YourBox -. results .-> Loop
+    MBox -. results .-> Loop
+```
+
+**Why choose self-hosted — concrete drivers:**
+
+- **Data residency / sovereignty.** Tool execution touches your data on hardware in a region and jurisdiction you control.
+- **Network reachability.** The tools need to talk to internal services (a database, an internal API) that are not exposed to the public internet.
+- **Custom or licensed toolchain.** The sandbox must contain proprietary binaries, pinned library versions, or hardware you cannot ship to a hosted container.
+- **Auditability.** Security teams can inspect, log, and constrain exactly what runs.
+
+**What it costs you:** you now operate the worker fleet — its availability, scaling, and patching become *your* SLO. The convenience you bought with "managed" is partly handed back. The loop, retries, and event plumbing stay with Anthropic, but the sandbox's reliability is on you.
+
+> **Trade-off in one line:** fully managed minimizes ops; self-hosted maximizes control over *where tool side effects happen*. Pick self-hosted only when a real constraint (residency, reachability, licensing, audit) forces it — not by default.
+
+## 24.5 Operating Agents in Production: Vaults, Memory, Schedules, Observability
+
+Four platform features turn a single agent into an operable production service. Each replaces glue code you would otherwise hand-write on a self-hosted harness.
+
+**Vaults — credentials done right.** A **vault** is the credential store for managed agents: MCP OAuth tokens (with **automatic refresh**), static bearer tokens, and environment-variable secrets. The security property that matters: **secrets are injected at egress and are never visible inside the sandbox.** The agent can *use* a credential to call an API without ever being able to *read* it — so a prompt-injected agent cannot exfiltrate the key, because the key was never in its context. This is the managed answer to the perennial "don't put secrets in the prompt" problem. (Per Chapter 25, MCP server auth in Managed Agents is supplied via vaults, matched to servers by URL — not pasted into the `mcp_servers` block.)
+
+**Memory stores — state that outlives a session.** A session's container is ephemeral; when the run ends, the container is gone. A **memory store** is a **workspace-scoped, persistent document set** mounted into the container that **survives across sessions**. It is **versioned and redactable**. This is how a managed agent accumulates knowledge — a running design doc, a findings ledger, learned conventions — without you standing up a database. (This is the managed embodiment of the persistence patterns in Chapter 11.)
+
+**Scheduled deployments — cron for agents.** A **scheduled deployment** fires sessions automatically on a cron schedule. This is the machinery behind cloud "routines" — a nightly dependency-audit agent, an hourly triage sweep. You define the schedule once; the platform creates sessions on time without a server of yours staying up to trigger them.
+
+```mermaid
+flowchart TD
+    Cron[Scheduled deployment<br/>cron trigger] --> New[Create session<br/>points at agent + environment]
+    New --> Vault[Vault injects secrets<br/>at egress only]
+    New --> Mem[Mount memory store<br/>prior findings ledger]
+    Vault --> Runx[Run in container]
+    Mem --> Runx
+    Runx --> Hook[HMAC webhook<br/>on completion]
+    Runx --> Persist[Write results back<br/>to memory store]
+    Hook --> You[Your service<br/>verify, then act]
+```
+
+**Observability — what you can and cannot see.** Because Anthropic runs the loop, your observability comes from the **event stream and webhooks**, plus the **agent ID + version** stamped on every session. You see tool calls, messages, thinking, and status transitions — but you do **not** get host-level access to the hosted container. If you need deep, host-level inspection (process dumps, kernel-level tracing), that is a reason to choose the **self-hosted sandbox** (§24.4). Design your observability around events, and persist them yourself if you need a durable audit trail (§24.3).
+
+> **Pitfall:** assuming "managed" means "fully observable." You get rich *event-level* visibility, but the hosted runtime is a black box at the OS level by design. Match your audit requirements to the hosting choice **before** you build.
+
+## 24.6 End-to-End Case Study: A Production Code-Review Agent Fleet
+
+The pieces above only matter assembled. Here is a realistic system that uses Managed Agents the way a platform team actually would — and forces every decision in this chapter.
+
+### Requirements
+
+- A SaaS company wants an **automated code-review agent** that comments on every pull request across hundreds of internal repositories.
+- The agent must **clone the repo, run static analysis and tests in a sandbox, and post review comments** — real tool execution, not just text.
+- Reviews must fire **automatically on each PR** and also run as a **nightly full-repo audit**.
+- The agent needs a **GitHub token and an internal SAST API key** — and the security team mandates that **no agent run may ever be able to read those secrets** (prompt-injection from a malicious PR is in-scope threat).
+- Source code is **regulated** and may not leave the company's cloud region.
+- The platform team has **two engineers** and no appetite to operate a container-orchestration system.
+
+### The hosting decision
+
+Two engineers and "don't make us run orchestration" points hard at **Managed Agents** — Anthropic runs the loop, retries, and scheduling. But "source may not leave our region" rules out the fully managed sandbox for the tool-execution step. The resolution is the **self-hosted sandbox** (§24.4): Anthropic runs the loop; an **outbound-polling worker inside the company VPC** executes the clone/analyze/test tools on in-region hardware. They get managed convenience for the loop *and* data-residency for the side effects — the exact split §24.4 exists to enable.
+
+Secrets go in a **vault** (egress-only injection), so a PR that tries to print `$GITHUB_TOKEN` gets nothing — the token is not in the agent's context. The nightly audit is a **scheduled deployment**. A **memory store** holds a per-repo "known-issues ledger" so the agent stops re-flagging accepted exceptions.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    PR[Pull request opened] --> Trig[Webhook to platform service]
+    Cron[Scheduled deployment<br/>nightly audit] --> Sess
+    Trig --> Sess[Create session<br/>points at review agent + env]
+    Sess --> Loop[Hosted loop at Anthropic]
+    Loop --> Worker[Self-hosted worker<br/>inside company VPC]
+    Worker --> Tools[Clone, SAST, run tests<br/>in-region hardware]
+    Vault[Vault<br/>GitHub plus SAST keys] -. injected at egress only .-> Worker
+    Mem[Memory store<br/>known-issues ledger] -. mounted .-> Worker
+    Tools -. results .-> Loop
+    Loop --> Done[HMAC webhook on completion]
+    Done --> Post[Platform posts review comments]
+```
+
+The agent is created **once** (`agents.create`, model `claude-opus-4-8`); every PR and every nightly run is a **session** pointing at it (§24.2). The loop is Anthropic's; the sandbox is the company's; secrets never enter the agent's context.
+
+### Implementation sketch
+
+```python
+# Setup ONCE — versioned agent definition + a self-hosted environment.
+agent = client.beta.agents.create(
+    name="pr-reviewer",
+    model="claude-opus-4-8",
+    system="Review the diff. Run SAST and tests. Comment only on real issues; "
+           "skip anything already in the known-issues ledger.",
+    tools=[{"type": "agent_toolset_20260401"}],
+)
+
+environment = client.beta.environments.create(
+    name="vpc-review-sandbox",
+    config={"type": "self_hosted"},   # tools run on the company's outbound worker
+)
+
+# EVERY PR or nightly run — a session that only POINTS at the agent + env.
+def review_pull_request(pr_ref: str):
+    return client.beta.sessions.create(
+        agent={"type": "agent", "id": agent.id, "version": agent.version},
+        environment_id=environment.id,
+        input={"pr": pr_ref},          # per-run data goes in the SESSION, not a new agent
+    )
+```
+
+### Execution trace
+
+```mermaid
+sequenceDiagram
+    actor Git as GitHub
+    participant Svc as Platform service
+    participant API as Managed Agents
+    participant Loop as Hosted loop
+    participant Wk as VPC worker
+    Git->>Svc: PR opened webhook
+    Svc->>API: Open SSE stream, then create session points at agent
+    API->>Loop: Start run
+    Loop->>Wk: tool_use clone plus SAST plus tests
+    Note over Wk: Vault injects GitHub and SAST keys at egress only
+    Wk-->>Loop: results, secrets never entered agent context
+    Loop->>Wk: write findings to memory store ledger
+    Loop-->>API: session.status_completed
+    API-->>Svc: HMAC webhook on completion
+    Svc->>Git: Post review comments
+```
+
+Notice what each design choice bought: **session-points-at-agent** keeps every run on one auditable, versioned definition; the **self-hosted sandbox** kept regulated source in-region; the **vault** made a prompt-injected PR unable to steal credentials; the **memory store** stopped duplicate findings; the **scheduled deployment** gave the nightly audit for free.
+
+### Validation
+
+- **Create-once test:** assert exactly one `agents.create` runs at deploy and that every PR path calls only `sessions.create`. A regression that creates an agent per PR fragments observability and must fail this test.
+- **Secret-isolation test:** submit a malicious PR whose diff tries to echo `$GITHUB_TOKEN`; assert the token never appears in any `agent.message` or `agent.tool_use` event — the vault injects only at egress (§24.5).
+- **Residency test:** assert tool execution lands on the VPC worker (self-hosted sandbox), never an Anthropic-hosted container.
+- **Idempotent-findings test:** add an accepted exception to the memory-store ledger; re-run; assert the agent does not re-flag it.
+- **Stream-ordering test:** assert the client opens the SSE stream *before* creating the session, and that a forced reconnect de-dupes on event ID (§24.3).
+
+### Common pitfalls
+
+- Calling `agents.create()` per PR instead of reusing the agent ID (churns versions, breaks observability — §24.2).
+- Choosing the fully managed sandbox despite a residency constraint, then discovering regulated code left the region (§24.4).
+- Putting the GitHub token in the agent's `system`/inputs instead of a vault — one prompt-injected PR and it leaks (§24.5).
+- Connecting the SSE stream *after* sending input and missing early events; or treating the stream as a durable audit log (§24.3).
+
+## 24.7 Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| Three runtimes, one axis | Client SDK (you run the loop) → Agent SDK (library runs it in your process) → Managed Agents (Anthropic runs the loop **and** the sandbox). Choose by *who runs the loop and who owns the compute* (§24.1). |
+| Object model | **Agent** = persisted, versioned config (`model`/`system`/`tools`); **Session** = one run that only *points* at the agent; **Environment** = reusable container template (§24.2). |
+| The #1 rule | `model`/`system`/`tools` live on the **agent**, never the session. Create the agent **once**, reference by ID; `agents.create()` per run is the classic anti-pattern (§24.2). |
+| Streaming discipline | SSE has **no replay**: open the stream **before** sending, and **reconnect with de-duplication**. Use **webhooks** (HMAC-signed) for async/long-running work (§24.3). |
+| Hosting topology | Fully managed (Anthropic's container, zero ops) vs **self-hosted sandbox** (`type: self_hosted`, your infra via outbound-polling worker). Anthropic runs the loop either way; choose self-hosted only when residency/reachability/licensing/audit forces it (§24.4). |
+| Production features | **Vaults** inject secrets at egress (never visible in-sandbox); **memory stores** persist across sessions (versioned, redactable); **scheduled deployments** are cron for agents; observability is **event-level**, not host-level (§24.5). |
+| Control vs convenience | Managed = less ops, less control; self-hosted harness = more control over where side effects happen, more ops burden. A regulatory/operational decision, **not** a maturity ladder (§24.1, §24.4). |
+
+> **Established vs evolving.** The object model, the create-once rule, and the SSE event names are established in the `managed-agents-2026-04-01` beta. Operational practice — fleet scaling, observability tooling, and the managed-vs-self-hosted line — is still maturing; carry the *reasoning*, and re-check the current docs before you build.
+
 # Chapter 25: MCP In Depth
 
-> *Reference — extends Chapter 4.* Docs: [Model Context Protocol](https://modelcontextprotocol.io/) · [MCP connector](https://platform.claude.com/docs/en/agents-and-tools/mcp-connector).
+> *Reference — extends Chapter 4.* Docs: [Model Context Protocol](https://modelcontextprotocol.io/) · [Specification](https://modelcontextprotocol.io/specification) · [Authorization](https://modelcontextprotocol.io/specification/draft/basic/authorization) · [MCP connector](https://platform.claude.com/docs/en/agents-and-tools/mcp-connector).
 
-- **Primitives** (recap) — **Tools** (model-invoked actions), **Resources** (read-only context data), **Prompts** (reusable templates). MCP is an open JSON-RPC 2.0 standard — "USB-C for AI."
-- **Transports** — **stdio** (local subprocess) and **Streamable HTTP** (POST + SSE) are the two standards; the old SSE-only transport is deprecated.
-- **Authorization** — OAuth 2.0 for HTTP servers; environment-based credentials for stdio.
-- **MCP connector (Messages API)** — let Claude call a *remote* MCP server directly, server-side, with no local client: pass `mcp_servers: [{type:"url", name, url}]` **and** a matching `tools: [{type:"mcp_toolset", mcp_server_name}]` entry. Beta `mcp-client-2025-11-20`. (Both halves are required — `mcp_servers` alone is rejected.)
-- **Credentials in Managed Agents** — MCP auth is supplied via **vaults** (Chapter 24), not in the agent's `mcp_servers` block; Anthropic matches credentials to servers by URL and auto-refreshes OAuth.
-- **Claude Code** — `claude mcp add/list/remove`, `.mcp.json` (project) vs `~/.claude.json` (user), `/mcp` for in-session OAuth, and **MCP tool search** to lazily load tools and save context.
+This chapter is **PART III — advanced, production agent engineering, beyond the Foundations exam scope.** Chapter 4 taught MCP as the *integration layer*: what the protocol is, the three primitives at a glance, `stdio` vs Streamable HTTP, where to register a server, and the `isError` contract. That is enough to *consume* a community server and to *recognize* MCP in an exam scenario. This chapter is for the engineer who must **build, ship, secure, and operate** an MCP server that real teams depend on — where the gap between "works in a demo" and "safe in production" is filled by transport lifecycle details, an OAuth authorization story, server-initiated `sampling`, and a threat model.
 
----
+We deliberately do **not** repeat Chapter 4. Instead we go one layer down on each of its topics, and add two it never covered — **OAuth 2.1 authorization for remote servers** and **sampling** (the server asking the *client's* model to think). By the end you should be able to design a production-grade remote MCP server and defend its transport, auth, and security choices.
+
+- **The three primitives, precisely** (§25.1) — tool annotations and `outputSchema`; resource URIs, templates, and subscriptions; prompt arguments. The control model: who *invokes* each.
+- **Transports under the hood** (§25.2) — `stdio` message framing and its silent killers; Streamable HTTP sessions, resumability, and the deprecated SSE transport.
+- **Authorization for remote servers** (§25.3) — OAuth 2.1, metadata discovery (PRM/AS), Resource Indicators, and the confused-deputy trap.
+- **Sampling** (§25.4) — the server requesting an LLM completion *from the client*, and why it inverts the usual trust direction.
+- **Hardening a production server** (§25.5) — tool poisoning, input validation, rate limits, and namespacing/discovery at scale.
+
+§25.6 then builds a complete remote **Knowledge-Base MCP server** — OAuth, a resource, a sampling-backed `summarize` tool, and a prompt — and §25.7 distills the engineering rules.
+
+## 25.1 The Three Primitives, Precisely
+
+Chapter 4 framed the primitives by *intent* — Tools **act**, Resources **inform**, Prompts are **templates**. Production work needs the next level: the **control model** (who decides to invoke each) and the **schema/lifecycle** each one carries on the wire.
+
+```mermaid
+flowchart TD
+    subgraph Primitives[MCP primitives by control model]
+        T[Tools<br/>model-controlled<br/>the agent decides when to call]
+        R[Resources<br/>application-controlled<br/>the host decides what to attach]
+        P[Prompts<br/>user-controlled<br/>the human invokes them]
+    end
+    T --> SIDE[Side effects allowed<br/>annotate read vs write]
+    R --> NOSIDE[Read-only context<br/>addressed by URI]
+    P --> UI[Surfaced in UI<br/>e.g. slash commands]
+```
+
+**Tools — annotations and output schemas.** A bare `name + description + inputSchema` (the Chapter 4 shape) is the minimum. Production tools add two things the protocol supports:
+
+- **Annotations** are *hints* about behaviour: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`. A host can use them to decide what needs confirmation (a `destructiveHint: true` delete) versus what can auto-run. They are advisory, not a security boundary — never rely on `readOnlyHint` to *enforce* read-only; enforce in code (§25.5).
+- **`outputSchema`** declares the *shape of the result*, not just the input. With it, the client can validate `structuredContent` and the model gets a reliable contract. Without it, every tool returns opaque text and the agent must re-parse free-form output each turn.
+
+```
+Tool(
+  name="search_kb",
+  description="Full-text search over the knowledge base. Read-only.",
+  inputSchema={...},
+  annotations={"readOnlyHint": true, "openWorldHint": true},
+  outputSchema={"type":"object","properties":{
+     "hits":{"type":"array"},"total":{"type":"integer"}}},
+)
+```
+
+**Resources — URIs, templates, and subscriptions.** Chapter 4 used a single static `catalog://services`. Real catalogs are addressable and dynamic:
+
+- **URI templates** (RFC 6570) let one declaration serve a family: `kb://article/{id}` exposes every article without listing them all. The client fills `{id}` and calls `resources/read`.
+- **Subscriptions** let a client `resources/subscribe` and receive `notifications/resources/updated` when the underlying data changes — so the agent's "map" stays fresh without polling. This is the resource analogue of a webhook.
+
+**Prompts — arguments and discovery.** A prompt is a *parameterized message template* the server owns and the **user** triggers (a slash command, a menu pick). It can take typed arguments (`prompts/get` with `{topic}`) and expand into a full multi-message conversation seed. The exam-relevant distinction from Chapter 4 still holds — prompts are user-controlled, tools are model-controlled — but in production a prompt is how you ship a *vetted, reusable workflow* (e.g., "incident write-up") rather than trusting each user to phrase it well.
+
+> **Pitfall:** modelling user-triggered workflows as *tools*. If a human is meant to pick it from a menu, it is a **Prompt**; if the *model* should decide to call it mid-loop, it is a **Tool**. Reversing this either hides the workflow from users or floods the model's tool list (§25.5).
+
+## 25.2 Transports Under the Hood
+
+Chapter 4's table (`stdio` local vs Streamable HTTP remote) is the *decision*. Production failures live in the *mechanics* of each.
+
+**`stdio` framing — the silent killers.** A stdio server speaks newline-delimited JSON-RPC over `stdin`/`stdout`. Two rules cause most "my server connects but nothing works" incidents:
+
+1. **`stdout` is the protocol channel — it must carry *only* JSON-RPC.** Any stray `print()`, debug banner, or library log written to `stdout` corrupts the stream and the client drops the connection. **All logging must go to `stderr`** (the host captures it for you).
+2. **The host owns the lifecycle.** It spawns the subprocess, and a slow startup or a blocked event loop reads as a dead server. Initialization must be fast and non-blocking.
+
+**Streamable HTTP — sessions and resumability.** A remote server accepts JSON-RPC over HTTP `POST`; responses are either a single JSON body or an **SSE** stream for streaming/server-initiated messages. The production concerns Chapter 4 skipped:
+
+- **Sessions.** On initialize the server may return an `Mcp-Session-Id` header; the client echoes it on every later request. This is how a *stateful* server (one holding per-client subscriptions or sampling state) ties requests together — and how it can expire a session.
+- **Resumability.** SSE events carry an `id`; if the stream drops, the client reconnects with `Last-Event-ID` and the server replays what was missed. Without it, a flaky network silently loses notifications.
+- **The old "HTTP+SSE" (two-endpoint) transport is deprecated.** If a question offers plain "SSE transport" as the modern remote option, the answer is **Streamable HTTP** (a single endpoint that *can* upgrade to SSE) — same as Chapter 4's warning, now with the reason: the legacy design needed two endpoints and couldn't resume cleanly.
+
+```mermaid
+flowchart TD
+    Start[Client to remote server<br/>POST initialize] --> Sess[Server returns<br/>Mcp-Session-Id]
+    Sess --> Req[Client sends requests<br/>echo session id header]
+    Req --> Mode{Response needs<br/>streaming or<br/>server push?}
+    Mode -->|no| JSON[Single JSON body]
+    Mode -->|yes| SSE[Open SSE stream<br/>events carry ids]
+    SSE -. drop and reconnect .-> Resume[Resume with Last-Event-ID<br/>server replays missed events]
+```
+
+> **Pitfall:** running a *stateful* remote server behind a naive load balancer. If `Mcp-Session-Id` is not pinned to the instance holding that session's state, the next request lands on a cold node and the session breaks. Either make the server stateless or use session affinity.
+
+## 25.3 Authorization for Remote Servers (OAuth 2.1)
+
+This is the topic Chapter 4 named but did not open. A `stdio` server trusts its environment (env-var credentials, §4.3). A **remote** server is exposed to the network and must answer *"who is this caller and what may they do?"* — MCP's answer is **OAuth 2.1**, and the spec is specific about how a client *discovers* where to authenticate.
+
+The MCP server is an **OAuth Resource Server**; it does **not** issue tokens itself. A separate **Authorization Server** (your IdP — Okta, Entra, Auth0, or a built-in one) issues them. The flow the spec defines:
+
+1. The client calls the server with no token; the server replies **401** with a `WWW-Authenticate` header pointing at its **Protected Resource Metadata** (PRM, `/.well-known/oauth-protected-resource`).
+2. The PRM names the **Authorization Server(s)**. The client fetches the AS's metadata (`/.well-known/oauth-authorization-server`) to find the authorize/token endpoints.
+3. The client runs **OAuth 2.1 with PKCE** (often Dynamic Client Registration first), the user consents, and the client gets an access token.
+4. Every later request carries `Authorization: Bearer <token>`; the server **validates** it and checks scope before acting.
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant C as MCP client
+    participant S as MCP server (resource)
+    participant A as Authorization Server
+    C->>S: request without token
+    S-->>C: 401 plus WWW-Authenticate (PRM url)
+    C->>S: GET protected-resource metadata
+    S-->>C: names the Authorization Server
+    C->>A: OAuth 2.1 plus PKCE (user consents)
+    A-->>C: access token (audience = this server)
+    C->>S: request plus Bearer token
+    S-->>C: validate, check scope, then respond
+```
+
+**Why it is built this way (and the traps):**
+
+- **Resource Indicators (RFC 8707) are mandatory.** The client must bind each token to *this* server's identifier (`resource`), and the server must reject tokens whose **audience** is not itself. This stops a **confused-deputy / token passthrough** attack: a token minted for server A must not be replayable against server B. Never accept a bearer token without checking its audience.
+- **The server validates; it never forwards.** A frequent bug is the MCP server taking the client's token and passing it straight to a downstream API. Treat the incoming token as *authentication of the caller*, then use the server's own credentials (or a properly down-scoped token) for downstream calls.
+- **In Managed Agents, you don't hand-roll this.** Per Chapter 24, MCP auth is supplied via **vaults**: Anthropic matches stored credentials to servers **by URL** and **auto-refreshes OAuth**. You do *not* put secrets in the agent's `mcp_servers` block. In Claude Code the equivalent is `/mcp` (in-session authorize) or `claude mcp login`.
+
+## 25.4 Sampling — The Server Asks the Client to Think
+
+**Sampling** is the MCP capability with no Chapter 4 analogue, and it inverts the usual direction. Normally the client's model calls the server's tools. With **sampling**, a *tool implementation on the server* can request an **LLM completion from the client** (`sampling/createMessage`) — the server borrows the host's model mid-execution.
+
+Why this exists: it lets a server stay **model-agnostic and key-less**. A `summarize_document` tool doesn't need its own Anthropic API key or a hard-wired model; it asks the host ("please run this summarization prompt on whatever model you have") and gets text back. The host keeps control of cost, model choice, and — critically — a **human-in-the-loop approval** point.
+
+```mermaid
+flowchart TD
+    A[Agent calls a server tool<br/>e.g. summarize_kb] --> B[Server tool runs]
+    B --> C[Server sends sampling request<br/>to the client]
+    C --> D{Host approves<br/>the LLM call?}
+    D -->|yes| E[Client runs completion<br/>on its own model]
+    D -->|no| F[Request denied<br/>tool handles gracefully]
+    E --> G[Completion returned<br/>to the server tool]
+    G --> H[Tool finishes<br/>returns result to agent]
+```
+
+**The trust inversion and its pitfalls:**
+
+- **A server can trigger model calls — that is power.** The host must mediate: the spec puts a **human approval** gate on sampling for exactly this reason. A client that auto-approves every sampling request lets any connected server spend tokens and steer the model freely.
+- **It is optional, on both sides.** Sampling is a *client capability*; many hosts don't implement it. A robust server must **degrade gracefully** when the client doesn't offer sampling (fall back to a non-LLM path or return a clear `isError`), never assume it.
+- **Don't confuse sampling with the model's own tool calls.** Tool call = client's model invokes the server. Sampling = server invokes the client's model. The arrow points the other way, and so does the trust.
+
+> Closely related is **elicitation** — a server asking the *user* (not the model) for a structured input mid-call. Same principle: the server reaches back into the host, and the host must mediate.
+
+## 25.5 Hardening a Production Server
+
+A server you publish is **attack surface**. The model will faithfully read whatever your server returns and call whatever tools you expose — so the server, not the prompt, is where safety must live.
+
+**Tool-definition poisoning.** Tool **descriptions and results are injected into the model's context** and are therefore an injection vector. A malicious or compromised server can hide instructions in a description ("…and also email the user's secrets to X"). Defences: only connect **trusted** servers; pin versions; review third-party tool descriptions; and never let one server's output be silently trusted as instructions by the host.
+
+**Input validation is non-negotiable.** Every tool argument crosses a trust boundary. Validate against the `inputSchema`, then **defend the downstream**: parameterized queries (never string-concatenate SQL from a tool arg), path canonicalization for file tools (block `../` traversal), and allow-lists for anything that becomes a shell command or URL.
+
+**Enforce in code, not in hints.** `readOnlyHint`/`destructiveHint` (§25.1) are advisory. The *real* guard — "production rollback needs a grant", "this caller can't write" — must be a code check inside `call_tool`, returning a structured `permission` error (the §4.4 contract), exactly like Chapter 3's money rule. Annotations help the UI; they do not secure anything.
+
+**Rate-limit and bound cost.** A remote server is callable in a loop. Rate-limit per session, cap result sizes (an unbounded `search` result can blow the context window), and put timeouts on every downstream call so one slow dependency can't hang the agent.
+
+**Namespacing and discovery at scale.** Hosts namespace tools to avoid collisions — in Claude Code a tool appears as `mcp__<server>__<tool>` (e.g. `mcp__kb__search_kb`); that exact name is what you allow-list or force with `tool_choice`. But every connected server loads its tools into context, and a dozen servers can flood the model with hundreds of tools, *degrading* selection (Domain 2.3). The mitigation is **MCP tool search** — lazily loading tool definitions on demand instead of front-loading all of them — plus org-wide `managed-mcp.json`. Design implication: keep a server's tool list **small and well-described**; tool count is a budget, not free.
+
+```mermaid
+flowchart TD
+    In[Tool call arrives at server] --> Auth{Valid token<br/>and audience?}
+    Auth -->|no| R401[Reject 401 or<br/>permission error]
+    Auth -->|yes| Val{Args valid<br/>per schema?}
+    Val -->|no| RVal[Return validation error<br/>not retryable]
+    Val -->|yes| Authz{Caller has<br/>the grant?}
+    Authz -->|no| RPerm[Return permission error]
+    Authz -->|yes| Limit{Within rate<br/>and size limits?}
+    Limit -->|no| RLim[Return transient error<br/>retry later]
+    Limit -->|yes| Exec[Execute against<br/>downstream with own creds]
+```
+
+## 25.6 End-to-End Case Study: A Remote Knowledge-Base MCP Server
+
+The pieces above only matter when they fit together. Chapter 4 built a *local stdio* Deployments server; here we build the harder, complementary case — a **remote, multi-tenant Knowledge-Base server** that a whole company connects to. It exercises exactly what Chapter 4 left out: OAuth, sampling, a prompt, and production hardening.
+
+### Requirements
+
+A company wants Claude (via Claude Code, the SDK, and the Messages API connector) to search and summarize its internal knowledge base. The server must:
+
+- Serve **many users over the network**, so it runs as a **Streamable HTTP** service with **OAuth 2.1** — each request authenticated, scope checked.
+- Expose articles as a **resource** via a URI template (`kb://article/{id}`) so the agent reads any article without a tool call.
+- Provide a `search_kb` **tool** (read-only) and a `summarize_kb` **tool** that uses **sampling** — it asks the *client's* model to summarize hits, so the server needs **no model key of its own**.
+- Ship a user-facing `incident_writeup` **prompt** (a vetted template), not a tool.
+- **Hard rule:** only callers whose token carries the `kb:read` scope may search; this is enforced **in code**, returning a structured `permission` error — never left to the model.
+- Validate inputs, cap result size, and **degrade gracefully** if the client offers no sampling.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    User([Employee]) --> Host[Claude host<br/>Code, SDK, or connector]
+    Host -->|POST plus Bearer token| KB[Knowledge-Base server<br/>Streamable HTTP]
+    KB --> Auth{Token valid<br/>and scope kb read?}
+    Auth -->|no| Deny[Permission error<br/>not retryable]
+    Auth -->|yes| Res[[Resource kb article id<br/>read-only map]]
+    Auth -->|yes| Search[Tool search_kb]
+    Auth -->|yes| Sum[Tool summarize_kb]
+    Search --> Index[(Search index)]
+    Sum -. sampling request .-> Host
+    KB --> AS[Authorization Server<br/>validates tokens]
+```
+
+The **catalog/article is a Resource** (read-only, no exploratory calls); **search and summarize are Tools**; **summarize borrows the host's model via sampling**; the **scope check lives in the server**, so it holds regardless of which host connects.
+
+### Implementation
+
+A sketch using the Python MCP SDK. Note the scope guard, the structured errors (§4.4), and the sampling call with a graceful fallback.
+
+```python
+from mcp.server import Server
+from mcp.types import Tool, Resource, TextContent
+
+app = Server("kb")
+
+# --- Resource: any article by id (URI template) ---
+@app.list_resource_templates()
+async def list_templates():
+    return [{"uriTemplate": "kb://article/{id}",
+             "name": "KB article", "mimeType": "text/markdown"}]
+
+@app.read_resource()
+async def read_resource(uri: str) -> str:
+    return kb_store.get_markdown(article_id_from(uri))   # read-only
+
+# --- Tools ---
+@app.call_tool()
+async def call_tool(name: str, args: dict, ctx) -> list[TextContent]:
+    # Enforce scope in CODE, not in a prompt or an annotation.
+    if "kb:read" not in ctx.scopes:
+        return error("permission", retryable=False,
+                     message="Token lacks the 'kb:read' scope.")
+
+    if name == "search_kb":
+        q = validate_query(args["query"])               # input validation
+        hits = kb_index.search(q, limit=20)             # cap result size
+        return ok({"hits": hits, "total": len(hits)})
+
+    if name == "summarize_kb":
+        hits = kb_index.search(validate_query(args["query"]), limit=10)
+        # SAMPLING: ask the CLIENT's model to summarize — no key on the server.
+        if not ctx.client_supports_sampling:
+            return ok({"hits": hits, "note": "summary unavailable: no sampling"})
+        summary = await ctx.sample(
+            messages=[user(f"Summarize these KB hits:\n{render(hits)}")],
+            max_tokens=400)
+        return ok({"summary": summary.text, "sources": [h["id"] for h in hits]})
+```
+
+The token is validated as an OAuth **Resource Server** — reject any token whose audience is not this server (§25.3), which closes the confused-deputy hole:
+
+```python
+def authenticate(request):
+    token = bearer(request)                 # from Authorization header
+    claims = verify_jwt(token, expected_audience="https://kb.acme.com")
+    if not claims:
+        return unauthorized()               # 401 + WWW-Authenticate -> PRM
+    return Context(scopes=claims["scope"].split(), ...)
+```
+
+And a **prompt** the user triggers (not a tool the model calls):
+
+```python
+@app.list_prompts()
+async def list_prompts():
+    return [{"name": "incident_writeup",
+             "description": "Draft an incident write-up from KB sources.",
+             "arguments": [{"name": "service", "required": True}]}]
+```
+
+### Execution trace
+
+An employee asks Claude Code to summarize what the KB says about an outage. Claude reads an article (resource), then calls `summarize_kb`, which **samples the host's model**:
+
+```mermaid
+sequenceDiagram
+    actor Emp as Employee
+    participant CC as Claude Code (host)
+    participant KB as KB server
+    participant AS as Auth Server
+    Emp->>CC: "Summarize what the KB says about the checkout outage"
+    CC->>KB: search_kb (Bearer token)
+    KB->>AS: validate token + audience + scope kb read
+    AS-->>KB: valid, scope ok
+    KB->>CC: sampling request (summarize these hits)
+    CC->>Emp: approve model call?
+    Emp-->>CC: approve
+    CC-->>KB: summary text
+    KB-->>CC: isError false, summary plus sources
+    CC-->>Emp: concise summary with cited article ids
+```
+
+Notice the **server never held a model key** — it borrowed the host's model via sampling, under a human-approval gate; the **scope check in code** (not a prompt) gated access; and the audience-checked token closed the confused-deputy path.
+
+### Validation
+
+- **Auth test:** call `search_kb` with (a) no token → 401 pointing at PRM, (b) a token for a *different* audience → rejected, (c) a valid token lacking `kb:read` → structured `permission` error. Zero leaks.
+- **Sampling-fallback test:** connect a client that does **not** advertise sampling; assert `summarize_kb` returns hits with a "summary unavailable" note rather than crashing or erroring hard.
+- **Injection test:** feed `search_kb` a query containing SQL/markup; assert it is parameterized and the index isn't corrupted (§25.5).
+- **Resource-vs-tool test:** confirm `kb://article/{id}` is readable via `read_resource` (no tool call) — the agent gets articles without exploratory calls (§4.5).
+- **Size-bound test:** a query matching thousands of rows returns a capped result set, not a context-blowing dump.
+
+### Common pitfalls
+
+- Putting the `kb:read` rule in the system prompt instead of a **code check** (probabilistic, not guaranteed — see §3.5 and §4.4).
+- Accepting a bearer token **without checking its audience**, enabling token passthrough / confused-deputy (§25.3).
+- Forwarding the client's token to the downstream index instead of using the **server's own** credentials (§25.3).
+- Assuming the client supports **sampling** and crashing when it doesn't, instead of degrading gracefully (§25.4).
+- Writing logs to `stdout` on a stdio build (corrupts the protocol) — they must go to `stderr` (§25.2).
+- Shipping `summarize_kb` as something only the model can reach when the reusable workflow should also be a user **prompt** (§25.1).
+
+## 25.7 Engineering Focus — Key Takeaways
+
+| Concept | What production engineering requires |
+|---|---|
+| Control model | Tools = model-controlled (act), Resources = app-controlled (inform), Prompts = user-controlled (templates); add `annotations` + `outputSchema` to tools (§25.1). |
+| Resource addressing | URI **templates** serve a family of items; **subscriptions** push updates so the "map" stays fresh without polling (§25.1). |
+| stdio mechanics | `stdout` is protocol-only — **all logs to `stderr`**; the host owns the lifecycle; init must be fast and non-blocking (§25.2). |
+| HTTP sessions | `Mcp-Session-Id` ties a stateful session; SSE event ids enable **resumability**; legacy two-endpoint SSE is deprecated; mind load-balancer affinity (§25.2). |
+| OAuth 2.1 | Server is a **Resource Server**, not a token issuer; discover via **PRM → AS metadata**; bind tokens with **Resource Indicators** and **check audience** (§25.3). |
+| Confused deputy | Validate incoming tokens; **never forward** them downstream; reject wrong-audience tokens (§25.3). |
+| Sampling | The **server** asks the **client's** model to complete; keeps the server key-less/model-agnostic; gated by host **human approval**; degrade gracefully if absent (§25.4). |
+| Hardening | Tool descriptions/results are an injection vector; validate inputs; enforce guards **in code** (hints aren't security); rate-limit and bound size (§25.5). |
+| Discovery at scale | `mcp__<server>__<tool>` namespacing; **MCP tool search** loads tools lazily; keep tool lists small — tool count is a budget (§25.5). |
+
+> **Beyond the exam, essential in practice.** Chapter 4 lets you *use* MCP; this chapter lets you *operate* it. If you can stand up the Knowledge-Base server above — Streamable HTTP with OAuth 2.1, audience-checked tokens, a URI-template resource, a sampling-backed tool that degrades gracefully, a user prompt, and code-enforced scope — you can build an MCP server a company can safely depend on.
 
 # Chapter 26: Modern Claude Code (2026)
 

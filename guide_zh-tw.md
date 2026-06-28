@@ -8066,125 +8066,1861 @@ sequenceDiagram
 
 # 第 20 章:伺服器端與進階工具
 
-> *參考 —— 超出考綱。* 文件:[Tool use overview](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview)。
+> *參考 —— 超出考綱。* 文件:[Tool use overview](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview) · [Server tools](https://platform.claude.com/docs/en/agents-and-tools/tool-use/server-tools) · [Web search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool) · [Code execution](https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool)。
 
-除了你自訂的工具,Claude 還提供內建與進階的工具模式:
+在第 2–4 章,你建構的是**用戶端工具**:你寫一份 JSON 結構描述,Claude 發出 `tool_use` 區塊,由**你的**程式碼執行它,再回傳 `tool_result`。這一來一回是考試的基礎。然而上線的代理還會用上第二類工具——考綱幾乎不碰,卻會重塑成本、延遲與安全性的——**伺服器端工具**:由 Anthropic 在**API 回合內部**、在 Anthropic 自家基礎設施上執行,你的應用程式裡完全沒有處理程式碼。
 
-**工具使用模式**
-- **平行工具呼叫**(預設)—— 單一助理回合可發出多個 `tool_use` 區塊;並行執行後,把**所有** `tool_result` 放進**單一**使用者訊息回傳(拆開會訓練模型不再平行化)。
-- **Tool runner**(SDK 輔助)—— 自動驅動「呼叫 → 執行 → 迴圈」(Python `@beta_tool` + `tool_runner`,TS `betaZodTool` + `toolRunner`),不必手寫代理迴圈。
-- **Programmatic tool calling(PTC)** —— Claude 從 **code execution 內部**呼叫你的工具;中間結果留在執行中的腳本裡(不進上下文視窗),只有最終輸出回傳。對長工具鏈可大幅省 token。
+這個區別並非表面文章。它改變了**誰執行程式碼**、**資料流向何處**、**回合形狀如何構成**,以及**你要付多少錢**。本章是寫給必須回答以下問題的架構師:*這項能力該做成由我託管的工具,還是由 Anthropic 託管?以金錢、資料留存風險與控制權來衡量,兩種選擇各要付出什麼代價?*
 
-**伺服器端工具**(在 Anthropic 基礎設施執行 —— 只要在 `tools` 宣告):
-- **Web search**(`web_search_20260209`)—— 即時搜尋,附引用與動態過濾。
-- **Web fetch**(`web_fetch_20260209`)—— 擷取/解析對話中已出現的特定 URL。
-- **Code execution**(`code_execution`)—— 沙箱 Python/bash 容器(預裝資料科學套件;容器可重用約 30 天)。與 web 工具併用時免費。
-- **Tool search**(`tool_search_tool_regex` / `_bm25`)—— 從大型工具庫按需探索工具;其餘標 `defer_loading: true`。結構描述以**附加**方式載入,可保留快取。
+- **兩種執行模型**(§20.1)—— 用戶端工具(`stop_reason: "tool_use"`,你執行)對比伺服器端工具(`server_tool_use`,Anthropic 執行,你不回傳 `tool_result`)。
+- **伺服器端工具目錄**(§20.2)—— web search、web fetch、code execution、tool search、advisor。
+- **Anthropic 結構描述的用戶端工具**(§20.3)—— bash、text editor、computer use、memory:結構描述已公布,但仍由**你**執行。
+- **伺服器端迴圈、`pause_turn` 與混合回合**(§20.4)—— 唯一一個會讓所有人意外的控制流程。
+- **成本與安全取捨**(§20.5)—— 計費表、ZDR、沙箱邊界、網域過濾。
 
-**用戶端 / Anthropic 定義工具**(由你執行):
-- **Bash**(`bash_20250124`)與 **text editor**(`text_editor_20250728`)—— 無結構描述;有參考實作;請沙箱化。
-- **Memory tool**(`memory_20250818`)—— Claude 讀寫 `/memories` 目錄做跨工作階段狀態;後端由你實作。
-- **Computer use** —— 螢幕截圖 + 滑鼠/鍵盤操控 GUI(beta)。
-- **Advisor**(`advisor_20260301`,beta)—— 把較便宜的執行模型與較聰明的顧問模型配對,在生成中諮詢(顧問模型須 ≥ 執行模型)。
+§20.6 接著建構一個完整的**合規研究助理**,在單一回合內混用伺服器端與用戶端工具,§20.7 則濃縮工程判斷。
 
----
+## 20.1 兩種執行模型:誰執行程式碼
+
+你給 Claude 的每個工具都屬於兩類之一,而區分它們的**唯一**關鍵是**程式碼在哪裡執行**。
+
+```mermaid
+flowchart TD
+    Start[把工具加進 tools 陣列] --> Q{誰執行它?}
+    Q -->|你的應用程式| Client[用戶端工具]
+    Q -->|Anthropic 基礎設施| Server[伺服器端工具]
+    Client --> C1[Claude 發出 tool_use<br/>stop_reason 為 tool_use]
+    C1 --> C2[你的程式碼執行它<br/>你回傳 tool_result]
+    C2 --> C3[下一個請求繼續迴圈]
+    Server --> S1[Claude 發出 server_tool_use<br/>id 前綴為 srvtoolu]
+    S1 --> S2[Anthropic 在回合內部執行它]
+    S2 --> S3[結果區塊在同一回合回傳<br/>你不回傳 tool_result]
+```
+
+**用戶端工具**——包含你自訂的工具*以及* `bash`、`text_editor` 這類 Anthropic 結構描述的工具——會產生 `tool_use` 區塊與 `stop_reason: "tool_use"`。回合**停下**,控制權交回給你,你的程式碼執行該操作,你在下一個請求回傳 `tool_result`。執行、執行環境、網路與影響範圍都由你掌控。
+
+**伺服器端工具**——`web_search`、`web_fetch`、`code_execution`、`tool_search`、`advisor`——會產生 `server_tool_use` 區塊,其 `id` 帶有 `srvtoolu_` 前綴。Anthropic 在*同一個助理回合內*、於自家基礎設施執行該工具,結果區塊(例如 `web_search_tool_result`)就出現在**同一個回應**裡,透過 `tool_use_id` 與呼叫配對。**你永遠不必寫處理程式,也永遠不回傳 `tool_result`。**
+
+> **為何重要。** 用戶端工具是你控制流程中的一道*接縫*——每次呼叫都是驗證、記錄、遮罩或阻擋的機會(這正是第 3 章 hooks 所在之處)。伺服器端工具則是*在你看到任何東西之前就執行到底的黑盒*。你以控制換取便利:沒有要託管的基礎設施,但也沒有可攔截呼叫的 `PreToolUse` hook。
+
+## 20.2 伺服器端工具目錄
+
+這五個全在 Anthropic 基礎設施執行;你只要**在 `tools` 宣告它們**即可啟用——不必部署其他東西。
+
+| 工具 | 型別識別碼 | 功能 |
+|---|---|---|
+| Web search | `web_search_20250305`(基本)、`web_search_20260209`+(動態過濾) | 即時網路搜尋,附**引用**;結果帶有 `encrypted_content`,在多輪對話中必須回傳。 |
+| Web fetch | `web_fetch_20250910`(基本)、`web_fetch_20260209`+ | 擷取/解析特定 URL 或 PDF(通常是對話中已出現的)。 |
+| Code execution | `code_execution_20250825`(加 `_20260120`、`_20260521`) | 沙箱 **Python + bash** 容器;預裝資料科學套件;容器可重用約 30 天。 |
+| Tool search | `tool_search_tool_regex` / `tool_search_tool_bm25` | 從大型工具庫按需探索工具;其餘標 `defer_loading: true`,其結構描述稍後以*附加*方式載入(保留 prompt 快取)。 |
+| Advisor | `advisor_20260301`(beta) | 把較便宜的執行模型與較聰明的顧問模型配對,在生成中諮詢(顧問能力須 ≥ 執行模型)。 |
+
+有兩組關係值得牢記:
+
+- **Code execution 是「動態過濾」背後的引擎。** 使用 `web_search_20260209`+(或對應的 web fetch 版本)時,Claude 會寫程式碼,在原始搜尋結果*進入上下文視窗之前*先做後處理——只留下相關內容。這就是為何那些 web 工具版本會默默配置一個 code execution 容器,也是為何**code execution 與 web search 或 web fetch 併用時免費**。
+- **`tool_search` 是為了規模而存在,不是為了功能。** 若代理可存取數百個工具,把每份結構描述都放進提示既昂貴又稀釋注意力。延遲載入其中大多數,讓 Claude 搜尋它需要的那幾個;探索到的結構描述以附加方式載入,因此較早的快取斷點得以保留(第 18 章)。
+
+## 20.3 Anthropic 結構描述的用戶端工具(仍由你執行)
+
+有一個微妙的中間類別會絆倒架構師:**Anthropic 公布了結構描述,但執行呼叫的是你的應用程式。** 它們看似「內建」,行為卻像用戶端工具——`stop_reason: "tool_use"`,由你執行,由你回傳 `tool_result`。
+
+- **Bash**(`bash_20250124`)與 **text editor**(`text_editor_20250728`)—— 無結構描述、由 Anthropic 訓練的工具,並附有參考實作。**你**提供 shell 與檔案系統。*請沙箱化*——它們會以你的處理程式授予的權限執行。
+- **Memory tool**(`memory_20250818`)—— Claude 讀寫 `/memories` 目錄做跨工作階段狀態;**後端由你實作**(一個目錄、一個儲存桶或一個資料庫)。它是長時間代理背後的持久記憶基元(第 21 章)。
+- **Computer use** —— 螢幕截圖加上滑鼠/鍵盤操控 GUI(beta)。你執行桌面環境,並重放 Claude 請求的動作。
+
+> **陷阱。** `code_execution`(伺服器端)與 `bash`/`text_editor`(用戶端)*看起來*可以互換——兩者都「執行程式碼」。其實不然。伺服器端 `code_execution` 容器在 Anthropic 基礎設施執行,**網路停用**且無法存取你的系統。用戶端 `bash` 工具則在**你掌控的機器**上執行,使用你開放的網路與資料。若你同時啟用兩者,Claude 就處於*多電腦*環境而可能搞混它們;Anthropic 建議在系統提示加上一段說明,釐清狀態**不會**在兩者之間留存,且用戶端工具才是通往使用者本機系統的路徑。
+
+## 20.4 伺服器端迴圈、`pause_turn` 與混合回合
+
+這是文件反覆警告的唯一一段控制流程,也是最常見的上線錯誤。伺服器端工具在一個**伺服器端代理迴圈**裡執行:Claude 可以搜尋、讀結果、再搜尋,最後才寫出答案——全都在單一一次 `messages.create` 呼叫之內。
+
+有兩種情境會打破「一個請求、一個回應」的簡單心智模型:
+
+**1. `pause_turn` —— 迴圈跑太久。** 在長時間回合(例如 `web_search` 配 `max_uses: 10`),API 可能暫停並回傳 `stop_reason: "pause_turn"`。修法很機械:在下一個請求裡把**剛收到的回應內容原樣回傳**(也就是你剛收到的那則助理訊息),並帶上**相同的 `tools` 陣列**。拿掉工具請求就會 400,因為暫停的回合可能結束在一個其工具尚未執行的 `server_tool_use` 區塊上。被延續的回合可能再次暫停——持續循環直到拿到不同的 `stop_reason`,並像任何重試迴圈一樣為延續次數設上限。
+
+**2. 混合伺服器端 + 用戶端回合 —— 是 `tool_use`,不是 `pause_turn`。** 若 Claude 在同一個平行群組裡呼叫了伺服器端工具**以及***你的*某個用戶端工具,API 就**不會**執行伺服器端工具。它會立即回傳 `stop_reason: "tool_use"`、一個**沒有**結果的 `server_tool_use` 區塊,以及你的用戶端 `tool_use` 區塊。你透過尋找沒有對應結果的 `server_tool_use` id 來偵測這個狀態。你執行你的用戶端工具,然後送出一則**只含 `tool_result` 區塊**的後續使用者訊息——別無其他。API 會把你的結果附到仍開啟的回合上,*接著*執行被延後的伺服器端工具,再繼續。
+
+```mermaid
+flowchart TD
+    Req[帶伺服器端與用戶端工具呼叫 messages.create] --> Resp[助理回應]
+    Resp --> Q{stop_reason?}
+    Q -->|end_turn| Done[完成 —— 伺服器端工具已內聯執行]
+    Q -->|pause_turn| Re[原樣回傳回應<br/>相同 tools 陣列]
+    Re --> Req
+    Q -->|tool_use| Mix[出現用戶端 tool_use<br/>外加無結果的 server_tool_use]
+    Mix --> Exec[執行你的用戶端工具]
+    Exec --> Only[送出只含 tool_result 區塊的<br/>使用者訊息]
+    Only --> Req
+```
+
+> **要牢記的兩種失敗模式。** (a) 在後續訊息的 `tool_result` 區塊*之後*放任何東西——即使只是一個文字區塊——都會告訴 API 回合已結束,使被延後的伺服器端工具懸而未決 → 400。(b) 在延續請求中從 `tools` 陣列拿掉伺服器端工具 → 400(`but no web_fetch tool was provided`)。兩者都是「我在回合中途改變了對話形狀」的錯誤。
+
+## 20.5 成本與安全取捨
+
+伺服器端工具把工作移出你的基礎設施,卻引入用戶端工具沒有的**用量計費表**與**資料留存面**。
+
+**定價(在 token 之外另計):**
+
+| 工具 | 計費 | 備註 |
+|---|---|---|
+| Web search | **每 1,000 次搜尋 $10** | 每次搜尋算一次,不論回傳幾筆結果。錯誤**不**計費。引用的 `cited_text`/`title`/`url` 不算 token;結果內容算。 |
+| Code execution | **與 web search/fetch 併用免費**;否則**每月 1,550 小時免費,之後每容器每小時 $0.05** | 每工作階段最低計 5 分鐘;若預載檔案,即使未呼叫也計費。 |
+| 用戶端工具 | 僅標準 token | 沒有用量計費——你託管的運算本來就要付費。 |
+
+用 `max_uses` 來**確定性地**為 web search 成本設上限(研究代理可允許 15–20;延遲敏感的查詢設 3)。記住:每筆擷取到的搜尋結果在本回合及後續回合都會變成**輸入 token**——無上限的研究迴圈是一張 token 帳單,不只是搜尋帳單。
+
+**安全性與資料留存:**
+
+- **Code execution 沙箱是真正隔離的:** 網路**完全停用**、無對外請求、與主機及其他容器完全隔離、檔案系統限縮於你 API 金鑰的工作區、容器在 30 天後到期。Claude 寫的程式碼**無法外洩**到網路,也無法觸及你的系統。
+- **ZDR(零資料留存)是那道利刃。** 基本的 `web_search_20250305` 與 `web_fetch_20250910` 符合 ZDR 資格。`_20260209`+ 的動態過濾版本則**不**符合,因為它們內部用到 code execution——而 **code execution 永遠不符合 ZDR 資格**。要在 ZDR 下使用 2026 世代的 web 工具,你必須以 `"allowed_callers": ["direct"]` 停用動態過濾。*這正是受資料留存合約約束的架構師必須明確攤開的取捨:* 動態過濾省下的 token,對上 ZDR 合規。
+- **網域過濾是你給網路用的 ACL。** `allowed_domains` / `blocked_domains`(兩者擇一,絕不並用)管制 Claude 能觸及哪些網站。不含 scheme、自動納入子網域、主機名稱不可用 `*.` 萬用字元。**只用 ASCII 網域**——`аmazon.com` 裡的西里爾字母 `а` 是一種同形異義字攻擊,會溜過天真的允許清單。
+
+## 20.6 端到端案例研究:合規研究助理
+
+上述元件唯有在真實代理必須*在同一回合內*於託管與自託管執行之間做選擇時才有意義。以下是一家受監管公司的上線助理——在這種系統裡,「誰執行了程式碼、資料流向何處」是稽核問題,不是註腳。
+
+### 需求
+
+- 分析師以自然語言詢問某交易對手本季是否受任何**新制裁或負面媒體**影響,以及這與公司對該對手的**內部曝險**相比如何。
+- 需要**即時網路研究**(制裁清單每天變動)——且它**只能**觸及一組核准的監理機關與通訊社網域。
+- 公司的**曝險數字存於內部資料庫**,**絕不能**離開公司網路——所以那筆查詢是公司自託管的**用戶端工具**。
+- 最終答案必須**計算**風險分數(曝險 × 嚴重度),並為每一項外部主張**附上引用**。
+- 公司在網路研究這條路徑上負有**資料留存義務**。
+
+### 架構
+
+切分方式自需求自然導出:網路研究與數字運算是**伺服器端工具**(不必執行基礎設施、引用免費);曝險查詢是**用戶端工具**,因為資料具主權性。
+
+```mermaid
+flowchart TD
+    Analyst([分析師]) --> App[應用程式 + API 呼叫]
+    App -->|tools 陣列| Claude[Claude 回合]
+    Claude --> WS[伺服器端工具 web_search<br/>allowed_domains 僅限監理機關]
+    Claude --> CE[伺服器端工具 code_execution<br/>在沙箱算風險分數]
+    Claude --> DB[用戶端工具 query_internal_db]
+    WS -. 引用 + encrypted_content .-> Claude
+    CE -. 計算出的分數 .-> Claude
+    DB --> Handler[公司自託管處理程式<br/>位於網路內部]
+    Handler -. tool_result 曝險 .-> Claude
+    Claude --> Answer[附引用的風險簡報]
+```
+
+`query_internal_db` 是公司**唯一**掌控的接縫——而這是刻意的:具主權的資料路徑正是必須留在用戶端的那一條,在那裡套用公司自己的驗證、記錄與網路邊界。
+
+### 設定
+
+宣告這三個工具。注意 web search 上的**網域允許清單**與 **ZDR 安全的 caller** 設定;用戶端工具帶有一般的 `input_schema`:
+
+```python
+tools = [
+    {
+        "type": "web_search_20260209",
+        "name": "web_search",
+        "max_uses": 8,                          # 為 $10/1k 計費表設上限
+        "allowed_domains": [                     # 僅限監理機關 + 通訊社
+            "treasury.gov", "sanctionssearch.ofac.treas.gov",
+            "reuters.com", "ec.europa.eu",
+        ],
+        "allowed_callers": ["direct"],          # 停用動態過濾 -> 符合 ZDR 資格
+    },
+    {"type": "code_execution_20250825", "name": "code_execution"},
+    {
+        "name": "query_internal_db",            # 用戶端工具:公司託管處理程式
+        "description": "Return the firm's current exposure to a counterparty. Internal only.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"counterparty_id": {"type": "string"}},
+            "required": ["counterparty_id"],
+        },
+    },
+]
+```
+
+兩個刻意的決定:`allowed_callers: ["direct"]` 以動態過濾省下的 token 換取研究路徑的 **ZDR 資格**(§20.5);曝險數字透過**用戶端**工具流動,因此永遠不會碰到 Anthropic 的基礎設施。
+
+### 執行軌跡
+
+看回合形狀如何改變。Claude 想同時搜尋網路(伺服器端)**並**查詢內部 DB(用戶端)——於是回合以 `tool_use` 停下,公司執行其主權查詢,被延後的網路搜尋則在延續時執行:
+
+```mermaid
+sequenceDiagram
+    actor An as 分析師
+    participant App as 應用程式
+    participant Cl as Claude 回合
+    participant DB as 公司 DB 處理程式
+    An->>App: 「對手 C-204 的制裁風險與我們的曝險相比?」
+    App->>Cl: messages.create(web_search + code_execution + query_internal_db)
+    Cl-->>App: stop_reason tool_use<br/>server_tool_use web_search(無結果) + tool_use query_internal_db
+    App->>DB: query_internal_db(C-204)
+    DB-->>App: 曝險 420 萬美元
+    App->>Cl: 只含 tool_result(曝險) 的使用者訊息
+    Cl->>Cl: 被延後的 web_search 在伺服器端執行
+    Cl->>Cl: code_execution 在沙箱計算風險分數
+    Cl-->>App: stop_reason end_turn<br/>附引用的簡報 + 分數
+```
+
+最重要的一行:當 Claude 把伺服器端呼叫與用戶端呼叫混在一起時,`stop_reason` 是 **`tool_use`,不是 `pause_turn`**——而後續訊息**只**帶 DB 查詢的 `tool_result`。那裡多放任何區塊都會讓被延後的 `web_search` 懸空並使請求 400(§20.4)。
+
+### 驗證
+
+- **回合形狀測試:** 斷言當模型把 `query_internal_db` 與 `web_search` 一起發出時,回應是 `stop_reason == "tool_use"`,且有一個**沒有**對應結果的 `server_tool_use` 區塊;斷言延續(只含 `tool_result`)以 `end_turn` 結束。
+- **網路隔離測試:** 讓 `query_internal_db` 指向一個只存在於網路內部的值,確認它出現在答案中——證明主權路徑留在用戶端。
+- **網域守門測試:** 斷言一個*本會*觸及非允許清單網域的搜尋,不會回傳該網域的結果;稽核允許清單有無非 ASCII 同形異義字。
+- **ZDR 測試:** 確認 web 工具設為 `allowed_callers: ["direct"]`;少了它,`_20260209` 版本就**不**符合 ZDR 資格。
+- **成本測試:** 確認 `max_uses` 為搜尋設上限;斷言該次執行的 `server_tool_use.web_search_requests` 維持在預算內。
+
+### 常見陷阱
+
+- 在混入**用戶端**工具時預期 `pause_turn`——其實是 `tool_use`;伺服器端工具是被*延後*,不是被暫停(§20.4)。
+- 在後續訊息的 `tool_result` 之後加上文字區塊 → 回合提早關閉,被延後的 `web_search` 就 400。
+- 在 ZDR 合約下使用 `_20260209`+ web 工具卻**沒有** `allowed_callers: ["direct"]`——動態過濾會牽進 code execution,而它永遠不符合 ZDR 資格(§20.5)。
+- 把具主權的曝險數字改走 `code_execution`(伺服器端)而非用戶端工具——內部資料就會離開網路。
+- 在後續回合忘了回傳 web search 結果的 `encrypted_content`,使引用失效。
+
+## 20.7 關鍵整理
+
+| 概念 | 要記住什麼 |
+|---|---|
+| 兩種執行模型 | 用戶端工具 → `tool_use`,由*你*執行並回傳 `tool_result`;伺服器端工具 → `server_tool_use`(`srvtoolu_`),由 Anthropic 在回合內部執行,**不回傳 `tool_result`**(§20.1)。 |
+| 伺服器端目錄 | Web search、web fetch、code execution、tool search、advisor —— 在 `tools` 宣告,不必託管基礎設施(§20.2)。 |
+| Anthropic 結構描述的用戶端工具 | `bash`、`text_editor`、`memory`、computer use 附帶結構描述,但**由你執行**——請據此沙箱化(§20.3)。 |
+| `pause_turn` 對比混合 `tool_use` | 長伺服器端迴圈 → `pause_turn`,原樣回傳(相同 tools)。伺服器端**加**用戶端在同一回合 → `tool_use`;回覆**只含** `tool_result` 區塊(§20.4)。 |
+| 成本計費表 | Web search **每千次 $10**(用 `max_uses` 設上限);code execution **與 web 工具併用免費**,否則 1,550 免費小時後**每容器每小時 $0.05**(§20.5)。 |
+| 安全邊界 | Code execution 沙箱**網路停用**;除非 `allowed_callers: ["direct"]`,否則 ZDR 排除動態過濾 web 工具;主權資料留在**用戶端**工具;網域允許清單只用 ASCII(§20.5)。 |
+
+> **工程判斷,而非考試記誦。** 架構師要做的決定是*放置*:當你需要一道控制接縫、或資料具主權性時,把能力做成用戶端工具自行託管;當你想要零基礎設施、且能接受黑盒呼叫時,讓 Anthropic 以伺服器端工具託管它。把回合形狀(`pause_turn` 對比 `tool_use`)與資料留存姿態做對,伺服器端工具就是助力倍增器,而非負債。
 
 # 第 21 章:長上下文技術(Compaction、Context Editing、記憶)
 
-> *參考 —— 超出考綱。* 文件:[Compaction](https://platform.claude.com/docs/en/build-with-claude/compaction) · [Context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing)。
+> *參考 —— 超出考綱。* 文件:[Compaction](https://platform.claude.com/docs/en/build-with-claude/compaction) · [Context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing) · [Memory tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool) · [Context windows](https://platform.claude.com/docs/en/build-with-claude/context-windows)。
 
-對於跑得夠久、會壓迫上下文視窗的代理,有三種不同的 API 機制(別搞混):
+第 11 章教的是考試所需的上下文管理*紀律*:一份預算、它的失效模式(context rot、lost-in-the-middle、工具結果膨脹),以及架構師會動用的手工技術 —— facts block、修剪 hook、滑動視窗。**本章則是它底下的正式工程層:Anthropic 提供的三種具體 API 機制,讓你不必全部手工打造**,以及在一個跑數小時甚至數天的代理上把它們組合起來的規則。本章明確*超出基礎考綱*(第四部分),但它正是把示範用代理與能撐過真實長時程任務的代理區分開來的東西。
 
-- **Compaction(壓縮)** —— 接近上限時在伺服器端**摘要**較早的歷史,再從摘要繼續。Beta `compact-2026-01-12`(`context_management.edits: [{type: "compact_20260112"}]`)。**關鍵:** 下次請求要把整個 `response.content`(含 compaction 區塊)接回去,否則會遺失壓縮狀態。
-- **Context editing(上下文編輯)** —— **清除**(非摘要)過時內容:`clear_tool_uses_20250919` 丟掉舊工具結果,`clear_thinking_20251015` 丟掉思考區塊。Beta `context-management-2025-06-27`。當舊工具輸出已成負擔時使用。
-- **記憶(跨工作階段)** —— memory tool(第 20 章)或 Managed Agents 的 **memory stores** 把資訊存在視窗**之外**,跨上下文重置與整個工作階段都能留存。
+即使有一百萬 token,視窗仍是有限的,而這三種機制從三個不同層面攻擊問題:
 
-**如何選:** context editing 在單一工作階段內修剪;compaction 在接近上限時摘要;記憶則跨工作階段留存。長時間代理常三者並用(再加上 prompt caching,第 18 章)。
+- **Compaction(壓縮)**(§21.2)—— 接近上限時,API 在伺服器端把較早的回合*摘要*掉,並從摘要繼續。有損、自動、在單一工作階段內。
+- **Context editing(上下文編輯)**(§21.3)—— 在模型看到之前,把過時的工具結果與思考區塊從歷程中*清除*(非摘要)。保留的結構無損,移除負擔,在單一工作階段內。
+- **memory tool(記憶工具)**(§21.4)—— Claude 讀寫視窗*之外*的檔案,因此狀態能撐過 compaction、上下文重置與整個工作階段。跨工作階段留存。
 
----
+§21.1 闡述預算與 200K-對-1M 的取捨;§21.5 涵蓋正式環境中會咬人的交互作用(prompt caching、保留什麼丟棄什麼);§21.6 從頭到尾建構一個完整的**跨數日程式庫遷移代理**;§21.7 濃縮決策規則。
+
+## 21.1 預算,以及為何 1M 並不會讓問題消失
+
+每個請求都以固定順序渲染 —— **`tools` → `system` → `messages`** —— 這些區段的累計總和就是你要管理的預算。目前的模型陣容給你兩個必須據以設計的上限:
+
+| 模型 | 上下文視窗 | 備註 |
+|---|---|---|
+| Claude Opus 4.8 / 4.7 / 4.6、Sonnet 4.6、Fable 5 | **1M token** | Opus 的 1M 採標準計價 —— 無長上下文加價 |
+| Claude Haiku 4.5 | **200K token** | 便宜、快速的層級 —— 也是你*最先*撞到的那個 |
+
+**陷阱在於把更大的視窗當成解方。** 它不是,有三個架構師必須內化的理由:
+
+- **召回隨長度退化(context rot)。** 注意力要關聯每一對 token —— 一個 n² 的成本,在長輸入上會被攤得很薄。位於 600K token 處的事實,比同一事實位於 6K 處*更難*被注意到。更大的預算*延後*失效;並不能廢除它。
+- **成本與延遲隨你重送的量成長。** API 是無狀態的:每個回合你都重送整段歷程。一段 700K token 的歷程會在*每一個*後續回合被計費(以 cache-read 或全額費率)。任由歷程無上限地朝 1M 成長,是一個成本決策,不只是品質決策。
+- **subagent / 便宜模型層級是 200K。** 一旦你把子任務委派給 Haiku(§21.5),或為了成本在 Haiku 上執行,你的有效視窗就是 200K —— 本章技術不再是可選的。
+
+```mermaid
+flowchart TD
+    Budget[上下文視窗預算<br/>即使 1M 也有限] --> Fixed[tools 加 system<br/>穩定前綴]
+    Budget --> Hist[messages 歷程<br/>每回合都成長]
+    Hist --> Big[工具結果與思考<br/>主體也是雜訊]
+    Big --> Near{接近<br/>觸發門檻?}
+    Near -->|否,但過時| Edit[Context editing<br/>清除已死的工具結果]
+    Near -->|是,接近上限| Compact[Compaction<br/>摘要較早的回合]
+    Edit --> Persist[把durable facts<br/>寫入 memory tool]
+    Compact --> Persist
+    Persist --> Continue[繼續執行]
+```
+
+**鄰近考試的框架,正式環境的現實:** 第 11 章給你症狀對應到成因的地圖;本章給你*受託管*的緩解手段。當問題是「代理在跑了 5 小時後忘了一個決策」,基礎考綱的答案是 durable facts block(§11.2)。正式環境的答案再加上:*並用 memory tool 留存它,讓它撐過下一次 compaction,以及整個下一次工作階段。*
+
+## 21.2 Compaction —— 接近上限時摘要
+
+Compaction 是伺服器端、有損的摘要,會在對話接近門檻時自動觸發(預設約 150K token)。API 把較早的回合濃縮成一個 **compaction 區塊**,然後從該摘要繼續,而非完整歷程。你逐請求選擇加入。
+
+```python
+client.beta.messages.create(
+    betas=["compact-2026-01-12"],                       # 必要的 beta header
+    model="claude-opus-4-8",
+    max_tokens=16000,
+    messages=messages,
+    context_management={"edits": [{"type": "compact_20260112"}]},
+)
+# 把整個 content 接回去 —— 包含 compaction 區塊:
+messages.append({"role": "assistant", "content": response.content})
+```
+
+**漏掉就會搞砸一切的那一條規則:** 下一回合要把整個 `response.content`(不只是文字)接回 `messages`。compaction 區塊就在 `response.content` *裡面*;API 會用它在下一個請求時取代被壓縮的歷程。只取出 `block.text` 並把那串字串接回去,你就悄悄丟掉了壓縮狀態 —— 下一個請求會重送*完整*未壓縮的歷程,compaction 等於從未發生。
+
+**為何使用它(以及它的代價):**
+- **為何:** 它是唯一能讓單一對話在不必你自己寫摘要器的情況下,存活超過視窗的機制。當對話的*脈絡*仍然重要、且你能容忍對舊細節的有損召回時,它就是對的工具。
+- **代價 —— 漸進式摘要遺失。** 每次 compaction 都會把精確的值(金額、ID、行號、檔案路徑)壓成散文(「使用者回報一個失敗的測試」)。數字會模糊。**這是核心陷阱:** 永遠不要讓承重事實*只*存在於可壓縮的歷程裡。把它們提升到每回合重新注入的 durable facts block(§11.2),或 —— 對長時程更好 —— 提升到 memory tool(§21.4),兩者都位於被摘要的歷程之外。
+
+**可用性:** beta,在 Fable 5、Opus 4.8 / 4.7 / 4.6 與 Sonnet 4.6 上。Beta header `compact-2026-01-12`;你必須呼叫 `client.beta.messages.*`。
+
+## 21.3 Context Editing —— 清除過時工具結果,而非摘要
+
+Context editing 是相對於 compaction 那把鈍器的手術刀。它**清除**內容而非摘要:舊的 `tool_use`/`tool_result` 配對與舊的 `thinking` 區塊,會在模型看到下一回合之前從歷程中*移除*。你保留的一切其對話結構維持完整且無損;負擔則直接消失。
+
+```python
+client.beta.messages.create(
+    betas=["context-management-2025-06-27"],            # 與 compaction 不同的 beta header
+    model="claude-opus-4-8",
+    max_tokens=16000,
+    tools=tools,
+    messages=messages,
+    context_management={"edits": [
+        {"type": "clear_tool_uses_20250919"},           # 丟掉舊工具結果
+        {"type": "clear_thinking_20251015"},            # 丟掉舊思考區塊
+    ]},
+)
+```
+
+兩種策略,可一起或分開使用:
+- **`clear_tool_uses_20250919`** —— 清除舊的工具*結果*。加上 `clear_tool_inputs: true` 連產生它們的 `tool_use` 參數一起丟掉。這是高價值的那個:一次跨 30 個檔案的調查會累積數十份巨大的檔案輸出,而模型早已從中取出所需。
+- **`clear_thinking_20251015`** —— 清除舊的 `thinking` 區塊。在長的編輯/測試迴圈上,一旦它所支撐的動作完成,過時的推理就是純粹的壓艙物。
+
+**Compaction 對比 context editing —— 文件特別強調的區別:** *compaction 是摘要(有損,保留要旨),context editing 是清除(對存活者無損,被清除區塊則什麼都不留)。* 它們使用**不同的 beta header 與不同的 `edits` 類型**(`compact_20260112` + `compact-2026-01-12` 對 `clear_*` + `context-management-2025-06-27`)—— 把它們搞混是典型的實作 bug。
+
+**為何使用它,以及陷阱:**
+- **為何:** 舊工具輸出是長時程視窗裡單一最大、最吵雜的佔用者(§11.1)。清除它比摘要它更便宜、也*更忠實* —— 你逐字保留活的對話,而非把一切都模糊掉。
+- **陷阱 —— 清除了你仍需要的東西。** 一旦工具結果被清除就沒了;若後續回合需要那筆資料,模型必須重新抓取(一次工具呼叫),否則就遺失。修法和往常一樣是那個分離:在原始結果老化掉*之前*,把 durable facts(發現、ID、行號)提取到 facts block 或 memory。清掉那 2,000 token 的檔案輸出;保留那一行重要的。
+
+## 21.4 Memory Tool —— 比視窗活得更久的狀態
+
+Compaction 與 context editing 都在工作階段*之內*運作。memory tool 是跨工作階段的機制:Claude 讀寫 `/memories` 目錄中的檔案,而該目錄能跨上下文重置與完全分離的工作階段留存。它是一個**用戶端**工具 —— Anthropic 定義 schema 與 Claude 的使用模式,但**由你實作儲存後端**(本機磁碟、資料庫、物件儲存)。
+
+```python
+response = client.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=16000,
+    tools=[{"type": "memory_20250818", "name": "memory"}],   # 無 schema、由 Anthropic 定義
+    messages=[{"role": "user", "content": "Resume the migration from where we left off."}],
+)
+# Claude 發出 memory 的 tool_use 區塊;由「你的」handler 對 /memories 執行它們
+# 並回傳 tool_result。SDK 內附 BetaAbstractMemoryTool / betaMemoryTool 輔助類別。
+```
+
+Claude 以六個指令驅動它 —— `view`、`create`、`str_replace`、`insert`、`delete`、`rename` —— 來維護自己的筆記:遷移檢查清單、逐檔狀態表、決策及其理由、學到的教訓。跨工作階段的模式是「先查 memory,邊做邊寫下發現」。
+
+**為何它是長時程的基石:**
+- 它是三者中*唯一*能撐過工作階段邊界的。compaction 狀態與 facts block 都會在行程結束時消亡;memory 檔案不會。
+- 它把「記住這件事」變成可稽核、甚至能在首次執行前預先植入的、持久且可檢視的狀態。
+
+**陷阱與安全邊界(這是架構師會弄錯的部分):**
+- **絕不在 memory 檔案中儲存密鑰**(API 金鑰、token、密碼),並對 PII 要刻意謹慎 —— 這些檔案會留存,且可能在代理的整個生命週期內被重讀。參考後端*沒有內建存取控制*。
+- **在多使用者系統中,把 `/memories` 依使用者範圍切分,並對每次讀寫驗證身分。** 共用的 memory 目錄會把一位使用者的上下文洩漏進另一位的工作階段。這是真實、鄰近刪除法規(GDPR/CCPA)的考量,不是假設。
+- **任其無上限成長,它就在新的地方變成膨脹問題。** 把 memory 限制在持久識別碼、決策與教訓 —— 而非一份流水帳。
+
+> Managed Agents 有一個對應的構造 —— 工作區範圍的 **memory stores**,掛載進工作階段容器 —— 以 Anthropic 託管的儲存與逐次變更的版本歷史,解決相同的跨工作階段問題。目標相同;你不必實作後端。
+
+## 21.5 會咬人的交互作用:快取,以及保留什麼丟棄什麼
+
+這三種機制並非活在真空中 —— 它們會與 prompt caching(第 18 章)以及彼此相撞。
+
+**Prompt caching 是前綴比對,而編輯歷程會移動前綴。** 快取以到某個 `cache_control` 斷點為止的確切位元組為鍵,渲染順序為 `tools → system → messages`。兩個後果:
+- **Compaction 與 context editing 會改寫 `messages` 前綴**,使被編輯點之後的快取讀取失效。這通常是可接受的取捨 —— 你花一次冷 prefill,換回後續每回合數萬 token —— 但這代表你不該觸發比所需更積極的編輯。
+- **快取是逐模型、逐工具集的。** 在工作階段中途切換模型或更動工具清單,會炸掉整個快取(tools 在位置 0 渲染)。這正是 subagent 模式對長上下文工作重要的*原因*:讓主迴圈維持在單一模型搭配穩定工具集,使其快取存活,並把便宜或上下文隔離的子任務推給 Haiku subagent,其 200K 視窗與獨立快取不會碰到主迴圈。
+
+**保留什麼丟棄什麼 —— 架構師的配置規則。** 把視窗依存活優先序當成分層來對待:
+
+```mermaid
+flowchart TD
+    Turn[新回合抵達] --> Q1{這是 durable<br/>fact、ID 或決策嗎?}
+    Q1 -->|是| Keep[寫入 memory<br/>與 facts block]
+    Q1 -->|否| Q2{是過時的工具<br/>結果或舊思考嗎?}
+    Q2 -->|是| Clear[讓 context editing<br/>清除它]
+    Q2 -->|否| Q3{接近 compaction<br/>門檻嗎?}
+    Q3 -->|是| Summ[讓 compaction<br/>摘要脈絡]
+    Q3 -->|否| Live[在活的視窗中<br/>逐字保留]
+```
+
+- **永遠保留,放在可摘要的歷程之外:** 識別碼、金額、file:line 位置,以及已定案的決策 —— 放在 facts block 與／或 memory。它們絕不能受摘要遺失所影響。
+- **最先丟棄(context editing):** 原始工具輸出與已解決的思考 —— token 量高、剩餘訊號低。
+- **最後才摘要(compaction):** 對話脈絡,當你真的需要其要旨且已到上限時。
+- **引用,別內嵌:** 對於巨大的產物,把它們儲存起來(Files API、memory、一個路徑)並傳一個*引用*;讓模型按需抓取,而非每回合把酬載停在視窗裡。
+
+## 21.6 端到端案例研究:跨數日程式庫遷移代理
+
+機制唯有組裝起來才有意義。以下是一個真實的長時程代理,操練全部三者 —— 這種執行會持續數天,且不可能容納在單一視窗裡。
+
+### 需求
+
+- 把一個大型程式庫從一個框架版本遷移到下一個:數百個檔案,**跨多個工作階段、橫跨數天**執行(無法在一次內完成)。
+- 逐檔:讀它、改它、跑測試、記錄結果。檔案讀取與測試日誌**龐大且大多在該檔完成後即可丟棄**。
+- **硬性需求:** 狀態 —— 哪些檔案完成、哪些失敗及原因、對含糊 API 所做的決策 —— 必須撐過每一次上下文重置與每一個工作階段邊界。忘了一個已完成的檔案就要重做;忘了一個決策就會造成整個程式庫不一致。
+
+### 架構
+
+```mermaid
+flowchart TD
+    Start([新工作階段開始]) --> Mem[讀 memory<br/>遷移檢查清單與狀態]
+    Mem --> Pick[挑下一個待處理檔案]
+    Pick --> Read[讀檔並跑測試<br/>龐大、可丟棄的輸出]
+    Read --> Decide{測試通過?}
+    Decide -->|是| Note[把 done 加決策<br/>寫入 memory]
+    Decide -->|否| Fail[把失敗加原因<br/>寫入 memory]
+    Note --> Clear[Context editing 清除<br/>檔案輸出與測試日誌]
+    Fail --> Clear
+    Clear --> Near{本工作階段<br/>接近 150K?}
+    Near -->|是| Compact[Compaction 摘要<br/>本工作階段脈絡]
+    Near -->|否| Pick
+    Compact --> Pick
+```
+
+主迴圈在 **Opus 4.8** 上執行(1M 視窗、穩定工具集、可快取前綴)。對獨立檔案的大量平行讀取可以扇出給 **Haiku 4.5** subagent(各 200K),使它們永遠不擠壓主視窗 —— 每個只回傳取出的發現。
+
+### 實作草圖
+
+在主請求上啟用全部三者 —— compaction 處理脈絡、context editing 卸掉每個檔案的輸出、memory tool 處理持久狀態:
+
+```python
+def migration_turn(messages):
+    return client.beta.messages.create(
+        betas=["compact-2026-01-12", "context-management-2025-06-27"],
+        model="claude-opus-4-8",
+        max_tokens=32000,
+        tools=[
+            {"type": "memory_20250818", "name": "memory"},        # 持久、跨工作階段
+            {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
+            {"type": "bash_20250124", "name": "bash"},            # 跑測試
+        ],
+        context_management={"edits": [
+            {"type": "compact_20260112"},                          # 接近上限時摘要
+            {"type": "clear_tool_uses_20250919", "clear_tool_inputs": True},  # 丟掉檔案/測試輸出
+        ]},
+        messages=messages,
+    )
+
+# 關鍵:每回合都要把整個 content(含 compaction 區塊)接回去。
+resp = migration_turn(messages)
+messages.append({"role": "assistant", "content": resp.content})
+```
+
+Claude 維護的 memory 檔案是橫跨數日的真實來源:
+
+```
+/memories/migration.md
+  STATUS (一檔一列)
+    src/api/client.ts     DONE    2 call sites updated
+    src/api/refund.ts     FAILED  test t_refund_over_limit: unparameterized SQL, needs manual review
+    src/api/orders.ts     PENDING
+  DECISIONS
+    - getX(opts) -> getX(opts, ctx): always pass ctx from the request scope, never a global
+    - Skip generated files under build/; never edit them
+```
+
+### 執行軌跡
+
+```mermaid
+sequenceDiagram
+    actor Eng as 工程師
+    participant Ag as 遷移代理
+    participant Mem as Memory 後端
+    participant Repo as 程式庫與測試
+    participant API as Context 管理
+    Eng->>Ag: 「Resume the migration.」
+    Ag->>Mem: view /memories/migration.md
+    Mem-->>Ag: 142 done、orders.ts pending、ctx 傳遞決策
+    Ag->>Repo: 讀 orders.ts、編輯、跑測試
+    Repo-->>Ag: 龐大檔案輸出加測試日誌(通過)
+    Ag->>Mem: str_replace orders.ts -> DONE
+    Ag->>API: clear_tool_uses 丟掉輸出與日誌
+    Note over Ag,API: 接近 150K -> compaction 摘要本工作階段
+    Ag-->>Eng: 「orders.ts done;143/300 完成。」
+```
+
+注意分工:**memory 持有必須存活的事實**、**context editing 每回合卸掉可丟棄的主體**、**compaction 在接近上限時維持工作階段連貫**。工程師可以闔上筆電,隔天再續 —— memory 檔案讓代理成為無狀態但持久。
+
+### 驗證
+
+- **跨工作階段測試:** 在第 142 個檔案後殺掉行程,開一個全新的工作階段,斷言代理讀取 memory 並從 143 續做 —— 永不重做已完成的檔案。
+- **事實存活測試:** 在一次 compaction 事件後,斷言 `ctx` 傳遞決策仍套用到*下一個*檔案 —— 證明該決策存活在 memory,而非被摘要掉的脈絡裡。
+- **膨脹測試:** 斷言視窗每檔大致持平(編輯清掉輸出),而非朝上限單調成長。
+- **隔離/安全測試:** 在兩位使用者下跑兩個程式庫;斷言每個代理只讀自己的 `/memories` 目錄。
+
+### 常見陷阱
+
+- 只接回 `response.content` 的文字、丟掉 compaction 區塊 —— 執行會悄悄重送完整歷程,compaction 從未生效(§21.2)。
+- 把遷移狀態*只*存在對話中、信任 compaction 會保留它 —— 摘要器會把「143 done」模糊成「大多數檔案已遷移」(§21.2)。
+- 搞混兩個 beta header / `edits` 類型 —— `compact_20260112` 是摘要,`clear_*` 是清除;它們不可互換(§21.3)。
+- 跨使用者共用 `/memories` 目錄 —— 一個租戶的決策洩漏進另一個的執行(§21.4)。
+
+## 21.7 關鍵整理
+
+| 概念 | 該記住什麼 |
+|---|---|
+| 三種不同機制 | Compaction 是*摘要*(工作階段內、有損);context editing 是*清除*(工作階段內、對存活者無損);memory 是*留存*(跨工作階段)。別搞混(§21.0–§21.4)。 |
+| Compaction | Beta `compact-2026-01-12`、`compact_20260112`;約 150K 自動觸發。**每回合把整個 `response.content`(含 compaction 區塊)接回去**,否則會遺失壓縮狀態(§21.2)。 |
+| Context editing | Beta `context-management-2025-06-27`;`clear_tool_uses_20250919`(+`clear_tool_inputs`)與 `clear_thinking_20251015`。header／類型都與 compaction 不同(§21.3)。 |
+| Memory tool | `memory_20250818`,用戶端,`/memories`;能撐過工作階段。**不放密鑰;依使用者切分範圍;別讓它膨脹**(§21.4)。 |
+| 1M 不會廢除 context rot | 更大的視窗延後失效;召回仍會退化,你仍要付重送成本。便宜/subagent 層級是 200K(§21.1)。 |
+| 快取交互作用 | 編輯歷程會移動被快取的前綴;讓主迴圈維持單一模型加穩定工具,把便宜工作推給 Haiku subagent(§21.5)。 |
+| 保留對丟棄 | 把 ID／金額／決策保留在 memory 加 facts block;以 context editing 丟掉原始工具輸出;最後才摘要脈絡;對巨大產物用引用而非內嵌(§21.5)。 |
+
+> **正式環境的姿態,而非考試教材。** 基礎考試測的是*紀律*(第 11 章)。本章是你如何把它規模化實作:讓 API 替你摘要、清除與留存 —— 但把承重事實放進 memory,永遠不要放在 API 可以自由摘要或清除掉的部分裡。
 
 # 第 22 章:文件與多模態輸入
 
-> *參考 —— 考試把 Vision 與 token counting 列為範圍外;這是給實務用。* 文件:[Files API](https://platform.claude.com/docs/en/build-with-claude/files) · [PDF support](https://platform.claude.com/docs/en/build-with-claude/pdf-support)。
+> *參考 —— 考試把 Vision 與 token counting 列為範圍外;這是給實務用。* 文件:[Vision](https://platform.claude.com/docs/en/build-with-claude/vision) · [PDF support](https://platform.claude.com/docs/en/build-with-claude/pdf-support) · [Files API](https://platform.claude.com/docs/en/build-with-claude/files) · [Citations](https://platform.claude.com/docs/en/build-with-claude/citations) · [Token counting](https://platform.claude.com/docs/en/build-with-claude/token-counting)。
 
-- **Files API**(beta `files-api-2025-04-14`)—— 檔案上傳一次,之後跨多個請求以 `file_id` 引用,不必重送位元組。(Bedrock/Vertex 不支援。)
-- **Vision(視覺)** —— `{"type": "image", "source": {...}}` 內容區塊(base64、URL 或 `file_id`);JPEG/PNG/GIF/WebP。Opus 4.7+ 支援高解析度影像(長邊最高 2576px)且座標與像素 1:1,對 computer use 與文件理解很有用。
-- **PDF 輸入** —— `{"type": "document", ...}` 區塊原生處理 PDF(文字**與**視覺版面);base64(免 beta)或透過 Files API;最多約 600 頁 / 32MB。
-- **Citations(引用)** —— 在文件上設 `citations: {enabled: true}`,回應會帶 `cited_text` 與字元/頁碼位置,提供可驗證、有根據的答案。(與結構化輸出不相容。)
-- **Token counting** —— `count_tokens` 端點在送出**前**給你精確、模型專屬的計數。切勿用 `tiktoken` 估算 Claude 的 token(那是 OpenAI 的 tokenizer,對 Claude 不準)。
+本章揭開 **PART III —— 現代代理工程(Modern Agent Engineering)** 的序幕,也就是「超出基礎考試範圍」的進階內容。認證把 vision 與 token counting 列為範圍外,但沒有任何上線的文件代理能少了它們。當你的代理必須*閱讀* —— 一張掃描的發票、一份兩百頁的合約、一張儀表板截圖、一張沒有底層資料表的圖表 —— 純文字提示就不再夠用。你進入了**多模態輸入**的世界:`image` 與 `document` 內容區塊、三種把位元組送進請求的競爭方式、透過 citations 取得有根據的答案,以及一個「單張影像可能比一頁文字還貴」的成本模型。
 
----
+困難之處不在於「Claude 看得到影像」,而在於**圍繞位元組的工程**:
+
+- **該用哪種來源類型**(§22.2)—— base64、URL,還是 Files API 的 `file_id` —— 以及為何選錯會在多輪代理上悄悄讓帳單變成三倍。
+- **內容區塊結構**(§22.3)—— 影像與文件相對於文字該擺在哪裡,以及為何順序重要。
+- **Citations(引用)**(§22.4)—— 把「相信我」式的答案,變成可驗證、錨定到具體區段的主張,以滿足合規需求。
+- **像素與頁面的 token 成本**(§22.5)—— 考試不教、但你的財務團隊一定會問的計算公式。
+
+§22.6 從頭到尾建構一個完整的發票與合約攝入代理,§22.7 則濃縮上線守則。
+
+## 22.1 多模態內容模型
+
+Claude 訊息的 `content` 不是一個字串 —— 而是一個有序的**內容區塊清單**。文字只是其中一種區塊類型。對文件與多模態輸入來說,有三種區塊類型重要:
+
+```mermaid
+flowchart TD
+    Msg[使用者訊息<br/>content 是有序清單] --> T[text 區塊<br/>提示或標籤]
+    Msg --> I[image 區塊<br/>JPEG PNG GIF WebP]
+    Msg --> D[document 區塊<br/>PDF 原生文字加版面]
+    I --> S{來源類型}
+    D --> S
+    S -->|base64| B[位元組內嵌<br/>免 beta header]
+    S -->|url| U[託管參照<br/>免 beta header]
+    S -->|file_id| F[Files API<br/>需要 beta header]
+```
+
+有兩種區塊類型攜帶非文字輸入:
+
+- **`image`** —— `{"type": "image", "source": {...}}`。格式:JPEG、PNG、GIF(僅取第一幀 —— 動畫會被忽略)、WebP。Claude *理解*影像;它無法*生成*或*編輯*影像。
+- **`document`** —— `{"type": "document", "source": {...}}`。原生處理 PDF,涵蓋**文字*與*視覺版面** —— 每一頁都會被渲染成影像,同時附上該頁擷取出的文字,因此 Claude 能推理圖表、表格與圖形,而不只是文字流。
+
+**這對設計為何重要:**一個「會讀文件」的代理,實際上是一個以正確順序、正確來源類型組裝內容區塊的代理。下游的一切 —— 成本、延遲、快取行為、引用可用性 —— 全都由你如何建構這份清單來決定。
+
+## 22.2 三種來源類型:base64 與 URL 與 Files API
+
+每個 `image` 與 `document` 區塊都會指定一個 `source`,其類型為三者之一。對單一請求而言它們功能上可互換,但操作面貌差異極大 —— 而選錯,是本章在生產環境中最常見的錯誤。
+
+| 來源類型 | Beta header | 位元組傳輸方式 | 最適用於 | 陷阱 |
+|---|---|---|---|---|
+| **base64** | 無 | 每次請求都內嵌 | 一次性呼叫;本機檔案;ZDR 嚴格的流程 | **每一輪**都重送 —— 多輪時 payload 暴增 |
+| **url** | 無 | 伺服器端抓取 | 公開託管的資產 | URL 必須可達;你無法控制該抓取的快取 |
+| **file_id**(Files API) | `files-api-2025-04-14` | 上傳**一次**,以 id 參照 | 同一檔案跨多個請求 / 多輪 | 上傳**與**訊息**兩處**都需要 beta header |
+
+**base64 陷阱。** API 是無狀態的 —— 每次請求都會重送完整的對話歷史。若一份 5 MB 的 PDF 或一張截圖以 base64 內嵌,這些位元組就會在代理迴圈的**每一輪**搭便車。一段 10 輪的對話會把同一份文件重送 10 次。請求大小變大、延遲攀升,而在合作夥伴平台上,你可能在還沒碰到頁數上限之前,就先撞上 32 MB 的請求上限。
+
+**Files API 解法。** 上傳一次,取得 `file_id`,之後永遠以 id 參照:
+
+```python
+# 上傳一次(上傳呼叫需要 beta header)
+uploaded = client.beta.files.upload(
+    file=("contract.pdf", open("contract.pdf", "rb"), "application/pdf"),
+)
+
+# 跨多個請求以 id 參照 —— 位元組「不會」重送
+response = client.beta.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=16000,
+    betas=["files-api-2025-04-14"],   # 這裡也需要
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Summarize the termination clause."},
+            {"type": "document", "source": {"type": "file", "file_id": uploaded.id}},
+        ],
+    }],
+)
+```
+
+內容區塊的類型必須**與檔案的 MIME 類型相符**:PDF/文字檔 → `document` 區塊;影像檔 → `image` 區塊。beta header 在上傳**與**每一個參照該檔案的 `messages.create` 都需要 —— 兩者其中之一漏掉,就是常見的 400。
+
+**決策規則:**單一請求 → base64(最簡單)。同一資產跨多輪或多個請求重用 → Files API(`file_id`)。你信任的公開 URL → `url`。在 **Amazon Bedrock 與 Google Vertex AI 上,只支援 base64** —— Files API 與 `url` 來源都不支援,因此 Bedrock/Vertex 上的文件代理別無選擇,只能內嵌位元組(且必須為重複的 payload 編列預算)。
+
+## 22.3 多模態請求的提示結構
+
+內容區塊的**順序**並非裝飾 —— 它會明顯影響品質。
+
+```mermaid
+flowchart TD
+    Start[建構使用者 content 清單] --> Doc[把 document 或 image 區塊放最前面]
+    Doc --> Label[為每一個加標籤<br/>Image 1 Image 2]
+    Label --> Q[把文字問題放最後]
+    Q --> Multi{多張影像嗎}
+    Multi -->|是| Sep[各以自己的文字標籤引介]
+    Multi -->|否| Send[送出請求]
+    Sep --> Send
+```
+
+官方建議的最佳做法:**影像與文件,要放在詢問它們的文字之前。** 同一套長上下文原則 ——「把大文件放在查詢之前」—— 也適用於像素:影像在前、文字在後的表現,優於文字在前、影像在後。與文字交錯的影像仍然有效,但若你的使用情境允許,就以視覺內容開頭。
+
+**為多個輸入加標籤。** 當一個請求攜帶多張影像或多頁時,以一段簡短的文字標籤引介每一個,讓你能以名稱指涉它們:
+
+```python
+content = [
+    {"type": "text", "text": "Image 1 (the invoice):"},
+    {"type": "image", "source": {"type": "file", "file_id": invoice_id}},
+    {"type": "text", "text": "Image 2 (the purchase order):"},
+    {"type": "image", "source": {"type": "file", "file_id": po_id}},
+    {"type": "text", "text": "Do the line-item totals on the invoice match the PO?"},
+]
+```
+
+沒有標籤時,「把第二個跟第一個比較」會語意不清;有了標籤,模型 —— 以及你的後續輪次 —— 就能精準指涉 `Image 1`。在多輪對話中,Claude 保有對先前輪次每一張影像的存取,因此你**不需要**在後續輪次重新附上它們(而若你用的是 base64,重新附上正是 §22.2 的成本陷阱)。
+
+**與 prompt caching 的互動。** 一份放在內容前段的大文件是理想的快取目標:在 document 區塊上放一個 `cache_control: {"type": "ephemeral"}` 斷點,把多變的問題保持在它*之後*,那麼針對同一份文件的重複查詢,就會以約 10% 的輸入成本讀取被快取的前綴。這是高流量文件工作負載最大的單一槓桿(§22.6)。
+
+## 22.4 Citations:可驗證、有根據的答案
+
+對任何「自信但答錯」會有後果的工作負載 —— 法律、財務、合規 —— 一個純文字答案就是個風險。**Citations** 讓模型把每一項主張錨定到來源文件的確切區段。
+
+在 `document` 區塊上設定 `citations: {enabled: true}`(它必須在請求中的**所有** document 區塊上啟用,否則就全部不啟用):
+
+```python
+response = client.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=16000,
+    messages=[{
+        "role": "user",
+        "content": [
+            {
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64},
+                "title": "Master Services Agreement",
+                "citations": {"enabled": True},
+            },
+            {"type": "text", "text": "What is the notice period for termination?"},
+        ],
+    }],
+)
+```
+
+回應文字會被切成多個 `text` 區塊;提出主張的那些區塊會帶有一個 `citations` 陣列。每個 citation 包含 `cited_text`、`document_index`、`document_title`,以及一個依類型而定的**位置**:
+
+- `page_location` → `start_page_number` / `end_page_number`(從 1 起算),用於 PDF。
+- `char_location` → `start_char_index` / `end_char_index`,用於純文字。
+- `content_block_location`,用於自訂內容。
+
+你可以渲染被引用的區段,並把它連回合約的第 14 頁 —— 答案如今可稽核,而非「相信我」。
+
+**超出考試範圍的讀者必須知道的兩個權衡:**
+
+1. **Citations 與結構化輸出不相容。** 同時啟用 `citations` *與* `output_config.format`(一個 JSON schema)會回傳 400。你無法在單次呼叫裡,得到一個既錨定區段、*又*受 schema 約束的 JSON 答案 —— 選擇情境所需的那一個,或跑兩趟(一次呼叫擷取結構化欄位,另一次蒐集引用)。
+2. **每個請求全有或全無。** Citations 必須在每個 document 區塊都啟用、或都不啟用 —— 你無法在同一個請求裡引用一份文件、卻忽略另一份。
+
+## 22.5 影像與 PDF 頁面的 token 成本
+
+這是基礎考試略過、但你的帳單不會略過的一節。Claude 不以位元組大小計算影像費用 —— 它以**視覺 token(visual tokens)** 計費,而模型在這方面精確且可預測。
+
+**影像。** Claude 以 **28×28 像素的色塊(patches)** 來看待影像;每個色塊是一個視覺 token。一張影像因此花費:
+
+```
+visual_tokens = ceil(width / 28) * ceil(height / 28)
+```
+
+大於模型原生上限的影像會在**處理前先降採樣**,藉此封頂成本。上限取決於模型的解析度層級:
+
+| 層級 | 模型 | 最大長邊 | 最大視覺 token |
+|---|---|---|---|
+| **高解析度** | Fable 5、Mythos 5、Opus 4.8、Opus 4.7 | 2576 px | 4784 |
+| **標準** | 其他所有模型 | 1568 px | 1568 |
+
+高解析度支援在上述模型上是**自動的** —— 免 beta header、免 opt-in。它在密集文件、截圖與 computer use 上釋放出準確度,而 Claude 回傳的座標與實際像素 1:1 對應。代價是:在高解析度模型上,一張全解析度影像可能花費**多達約 3 倍的視覺 token**(最高 4784,對比標準層的 1568)。一張 1000×1000 的影像在任一層級都花費 `ceil(1000/28)² = 36 × 36 = 1296` 個 token;一張 4K 截圖在標準層約花 1560 個 token,但在高解析度模型上會用滿 4784。若你不需要那份精細度,**送出前先降採樣**。
+
+**PDF 頁面收費兩次。** 每一頁都會*同時*以文字與影像處理,因此一頁的計費為:
+
+- **文字 token:**通常**每頁 1,500–3,000 個**,視密度而定。沒有額外的 PDF 費用 —— 套用標準輸入定價。
+- **影像 token:**每一頁都被渲染成影像,並依上述同一套視覺 token 公式計費。
+
+因此一份 50 頁的合約並不是「50 × 文字」—— 而是 50 頁的文字 token *加上* 50 張頁面影像。密集的 PDF 可能在碰到 600 頁上限之前就先耗盡上下文視窗(200K 上下文模型為 100 頁)。
+
+**送出前先計數 —— 切勿用 `tiktoken` 估算。** `count_tokens` 端點在真正呼叫*之前*給你一個精確、模型專屬的計數。`tiktoken` 是 OpenAI 的 tokenizer;它對 Claude 不準(它對一般文字低估約 15–20%,對程式碼或非英文則差更多),而且它根本不理解視覺 token。
+
+```python
+count = client.messages.count_tokens(
+    model="claude-opus-4-8",
+    messages=[{"role": "user", "content": [
+        {"type": "document", "source": {"type": "base64",
+         "media_type": "application/pdf", "data": pdf_b64}},
+        {"type": "text", "text": "Summarize this contract."},
+    ]}],
+)
+print(count.input_tokens)   # 精確,含每頁文字加影像 token
+```
+
+## 22.6 端到端案例研究:發票與合約攝入代理
+
+上述元件唯有組合在一起才有意義。以下是一個完整、真實的文件代理 —— 正是財務或採購團隊會實際部署的那種。
+
+### 需求
+
+- 攝入供應商**發票**(通常是掃描影像 / 照片)與其所依據的**合約**(多頁 PDF)。
+- 對每張發票:擷取結構化欄位(供應商、發票號碼、總額、品項),**並**對照合約核驗每一筆收費費率。
+- 每一項「合約上寫的是 X」的主張都必須**可稽核** —— 錨定到合約 PDF 的某一頁。
+- 同一份合約在當月會被數十張發票查詢 —— 付費讀它一次,而非數十次。
+- 讓每份文件的 token 成本可預測且有回報。
+
+### 架構
+
+```mermaid
+flowchart TD
+    Intake([發票與合約進來]) --> Up[兩者都上傳 Files API<br/>各取得 file_id]
+    Up --> Cnt[count_tokens<br/>為每份文件編列預算]
+    Cnt --> Extract[第一趟擷取欄位<br/>結構化輸出 schema]
+    Up --> Verify[第二趟核驗費率<br/>啟用 citations]
+    Extract --> Merge[合併欄位與引用發現]
+    Verify --> Merge
+    Merge --> Out[結構化紀錄<br/>加頁面錨定證據]
+```
+
+兩趟,因為 §22.4 的規則禁止把它們合併:**第一趟**用 `output_config.format` 做乾淨的結構化擷取;**第二趟**用 `citations` 做頁面錨定的核驗。合約只上傳**一次**到 Files API,兩趟(以及當月之後的每一張發票)都以 `file_id` 參照它 —— 而它的 document 區塊帶有一個 `cache_control` 斷點,讓頁面影像從快取讀取,而非重新處理。
+
+### 實作
+
+把兩份文件各上傳一次,並在花費前為請求編列預算:
+
+```python
+invoice = client.beta.files.upload(
+    file=("invoice.png", open("invoice.png", "rb"), "image/png"),
+)
+contract = client.beta.files.upload(
+    file=("msa.pdf", open("msa.pdf", "rb"), "application/pdf"),
+)
+
+# 真正呼叫前先編列預算 —— 精確且模型專屬
+count = client.beta.messages.count_tokens(
+    model="claude-opus-4-8",
+    betas=["files-api-2025-04-14"],
+    messages=[{"role": "user", "content": [
+        {"type": "image",    "source": {"type": "file", "file_id": invoice.id}},
+        {"type": "document", "source": {"type": "file", "file_id": contract.id}},
+        {"type": "text", "text": "placeholder"},
+    ]}],
+)
+log.info("input_tokens for this document=%d", count.input_tokens)
+```
+
+**第一趟 —— 結構化擷取**(無 citations,因此允許結構化輸出):
+
+```python
+fields = client.beta.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=4096,
+    betas=["files-api-2025-04-14"],
+    output_config={"format": {"type": "json_schema", "schema": INVOICE_SCHEMA}},
+    messages=[{"role": "user", "content": [
+        {"type": "image", "source": {"type": "file", "file_id": invoice.id}},
+        {"type": "text", "text": "Extract supplier, invoice_number, total, and line_items."},
+    ]}],
+)
+```
+
+**第二趟 —— 引用核驗**(啟用 citations;合約區塊被快取以便重用):
+
+```python
+findings = client.beta.messages.create(
+    model="claude-opus-4-8",
+    max_tokens=8000,
+    betas=["files-api-2025-04-14"],
+    messages=[{"role": "user", "content": [
+        {
+            "type": "document",
+            "source": {"type": "file", "file_id": contract.id},
+            "title": "Master Services Agreement",
+            "citations": {"enabled": True},
+            "cache_control": {"type": "ephemeral"},   # 讀一次,整月重用
+        },
+        {"type": "image", "source": {"type": "file", "file_id": invoice.id}},
+        {"type": "text", "text":
+            "For each invoice line item, state whether the charged rate matches "
+            "the contract. Cite the contract clause for every rate you reference."},
+    ]}],
+)
+```
+
+### 執行軌跡
+
+```mermaid
+sequenceDiagram
+    actor Ops as 應付帳款人員
+    participant App as 攝入代理
+    participant Files as Files API
+    participant Claude as Claude
+    Ops->>App: invoice.png 加 msa.pdf
+    App->>Files: 兩者都上傳,取得 file_ids
+    Files-->>App: invoice_id, contract_id
+    App->>Claude: 第一趟 影像加 schema
+    Claude-->>App: 結構化欄位 JSON
+    App->>Claude: 第二趟 合約引用加發票
+    Claude-->>App: 帶頁面引用的發現
+    App-->>Ops: 紀錄加合約第 14 頁的證據
+```
+
+人員拿回一份結構化紀錄*以及*一份發現清單,每一項都連到確切的合約頁面 —— 真人可以在數秒內抽查「第 3 行費率不符,引用至 p.14」,而不必重讀整份合約。
+
+### 驗證
+
+- **成本預算測試:**斷言 `count_tokens` 在每次真正呼叫*之前*執行,且每份文件的 `input_tokens` 有被記錄 —— 一份 50 頁的合約必須被編列為「文字 + 50 張頁面影像」,而非只有文字。
+- **快取測試:**送出當月第二張發票,斷言合約前綴的 `usage.cache_read_input_tokens > 0` —— 若為零,代表每張發票都在重讀合約(檢查 document 區塊的位元組/`file_id` 與前綴是否逐位元組相同)。
+- **引用測試:**斷言每一項「合約上寫的是」發現都帶有含 `page_location` 的 `citations` 陣列;沒有引用的發現就是無根據的主張,必須被拒絕。
+- **來源類型測試:**確認合約在當月所有發票中都以 `file_id` 參照,而非重新內嵌為 base64。
+
+### 常見陷阱
+
+- 在**每張發票上把合約內嵌為 base64** —— 每一輪重送數 MB 並喪失快取(§22.2)。
+- 試圖在**單次呼叫裡同時取得 citations 與結構化 JSON** —— 回傳 400;你必須拆成兩趟(§22.4)。
+- 在上傳或訊息其中之一忘了 **Files API 的 beta header** —— 常見的 400(§22.2)。
+- 把 PDF 只當成**純文字**來編列預算,然後被帳單嚇到 —— 每一頁也會花費影像 token(§22.5)。
+- 用 **`tiktoken`** 而非 `count_tokens` 估算 token —— 對 Claude 不準,且對視覺 token 視而不見(§22.5)。
+
+## 22.7 生產重點 —— 關鍵整理
+
+| 概念 | 生產工作要求什麼 |
+|---|---|
+| 內容區塊 | `content` 是有序清單;`image`(JPEG/PNG/GIF/WebP)與 `document`(PDF 文字 + 版面)攜帶非文字輸入(§22.1)。 |
+| 來源類型 | base64(一次性)、`url`(託管)、`file_id`(跨多輪/多請求重用)。Bedrock/Vertex = 僅 base64(§22.2)。 |
+| base64 陷阱 | base64 位元組每一輪都重送;把重用的資產改用 Files API(`file_id`)以止住膨脹(§22.2)。 |
+| 提示順序 | 把 document/image 放在文字問題**之前**;為多個輸入加標籤 `Image 1`、`Image 2`(§22.3)。 |
+| Citations | `citations: {enabled: true}` → `cited_text` + 頁碼/字元位置;全有或全無;**與結構化輸出不相容**(§22.4)。 |
+| 影像成本 | `ceil(w/28) × ceil(h/28)` 視覺 token;高解析度層(Opus 4.7+)最高 4784,對比標準層 1568 —— 不需精細度就降採樣(§22.5)。 |
+| PDF 成本 | 每頁計費**文字(1,500–3,000)+ 影像 token**;600 頁 / 32 MB 上限(200K 模型為 100 頁)(§22.5)。 |
+| Token 計數 | 用 `count_tokens` 取得精確、模型專屬的計數;切勿用 `tiktoken`(對 Claude 不準、對視覺 token 視而不見)(§22.5)。 |
+
+> **超出基礎考試範圍。** Vision 與 token counting 在認證範圍外,但每一個上線的文件代理都繫於它們的成敗。如果你能建構上面的攝入代理 —— 正確的來源類型、有序的區塊、作為證據的 citations、繞過結構化輸出不相容的兩趟設計,以及一份把像素與頁面也算進去的 token 預算 —— 你就能交付一個正確、可稽核、又負擔得起的文件代理。
 
 # 第 23 章:Claude Agent SDK
 
-> *參考 —— 超出考綱。* 文件:[Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview)。
+> *參考 —— 超出考綱。* 文件:[Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview) · [Agent loop](https://code.claude.com/docs/en/agent-sdk/agent-loop) · [Sessions](https://code.claude.com/docs/en/agent-sdk/sessions) · [Permissions](https://code.claude.com/docs/en/agent-sdk/permissions) · [Hooks](https://code.claude.com/docs/en/agent-sdk/hooks)。
 
-**Claude Agent SDK**(Python `claude-agent-sdk`、TypeScript `@anthropic-ai/claude-agent-sdk`)就是**把 Claude Code 當函式庫** —— 同一套內建工具、代理迴圈與上下文管理,可從你自己的程式碼呼叫。(前身為「Claude Code SDK」;`claude -p` 是它的 CLI 形式。)
+**Claude Agent SDK**(Python `claude-agent-sdk`、TypeScript `@anthropic-ai/claude-agent-sdk`)就是**把 Claude Code 當函式庫** —— 與 Claude Code CLI 同一套內建工具、代理迴圈與上下文管理,可從你自己的程式碼呼叫。(前身為「Claude Code SDK」;`claude -p` 是它的 CLI 形式。)
 
-- **代理迴圈** —— 蒐集脈絡 → 採取行動(工具)→ 驗證 → 重複,直到完成。SDK 在**你的行程內**跑這個迴圈,你不必手寫。
-- **內建工具** —— Read/Write/Edit/Bash/Grep/Glob 等,開箱即用。
-- **子代理** —— 用 `AgentDefinition` 做隔離/平行/專門工作,保護主上下文。
-- **Hooks** —— 生命週期回呼(PreToolUse、PostToolUse、工作階段起訖、compaction),可記錄、封鎖、修改或把關動作。
-- **Sessions** —— 持久狀態;以完整脈絡恢復,或分叉以探索替代方案。
-- **MCP 與權限** —— 宣告 MCP 伺服器;以自訂回呼做每工具 allow/deny/ask(人在迴路)。
+第 3 章建立了考試所需的*基礎*:代理迴圈與它唯一可靠的停止訊號(`stop_reason == "end_turn"`)、hub-and-spoke 編排、對子代理的明確脈絡傳遞、hooks-vs-提示,以及最小權限。第 15 章把 **harness** 這個概念推廣開來——你寫在模型*外面*的一切——而第 24 章涵蓋 **Managed Agents**,由 Anthropic 為你跑迴圈與沙箱。**本章夾在兩者之間:它是 SDK 深入篇——Anthropic 已經幫你寫好的那個 harness,跑在*你的*行程內,以及如何在正式環境中驅動它。** 第 3 章問的是「代理是什麼」,本章問的是「`query()` 到底做了什麼,以及我該如何大規模操作它」。
 
-**三種介面,一套心智模型:** **Client SDK**(`anthropic`)= 原始 Messages API,迴圈你自己寫。**Agent SDK** = 迴圈 + 工具在**你的**行程內跑。**Managed Agents**(第 24 章)= Anthropic 託管迴圈**與**沙箱。依「誰跑迴圈、誰提供算力」來選。
+這是進階、超出考綱的材料。全章的取向都是**正式環境代理工程**:不是能跑就好的最小範例,而是決定一個 SDK 代理在無人看管執行時是否便宜、安全、可觀測、可恢復的那些決策。
 
----
+本章涵蓋:
+
+- **兩個進入點與訊息串流**(§23.1)——`query()` vs `ClaudeSDKClient`,以及 SDK 送出的型別化事件。
+- **Sessions 與工作階段生命週期**(§23.2)——持久化到磁碟、擷取、resume、continue 與 fork。
+- **內建 harness**(§23.3)——回合、自動 compaction、預算,以及迴圈如何結束。
+- **權限、hooks 與優先序鏈**(§23.4)——SDK 給你的確定性控制面。
+- **自訂工具與 MCP 接線**(§23.5)——透過 `@tool` 的行程內工具,與透過 `mcp_servers` 的外部伺服器。
+- **端到端案例研究**(§23.6)——一個建構在 SDK 上的 CI 分流代理。
+- **關鍵整理**(§23.7)。
+
+## 23.1 兩個進入點,一條訊息串流
+
+SDK 只暴露兩種啟動代理的方式,而選對是第一個正式環境決策。
+
+```mermaid
+flowchart TD
+    Need[需要跑一個代理] --> Multi{是否多個提示<br/>共享脈絡?}
+    Multi -->|否,單一任務| Q[用 query<br/>async iterator,一次性]
+    Multi -->|是,多回合| C[用 ClaudeSDKClient<br/>持有 session]
+    Q --> Stream[迭代訊息串流]
+    C --> Stream
+    Stream --> Init[SystemMessage init<br/>session_id, model]
+    Init --> Turns[AssistantMessage 與 UserMessage<br/>每回合一對]
+    Turns --> Result[ResultMessage<br/>subtype, cost, usage]
+```
+
+**`query()`** 是一個 async generator。你給它一個 `prompt` 與 `ClaudeAgentOptions`,然後 `async for` 迭代它送出的訊息,直到 `ResultMessage` 抵達。它適用於一次性、互相獨立的任務——一個 CI 工作、一支 cron 腳本、單次「修好失敗的測試」執行。每次呼叫都是自足的。
+
+```python
+import asyncio
+from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
+
+async def main():
+    async for message in query(
+        prompt="Find and fix the bug in auth.py",
+        options=ClaudeAgentOptions(allowed_tools=["Read", "Edit", "Bash"]),
+    ):
+        if isinstance(message, ResultMessage) and message.subtype == "success":
+            print(message.result)
+
+asyncio.run(main())
+```
+
+TypeScript 的形狀是同一個 generator 樣式,選項用 camelCase:
+
+```typescript
+import { query } from "@anthropic-ai/claude-agent-sdk";
+
+for await (const message of query({
+  prompt: "Find and fix the bug in auth.ts",
+  options: { allowedTools: ["Read", "Edit", "Bash"] },
+})) {
+  if (message.type === "result" && message.subtype === "success") {
+    console.log(message.result);
+  }
+}
+```
+
+**`ClaudeSDKClient`**(Python)是一個長存物件,跨多次 `client.query()` 呼叫持有一個 session——每個新提示都自動延續同一個對話,你完全不必處理 session ID。它適用於同一行程內的多回合聊天,或任何後續步驟必須看見前一回合做了什麼的場合。把它當成 async context manager 使用,連線建立/拆除就會幫你處理好,並呼叫 `client.receive_response()` 來迭代當前查詢的訊息(它會在 `ResultMessage` 之後停止)。它也暴露 `interrupt()` 以在任務中途取消,以及 `set_permission_mode()` 以即時收緊或放寬權限。
+
+```python
+from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
+
+async with ClaudeSDKClient(options=ClaudeAgentOptions(allowed_tools=["Read", "Edit"])) as client:
+    await client.query("Analyze the auth module")
+    async for msg in client.receive_response():
+        ...
+    await client.query("Now refactor it to use JWT")   # 同一 session,完整脈絡
+    async for msg in client.receive_response():
+        ...
+```
+
+> **TypeScript 沒有 client 物件。** TS SDK 沒有像 Python `ClaudeSDKClient` 那樣的物件,而是讓每次 `query()` 呼叫各自獨立,你在後續呼叫傳 `continue: true` 來接續該目錄中最近的 session。(實驗性的 V2 `createSession()` API 已在 TS SDK 0.3.142 移除——改用 `query()` 加上 session 選項。)
+
+**訊息串流就是合約。** 不論用哪個進入點,SDK 都會送出同樣五種核心訊息型別,而正確讀取它們,正是穩健整合與脆弱整合的分野:
+
+| 訊息 | 何時送出 | 你拿它做什麼 |
+|---|---|---|
+| `SystemMessage`(`subtype="init"`) | session 的第一個訊息 | 擷取 `session_id`(Python:`message.data["session_id"]`;TS:`message.session_id`)。 |
+| `AssistantMessage` | 每次 Claude 回應後 | 進度:文字 + 本回合請求了哪些工具。 |
+| `UserMessage` | 每次工具執行後 | 餵回 Claude 的工具結果(也包含你串流送入的輸入)。 |
+| `StreamEvent` | 僅在啟用 partial messages 時 | 供即時 UI 的 token 級增量。 |
+| `ResultMessage` | 迴圈結束 | 終結記錄:`subtype`、`result`、`total_cost_usd`、`usage`、`session_id`。 |
+
+**陷阱——在 result 上 break。** 少數尾隨的系統事件(例如 `prompt_suggestion`)可能在 `ResultMessage` *之後*才抵達。請把串流迭代到結束,而不是一看到 result 就 `break`,否則你可能在 generator flush 到一半時取消它。**陷阱——鬆散地檢查訊息型別。** Python 用 `isinstance(message, ResultMessage)`;TypeScript 檢查 `message.type === "result"`,並記得 TS 會包裹 API 訊息,所以內容區塊位在 `message.message.content`,而非 `message.content`。
+
+## 23.2 Sessions 與工作階段生命週期
+
+**session** 是 SDK 在代理工作時累積的對話歷史:你的提示、每一次工具呼叫、每一個工具結果,以及每一個回應。**SDK 會自動把它寫到磁碟**——Python 永遠寫,TypeScript 除非你設了 `persistSession: false`。回到一個 session 會還原完整脈絡:已讀過的檔案、已做過的分析、已下過的決定。(session 持久化的是*對話*,不是檔案系統——要快照並還原檔案變更,請用 file checkpointing。)
+
+```mermaid
+flowchart TD
+    Start[第一次 query] --> Run[代理跑回合]
+    Run --> Write[SDK 寫 JSONL<br/>放在編碼後的 cwd 下]
+    Write --> Cap[從 ResultMessage<br/>擷取 session_id]
+    Cap --> Choice{稍後回來?}
+    Choice -->|同一 session,接續| Resume[以 id resume]
+    Choice -->|最近的,免 id| Cont[continue conversation]
+    Choice -->|分支,保留原始| Fork[resume 加 fork_session]
+    Fork --> NewId[新 session_id<br/>原始不受影響]
+```
+
+**擷取 ID** 來自 `ResultMessage.session_id`(每個 result 都有,無論成功或錯誤)。**Resume** 是把那個 id 傳給 `resume`——代理會帶著完整的先前脈絡接續。常見原因:在不重讀檔案的情況下接續一份已完成的分析;從 `error_max_turns` 或 `error_max_budget_usd` 停止後,以更高的上限 resume 來復原;或在你的行程重啟後還原對話。
+
+```python
+# 第一次執行:擷取 id
+session_id = None
+async for message in query(prompt="Analyze the auth module", options=opts):
+    if isinstance(message, ResultMessage):
+        session_id = message.session_id
+
+# 稍後:帶完整脈絡 resume
+async for message in query(
+    prompt="Now implement the refactoring you suggested",
+    options=ClaudeAgentOptions(resume=session_id, allowed_tools=["Read", "Edit", "Write"]),
+):
+    ...
+```
+
+**Continue vs resume vs fork** 是常考的區分:
+
+- **Continue**(`continue_conversation=True` / `continue: true`)接續目前目錄中*最近*的 session——不必追蹤 ID。當應用程式一次只跑一個對話時很適合。
+- **Resume** 接的是*特定*的 session ID。多使用者應用(每個使用者一個 session),或要回到不是最近的某個 session 時,就必須用它。
+- **Fork**(`resume=id` **加上** `fork_session=True`)建立一個*新* session,以原始歷史的副本為起點再分岔出去。原始的 ID 與歷史維持不變,因此你可以探索替代方案(「如果改用 OAuth2 呢?」),同時保留回到原始主線的選項。
+
+**第一大 resume 陷阱:`cwd` 不一致。** session 儲存在 `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`,其中 `<encoded-cwd>` 是把絕對工作目錄裡每個非英數字元都換成 `-`。如果你的 resume 呼叫從不同目錄執行,SDK 會找錯地方,並悄悄地從頭開始。該 session 檔案也必須存在於當前這台機器上。
+
+因此**跨主機 resume**(CI worker、短暫容器、serverless)需要刻意處理。你有兩個選項,而第二個通常更穩健:(a)把 JSONL 檔案鏡像到共享儲存,並在 resume 前還原到相同路徑(`SessionStore` adapter 可自動化此事);或(b)**完全不依賴逐字稿 resume**——把你需要的結果(分析輸出、決定、diff)擷取成應用程式狀態,餵進一個全新 session 的提示。把逐字稿檔案搬來搬去很脆弱;把一份小而結構化的摘要往前傳才是正式環境做法(這就是第 15 章的外部化狀態原則,套用到 session 上)。兩個 SDK 也都暴露 `list_sessions()` / `get_session_messages()`,可用來打造自訂的選擇器、清理邏輯或逐字稿檢視器。
+
+## 23.3 內建 harness:回合、compaction 與停止
+
+第 15 章點出:一個代理是模型*加上*一個 harness。**Agent SDK 的價值在於它附帶一個正式環境級的 harness,讓你不必手寫迴圈。** 理解那個 harness 在每回合做什麼,正是你除錯與調校它的方式。
+
+一個**回合(turn)**是迴圈內的一次往返:Claude 產生含工具呼叫的輸出,SDK 執行那些工具,結果再餵回 Claude——*過程中不把控制權交還你的程式碼*。回合會重複,直到 Claude 產生一個**沒有**工具呼叫的回應,此時迴圈結束,你就拿到 `ResultMessage`。一個「這裡有哪些檔案?」的提示也許是一個回合;「重構 auth 模組並更新測試」也許是數十個回合。
+
+**脈絡在一個 session 內累積,且不會在回合之間重設**——系統提示、工具定義、對話歷史、每一個工具輸入與輸出。穩定的前綴(系統提示、工具 schema、CLAUDE.md)會被**自動 prompt-cache**,所以重複的回合對前綴只以全價的一小部分計費。這是 SDK 幫你做了第 18 章的快取工作;你主要只要別去破壞它(別每回合都翻攪系統提示)。
+
+**自動 compaction** 是讓長時間執行得以成立的 harness 功能。當上下文視窗逼近上限,SDK 會摘要較舊的歷史以釋出空間,保留近期交流與關鍵決定,並送出一個 `subtype: "compact_boundary"` 的 `SystemMessage`。取捨是真實的:**compaction 可能把早期的特定指令摘要掉。** 對正式環境有兩個後果:
+
+- **把持久規則放進 CLAUDE.md,而非開場提示。** CLAUDE.md 會在每個請求重新注入(經由 `setting_sources` / `settingSources` 載入),所以它撐得過 compaction;埋在滾動歷史第 1 回合的指令則不一定。你甚至可以加一個自由格式的「摘要時要保留什麼」段落,讓 compactor 像讀任何其他脈絡一樣讀它。
+- **用 `PreCompact` hook** 在歷史被摘要前歸檔完整逐字稿,如果你需要一份「丟掉了什麼」的稽核軌跡。
+
+**停止**是 SDK 代理在正式環境最常出錯之處,而規則正是第 3 章那條,只是落地了。*主要*出口是模型自行完成(最後一回合沒有工具呼叫)。在這之上,你設下**次要護欄**,以在模型永遠不完成時限制波及範圍:
+
+- `max_turns` / `maxTurns` —— 限制工具使用往返次數。觸發時送出 `subtype: "error_max_turns"` 的 `ResultMessage`。
+- `max_budget_usd` / `maxBudgetUsd` —— 限制花費。觸發時送出 `subtype: "error_max_budget_usd"`。
+
+```mermaid
+flowchart TD
+    R[ResultMessage] --> S{檢視 subtype}
+    S -->|success| Use[讀取 result<br/>該欄位存在]
+    S -->|error_max_turns| Resume[以更高上限<br/>resume session]
+    S -->|error_max_budget_usd| Cost[停止或調高預算]
+    S -->|error_during_execution| Retry[API 或取消失敗<br/>重試或告警]
+    Use --> Track[記錄 cost, usage, session_id]
+    Resume --> Track
+    Cost --> Track
+    Retry --> Track
+```
+
+**永遠在讀 `result` 前先按 `subtype` 分流。** `result` 文字欄位**只**在 `success` 時存在;其他每個 subtype(`error_max_turns`、`error_max_budget_usd`、`error_during_execution`、`error_max_structured_output_retries`)都省略它,但仍帶有 `total_cost_usd`、`usage`、`num_turns` 與 `session_id`,讓你能追蹤成本並 resume。另有一個 `stop_reason`(`end_turn`、`max_tokens`、`refusal`……);檢查 `stop_reason == "refusal"` 就是你偵測模型拒絕請求的方式。**陷阱:**把迭代上限當成*正常*出口。如果你的代理常態性地撞到 `max_turns`,那是任務拆解不足(第 15 章)——解法是把工作切成更小的單位或委派給子代理,而不是只把上限調高。
+
+## 23.4 權限、hooks 與優先序鏈
+
+第 3 章點出了那條頭條規則:**確定性的商業/安全規則屬於程式碼,而非提示。** SDK 給你三層確定性控制,而在正式環境你必須清楚知道它們的確切評估順序,因為那個順序決定了哪一層勝出。
+
+```mermaid
+flowchart TD
+    Req[Claude 請求一個工具] --> Hooks[1. Hooks<br/>PreToolUse 可直接 deny]
+    Hooks --> Deny[2. Deny 規則<br/>disallowed_tools, settings]
+    Deny --> Ask[3. Ask 規則<br/>轉給回呼]
+    Ask --> Mode[4. 權限 mode]
+    Mode --> Allow[5. Allow 規則<br/>allowed_tools, settings]
+    Allow --> Cb[6. canUseTool 回呼<br/>執行期決策]
+    Cb --> Exec[執行工具]
+    Hooks -. deny .-> Blocked[已封鎖]
+    Deny -. 命中 .-> Blocked
+```
+
+**三個控制層,由最粗到最細:**
+
+1. **Allow / deny 規則** —— `allowed_tools` / `allowedTools` 預先核准列出的工具,使其免提示執行;`disallowed_tools` / `disallowedTools` 不論 mode 都封鎖工具。裸名(`"Bash"`)會把該工具從 Claude 的脈絡中整個移除;限定範圍的規則(`"Bash(rm *)"`)則保留 `Bash`,但在*每一種* mode(包含 `bypassPermissions`)都拒絕命中的呼叫。MCP glob 僅在字面伺服器前綴之後才允許(`mcp__github__get_*`);`allowed_tools` 裡未錨定的 `"*"` 會被忽略並發出警告。
+2. **權限 mode** —— 對未被規則涵蓋的工具的全域政策:`default`(未命中的工具落到你的回呼;沒有回呼就視為 deny)、`acceptEdits`(自動核准工作目錄內的檔案編輯與常見 fs 指令)、`plan`(探索並提案而不編輯——檔案編輯永不自動核准)、`dontAsk`(拒絕任何未預先核准者;從不提示)、`bypassPermissions`(核准任何到達它的東西——僅供隔離的 CI/容器)。你可以用 `set_permission_mode()` 在中途改它,例如從 `default` 起步,在信任做法後切到 `acceptEdits`。
+3. **`canUseTool` 回呼** —— 對任何未解決者的執行期決策。它接收 `(tool_name, input_data, context)` 並回傳 allow 或 deny:
+
+```python
+from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
+
+async def can_use_tool(tool_name, input_data, context):
+    if tool_name == "Bash":
+        # 帶修改核准:把每個指令限定進沙箱目錄
+        safe = {**input_data, "command": input_data["command"].replace("/tmp", "/tmp/sandbox")}
+        return PermissionResultAllow(updated_input=safe)
+    return PermissionResultDeny(message="Not permitted; try a read-only approach instead.")
+```
+
+這個回呼能做的不只是是/否:**帶修改核准**(淨化路徑、加上約束——不會告訴 Claude 你改了輸入)、**建議替代方案**(以一則引導 Claude 的訊息 deny),或**核准並記住**(回送一個 `PermissionUpdate` 建議,使下次命中的呼叫跳過提示)。在 TypeScript 回傳形狀是 `{ behavior: "allow", updatedInput }` / `{ behavior: "deny", message }`。
+
+**為何順序在實務上重要。** 有兩個事實常讓人栽跟頭。第一,**`allowed_tools` 並不約束 `bypassPermissions`**——那個 mode 會核准*每一個*工具,而不只是列出的那些,因為未列出的工具會落到 mode 檢查。如果你需要 bypass 的速度但想封鎖特定工具,請用 `disallowed_tools`(deny 規則在 mode *之前*檢查)。第二,**hooks 先跑**,而 hook 的 `deny` 是最終的,這正是為什麼 hooks——而非回呼——才是硬性、不可協商規則的正確歸宿。
+
+**Hooks** 是「模型通常會遵守」的確定性版本。`PreToolUse` hook 在工具執行*之前*觸發,可封鎖、修改或核准它;它回傳一個帶有 `permissionDecision` 的 `hookSpecificOutput`:
+
+```python
+from claude_agent_sdk import HookMatcher
+
+async def block_secret_writes(input_data, tool_use_id, context):
+    path = input_data["tool_input"].get("file_path", "")
+    if path.split("/")[-1] in {".env", "secrets.yaml"}:
+        return {"hookSpecificOutput": {
+            "hookEventName": input_data["hook_event_name"],
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "Refusing to write secret files.",
+        }}
+    return {}   # 空 = 原樣放行
+
+options = ClaudeAgentOptions(
+    hooks={"PreToolUse": [HookMatcher(matcher="Write|Edit", hooks=[block_secret_writes])]}
+)
+```
+
+關於 hooks 的關鍵正式環境事實:`matcher` **只**以工具名稱過濾(要以路徑過濾,請在回呼內檢查 `tool_input`);當多個 hook 命中時,它們平行執行,而 **`deny` 永遠勝出**;hooks 跑在*你的*行程,**不消耗脈絡**;而 `PostToolUse` hook 可在 Claude 看到前改寫工具輸出(`updatedToolOutput`)——這是正規化或遮蔽結果的自然之處。**陷阱:**當代理撞到 `max_turns` 時 hooks 可能不觸發,因為 session 先結束了——絕不要把*必須*發生的清理寄望於 `Stop` hook。**陷阱(Python):**`SessionStart`/`SessionEnd` 在 Python 不能作為回呼 hook 註冊;改以 `setting_sources=["project"]` 把它們當 shell-command hook 載入。
+
+## 23.5 自訂工具與 MCP 接線
+
+內建工具(Read、Write、Edit、Bash、Glob、Grep、WebSearch、WebFetch、Agent……)涵蓋很多,但正式環境代理需要*你的*系統。SDK 提供兩條路徑,而在兩者之間抉擇是一個真正的架構決策。
+
+**行程內自訂工具** —— 用 `@tool` 裝飾器定義一個函式,並透過 `create_sdk_mcp_server` 暴露它。該工具跑在*你的 Python/TypeScript 行程內*,共享記憶體與連線——沒有子行程、沒有網路跳轉。對於你自己擁有的工具,這是延遲最低、隔離最好的選項:
+
+```python
+from claude_agent_sdk import tool, create_sdk_mcp_server, ClaudeAgentOptions
+
+@tool("refund", "Issue a refund for an order", {"order_id": str, "amount": float})
+async def refund(args):
+    result = await billing.refund(args["order_id"], args["amount"])
+    return {"content": [{"type": "text", "text": f"Refunded {result.id}"}]}
+
+billing_server = create_sdk_mcp_server(name="billing", version="1.0.0", tools=[refund])
+
+options = ClaudeAgentOptions(
+    mcp_servers={"billing": billing_server},
+    allowed_tools=["mcp__billing__refund"],   # 注意 mcp__<server>__<tool> 命名
+)
+```
+
+**外部 MCP 伺服器** —— 宣告一個指令(stdio)或 URL(HTTP),SDK 就會執行/連線到它。這是你在不必親手寫整合的情況下接上生態系(資料庫、像 Playwright 的瀏覽器、GitHub)的方式:
+
+```python
+options = ClaudeAgentOptions(
+    mcp_servers={"playwright": {"command": "npx", "args": ["@playwright/mcp@latest"]}}
+)
+```
+
+**取捨:**行程內工具最快,且把機密留在你的行程裡,但它們只能跑你以宿主語言寫的程式碼;外部 MCP 伺服器可重用且與語言無關,但多了一道行程/網路邊界與它們自己的 auth。一個微妙的成本:**每個 MCP 伺服器的工具 schema 可能在每個請求都消耗脈絡。** SDK 預設透過 **tool search** 延後 MCP schema(按需載入),但當 tool search 關閉——或在 Vertex AI 或非第一方 base URL 上——少數各自有許多工具的伺服器,就可能在代理還沒做任何事之前燒掉可觀的脈絡。把子代理的 `tools` 限定到最小,並對大型伺服器優先採用 tool search。
+
+MCP 工具以 `mcp__<server>__<action>` 命名(`<server>` 段是你在 `mcp_servers` 用的鍵)。那個命名正是你的 `allowed_tools` 條目、hook matcher(`^mcp__`)與 deny 規則所瞄準的對象。
+
+## 23.6 端到端案例研究:一個 CI 失敗分流代理
+
+上述零件唯有組裝起來才有意義。這裡是一個實際的 SDK 代理——有別於第 3 章的退款代理與第 15 章的隔夜遷移器——它跑在**一條 CI 管線內**,以分流一個失敗的建置:重現失敗、找出原因、在分支上提出修復,然後把 diff 交給人類或停止。它必須全自動(沒有互動式提示)、成本受嚴格限制、被確定性地禁止觸碰某些檔案,並且可從管線日誌觀測。
+
+### 需求
+
+- 在紅色建置上被無頭觸發;**沒有人在鍵盤前**,所以它不能退回到權限提示。
+- 可以讀取 repo、跑測試套件,並在*新*分支上用 `git`——但**絕不可**推到 `main` 或修改 CI 設定或機密。此事在程式碼中強制執行。
+- **硬性成本上限:**這個工作必須在固定的金額預算停止,而不是在一個飄忽的測試上失控狂跑。
+- 每個動作都必須可從 CI 日誌**稽核**,且結果必須明白說出是否產出了修復。
+- 如果它在預算內無法修好建置,它必須在後續工作中**乾淨地 resume**,而非重頭開始。
+
+### 架構
+
+```mermaid
+flowchart TD
+    CI([CI 紅色建置]) --> Q[query 加 options]
+    Q --> Mode[permission_mode dontAsk<br/>無互動式退路]
+    Mode --> Allow[allowed_tools<br/>Read, Grep, Bash, Edit, Agent]
+    Allow --> Hook{{PreToolUse hook<br/>封鎖推 main 與 CI 檔案}}
+    Hook --> Loop[內建代理迴圈<br/>重現、定位、修復]
+    Loop --> Sub[Agent 工具委派<br/>log 分析子代理]
+    Loop --> Budget{{max_budget_usd<br/>次要護欄}}
+    Budget --> Res[ResultMessage<br/>按 subtype 分流]
+    Res --> Done([分支上的修復或乾淨停止])
+```
+
+SDK 供應迴圈、工具與 compaction;**hook 供應不可協商的規則,`dontAsk` 移除互動式逃生口**——兩者皆確定性,皆不在提示裡。
+
+### 實作
+
+設定一個無頭、受限、被確定性圍住的代理。`dontAsk` 是關鍵的無頭選擇:任何未預先核准的東西都被*拒絕*,而不是吊在一個無人會回答的 `canUseTool` 回呼上。
+
+```python
+from claude_agent_sdk import query, ClaudeAgentOptions, HookMatcher, ResultMessage, AgentDefinition
+
+FORBIDDEN = ("git push", "git push origin main", ".github/workflows", "secrets")
+
+async def guard(input_data, tool_use_id, context):
+    if input_data["hook_event_name"] != "PreToolUse":
+        return {}
+    blob = str(input_data.get("tool_input", {}))
+    if any(f in blob for f in FORBIDDEN):
+        return {"hookSpecificOutput": {
+            "hookEventName": input_data["hook_event_name"],
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "Pushing main, editing CI, or touching secrets is forbidden.",
+        }}
+    return {}
+
+options = ClaudeAgentOptions(
+    system_prompt="You triage CI failures. Reproduce, find the cause, fix on a new branch. Never claim a fix you have not run.",
+    allowed_tools=["Read", "Grep", "Glob", "Bash", "Edit", "Agent"],
+    permission_mode="dontAsk",          # 無頭:拒絕而非提示
+    max_budget_usd=5.00,                # 硬性成本上限 -> error_max_budget_usd
+    setting_sources=["project"],        # 載入 CLAUDE.md 慣例;撐過 compaction
+    agents={                            # 給吵雜 log 分析用的最小權限子代理
+        "log-analyst": AgentDefinition(
+            description="Reads CI logs and extracts the failing test and stack trace.",
+            prompt="Return the failing test name and root-cause stack frame as text.",
+            tools=["Read", "Grep"],     # 不能編輯或跑指令
+        )
+    },
+    hooks={"PreToolUse": [HookMatcher(matcher="Bash|Edit|Write", hooks=[guard])]},
+)
+```
+
+驅動它,並按終結 subtype 分流——這是多數示範略過的正式環境部分:
+
+```python
+async def triage():
+    session_id = None
+    async for message in query(prompt="The build is red. Triage and fix it.", options=options):
+        if isinstance(message, ResultMessage):
+            session_id = message.session_id
+            if message.subtype == "success":
+                print(f"FIX READY on branch:\n{message.result}")
+            elif message.subtype == "error_max_budget_usd":
+                # 用完預算,不是用完進度:在後續工作 resume。
+                print(f"BUDGET HIT. Resume session {session_id} to continue.")
+            else:
+                print(f"STOPPED: {message.subtype}")
+            if message.total_cost_usd is not None:
+                print(f"cost=${message.total_cost_usd:.4f} turns={message.num_turns}")
+    return session_id
+```
+
+### 執行軌跡
+
+```mermaid
+sequenceDiagram
+    actor CI as CI runner
+    participant SDK as Agent SDK harness
+    participant Mo as 模型
+    participant Gd as PreToolUse guard
+    participant La as log-analyst 子代理
+    CI->>SDK: query,建置是紅的
+    SDK->>Mo: 提示加工具
+    Mo-->>SDK: tool_use Agent, log-analyst
+    SDK->>La: 隔離脈絡,CI log 路徑
+    La-->>SDK: 失敗測試加 stack frame
+    SDK->>Mo: tool_result,原因
+    Mo-->>SDK: tool_use Bash, git push origin main
+    SDK->>Gd: 執行前評估
+    Gd-->>SDK: deny,禁止推 main
+    SDK->>Mo: tool_result 已拒絕加原因
+    Mo-->>SDK: tool_use Edit 修復加 Bash 在分支跑測試
+    Mo-->>SDK: end_turn
+    SDK-->>CI: ResultMessage success,分支上的修復
+```
+
+注意是 harness——而非模型——保證了什麼:被禁止的 `git push origin main` 在**執行前就被 hook 封鎖**,並以一個模型可以繞過的結果回來(它改用了分支);吵雜的 log 分析跑在一個**隔離的子代理**裡,所以主脈絡從未被原始 log 行塞滿;而若模型陷入迴圈,`max_budget_usd` 會以一個可恢復的 `error_max_budget_usd` 停下它,而非無止境的帳單。
+
+### 驗證
+
+- **無頭測試:**在沒有 `canUseTool` 回呼的情況下執行,並確認一個未核准的工具是被*拒絕*(而非吊住)——證明 `dontAsk` 移除了互動式退路。
+- **guard 測試:**提示代理推 `main` 或編輯 `.github/workflows`;斷言 hook 把它*當成結果*拒絕,且迴圈在分支上繼續。
+- **預算測試:**對準一個永久飄忽的套件;斷言執行在 `error_max_budget_usd` 停止,且 resume 擷取到的 `session_id` 會接續而非重啟。
+- **最小權限測試:**斷言 `log-analyst` 子代理無法呼叫 `Bash` 或 `Edit`。
+
+### 常見陷阱
+
+- 在無頭工作把 `permission_mode` 留在 `default`——每個未核准的工具都會永遠卡住,等一個無人會回答的回呼(請用 `dontAsk`)。
+- 把「不要推 main」放進**系統提示**而非 hook——機率性,而非保證(§23.4)。
+- 把 `error_max_budget_usd` 當成失敗而丟棄 session,而不是**resume** 它(§23.2)。
+- 忘了 `setting_sources=["project"]` 才是載入 CLAUDE.md 的東西——沒有它,你的慣例會在第一次 compaction 時消失(§23.3)。
+
+## 23.7 關鍵整理
+
+| 概念 | 要記住的重點 |
+|---|---|
+| 兩個進入點 | `query()` 用於一次性 async-iterator 任務;`ClaudeSDKClient`(Python)用於持有多回合 session。TS 用 `query()` + `continue: true`(§23.1)。 |
+| 訊息串流 | 五種型別:`SystemMessage(init)` → 每回合 `Assistant`/`User` → `ResultMessage`。迭代到結束;按 `result.subtype` 分流(§23.1、§23.3)。 |
+| Sessions | 以 JSONL 持久化在編碼後的 `cwd` 下;擷取 `session_id`,然後 **resume**(按 id)、**continue**(最近)或 **fork**(`resume`+`fork_session`)。`cwd` 不一致會悄悄破壞 resume(§23.2)。 |
+| 內建 harness | SDK 跑迴圈、對穩定前綴 prompt-cache,並在脈絡上限**自動 compact**——把耐久規則放進 CLAUDE.md,而非第 1 回合(§23.3)。 |
+| 停止 | 主要出口 = 模型自行完成(無工具呼叫);`max_turns`/`max_budget_usd` 是*次要*護欄,以可 resume 的 `error_*` subtype 浮現(§23.3)。 |
+| 控制面 | 優先序:hooks → deny 規則 → ask 規則 → mode → allow 規則 → `canUseTool`。硬性規則放進 hooks(`deny` 勝出、先跑);`bypassPermissions` 無視 `allowed_tools`(§23.4)。 |
+| 工具與 MCP | 行程內 `@tool` + `create_sdk_mcp_server`(快、機密留在本地)vs 外部 `mcp_servers`(可重用、與語言無關)。MCP 工具是 `mcp__server__action`;留意 schema 的脈絡成本(§23.5)。 |
+
+> **超出考綱,但建構其上。** 第 3 章給你考試會考的代理概念;本章是那些概念在 SDK 中實際的實作樣貌——迴圈就是 `query()`,hooks 是有優先序的真實回呼,上下文管理是自動 compaction,而「最小權限」是一條六步規則鏈。掌握了這些,你就能交付一個便宜、安全、可觀測、可恢復的 SDK 代理——然後在你想讓 Anthropic 為你跑迴圈與沙箱時,升級到 **Managed Agents**(第 24 章)。
 
 # 第 24 章:Managed Agents(託管代理)
 
 > *參考 —— 超出考綱。* 文件:[Managed Agents overview](https://platform.claude.com/docs/en/managed-agents/overview)。Beta 標頭 `managed-agents-2026-04-01`。
 
-**Managed Agents** 由 Anthropic 託管:Anthropic 跑代理迴圈,**並**為每個工作階段配置一個容器,讓代理的工具(bash、檔案操作、程式執行)在其中執行。你提供設定並驅動事件串流。
+第 1–13 章教你如何*建構*一個代理:迴圈、工具、hooks、子代理、上下文。**本章談的是在生產環境裡由誰來跑這個代理。**當你把代理上線時,你會面臨一個 Foundations 考試從不提及、但每個真實部署都被迫面對的基礎設施抉擇:你要**自己**跑代理迴圈與它的工具沙箱(第 23 章的 Agent SDK,部署在你自己的算力上),還是讓 **Anthropic 同時託管兩者**(Managed Agents)?這是一個*控制 vs 便利*的取捨,而選錯方向兩邊都很昂貴——太偏便利,你就失去檢視與約束一個會花錢、會碰資料的系統的能力;太偏控制,你就得重造沙箱、祕密注入、重試與可觀測性,而這些託管平台早已解決。
 
-**物件模型(請記牢):**
-- **Agent**(`/v1/agents`)—— *持久、有版本* 的設定:`model`、`system`、`tools`、`mcp_servers`、`skills`。**建立一次,以 ID 引用。**
-- **Session**(`/v1/sessions`)—— 一次執行,以 ID 引用某 agent + 一個環境。**每次執行都建。**
-- **Environment**(`/v1/environments`)—— 可重用的容器範本。
+本章是**前瞻性**的。下面的物件模型、建立一次原則,以及 SSE 事件形狀,在 `managed-agents-2026-04-01` beta 中已**確立**;而*營運實務*——你如何擴展、觀測,以及在兩種託管模式間取捨——仍在**演進中**,請把它當成一套推理框架,而非凍結的 API 合約。讀完你應能:
 
-> ⚠️ **第一守則:** `model`/`system`/`tools` 放在 **agent** 上,絕不放在 session;session 只拿指標(`agent: {id, version}`)。在初始化時建立 agent 一次並重用其 ID —— 每次執行都 `agents.create()` 是典型反模式。
+- **把三種執行環境放上同一條軸線**(§24.1)—— Client SDK、Agent SDK、Managed Agents——並依「誰跑迴圈、誰擁有算力」來選。
+- **推理物件模型**(§24.2)—— Agent vs Session vs Environment,以及*為何*設定放在 agent 上、絕不放在 session。
+- **正確驅動一個 session**(§24.3)—— 先開串流再送、以去重方式重連,以及 webhooks vs 一直掛著的串流。
+- **選擇託管拓撲**(§24.4)—— 完全託管 vs 自架沙箱,各自買到什麼、付出什麼。
+- **在生產環境營運代理**(§24.5)—— vaults、memory stores、scheduled deployments,以及可觀測性。
 
-**主要能力:**
-- **Events 與串流** —— SSE 串流(`agent.message`、`agent.thinking`、`agent.tool_use`、`session.status_*`);**先開串流再送訊息**,並以去重方式重連(SSE 無重播)。
-- **多代理** —— `multiagent: {type: "coordinator", agents: [...]}`;協調者委派給共用容器的子代理*執行緒(threads)*。
-- **Outcomes** —— 送 `user.define_outcome` 事件附評分標準;獨立評分者跑「迭代 → 評分 → 修訂」直到通過。
-- **Memory stores** —— 工作區範圍的持久文件,掛載進容器、跨工作階段留存(有版本、可遮蔽)。
-- **Vaults** —— 憑證庫(MCP OAuth 自動更新、靜態 bearer、環境變數祕密);祕密在 egress 注入,沙箱內永遠看不到。
-- **Scheduled deployments** —— 以 cron 自動觸發工作階段(這就是雲端「routines」的底層)。
-- **Self-hosted sandboxes** —— `config: {type: "self_hosted"}` 讓工具在**你的**基礎設施執行(用一個對外輪詢的 worker);迴圈仍由 Anthropic 跑。
-- **Webhooks** —— 以 HMAC 簽章的狀態變更通知,取代一直掛著串流。
+§24.6 建構一個端到端案例研究——一支生產級程式碼審查代理隊伍——§24.7 則濃縮各項決策。
 
----
+## 24.1 Managed Agents 的定位:一條軸線,三種執行環境
 
-**範例(Python):**
+Anthropic 提供三種跑模型驅動工作的方式。它們不是彼此競爭,而是同一條軸線上的不同點,由**兩個問題**界定:**誰執行代理迴圈,以及誰提供工具執行的算力(沙箱)?**
+
+```mermaid
+flowchart TD
+    Start[我需要跑一個代理] --> Q1{誰跑迴圈?}
+    Q1 -->|我自己寫 while 迴圈| Client[Client SDK<br/>anthropic<br/>原始 Messages API]
+    Q1 -->|函式庫在我的行程內跑| SDK[Agent SDK<br/>迴圈加工具<br/>在我的行程內]
+    Q1 -->|Anthropic 來跑| Q2{誰擁有<br/>沙箱算力?}
+    Q2 -->|Anthropic 託管容器| Managed[Managed Agents<br/>完全託管]
+    Q2 -->|我的基礎設施經由輪詢 worker| SelfHost[Managed Agents<br/>自架沙箱]
+    Client -. 更多控制更多膠水程式 .-> SDK
+    SDK -. 更少維運更少控制 .-> Managed
+```
+
+| 執行環境 | 誰跑迴圈 | 誰擁有算力 | 你要寫 | 你要營運 |
+|---|---|---|---|---|
+| **Client SDK**(`anthropic`) | 你 | 你 | 依 `stop_reason` 的 `while`、每個工具、重試、上下文修剪 | 全部 |
+| **Agent SDK**(第 23 章) | 函式庫,**在你的行程內** | 你 | 設定 + 工具實作;迴圈已提供 | 你的主機、擴展、日誌 |
+| **Managed Agents** | **Anthropic** | **Anthropic**(或你的基礎設施,自架) | 設定 + 一條事件串流 | 幾乎不用(完全託管) |
+
+**為何這對考試的心智模型重要:**第 23 章說「Agent SDK = 迴圈在**你的**行程內跑」。Managed Agents 把這條界線往外推——**Anthropic 在伺服器端跑迴圈,並為每個 session 配置一個容器**,讓代理的 `bash`、檔案與程式工具在其中執行。你不再擁有執行環境,改為擁有*設定與事件處理*。這個決策很少是關於能力(兩者都能建出同一個代理),幾乎總是關於**誰該承擔沙箱、祕密處理與可靠性的維運負擔。**
+
+**把取捨講白:**
+
+- **便利這一側(託管):**沒有容器編排、沒有祕密注入的管線、內建重試、排程觸發,還有一個憑證庫。你出貨更快、營運更少。
+- **控制這一側(自架 harness):**工具執行跑在你能稽核的硬體上、在你掌控的網路內,用的正是你設定的函式庫與 egress 規則。你可以掛上 debugger、釘住某個 kernel,或在 air-gapped VPC 內執行——這些完全託管的沙箱都不允許。
+
+> **陷阱:**把這當成「託管是現代做法,自架是過時遺產」。這是一個**法規與營運**決策,不是成熟度階梯。受資料落地法規約束的團隊*可能必須*用自架沙箱,即使 Managed Agents 其餘一切都很合適。
+
+## 24.2 物件模型:Agent、Session、Environment
+
+Managed Agents 剛好有三個一等公民物件。把這個切分內化——它是浪費與臭蟲最常見的單一來源。
+
+```mermaid
+flowchart TD
+    subgraph SetupOnce[部署時建立一次]
+        A[Agent<br/>v1/agents<br/>model, system, tools,<br/>mcp_servers, skills]
+        E[Environment<br/>v1/environments<br/>可重用的容器範本]
+    end
+    subgraph EveryRun[每次執行]
+        S[Session<br/>v1/sessions<br/>指向 agent id 加 version<br/>加 environment]
+    end
+    A -. 以 id 引用 .-> S
+    E -. 以 id 引用 .-> S
+    S --> Run[一次代理執行<br/>在全新容器中]
+```
+
+- **Agent**(`/v1/agents`)—— 一份**持久、有版本的設定**:`model`、`system`、`tools`、`mcp_servers`、`skills`。這是代理*是什麼*、被允許做什麼的*定義*。**建立一次,以 ID 引用。**每次有意義的變更都會產生新的 `version`,因此你可以把 session 釘在已知良好的版本,並刻意地往前滾動。
+- **Session**(`/v1/sessions`)—— **一次執行**。它本身不帶 model、系統提示或工具——只有一個**指標**(`agent: {type, id, version}`)加上一個環境與本次執行的輸入。**每次執行都建一個。**
+- **Environment**(`/v1/environments`)—— 一份**可重用的容器範本**,描述 session 的工具在其中執行的沙箱。和 agent 一起定義並重用。
+
+> ⚠️ **第一守則(請記牢):**`model` / `system` / `tools` 放在 **agent** 上,**絕不**放在 session;session 只拿指標。每次請求都呼叫 `agents.create()` 是典型反模式——它會狂刷版本、把可觀測性切碎(每次執行看起來都像不同的代理),並讓「*持久、有版本*的定義」這個重點完全失效。
 
 ```python
-# 1) 只建立 agent 一次 —— 儲存 agent.id(不要每次執行都呼叫)
+# 部署時建立一次 —— 儲存 agent.id 與 environment.id
 agent = client.beta.agents.create(
     name="Coding Assistant",
     model="claude-opus-4-8",
     tools=[{"type": "agent_toolset_20260401"}],
 )
-# 2) 每次執行:建立一個以 id 引用該 agent 的 session
+environment = client.beta.environments.create(name="review-sandbox")
+
+# 每次執行 —— 一個只「指向」agent + environment 的 session
 session = client.beta.sessions.create(
     agent={"type": "agent", "id": agent.id, "version": agent.version},
     environment_id=environment.id,
 )
 ```
 
+**這個切分為何存在——三個具體回報:**
+
+1. **有版本的滾動發布。**因為設定是可定址、有版本的物件,你可以把 `version: 7` 灰度給 5% 流量、其餘隊伍仍跑 `version: 6`,並靠翻指標回滾——不必重新部署*定義*本身。
+2. **乾淨的可觀測性。**每個 session 都會回報它跑的 agent ID 與 version。「是哪個提示版本產生了這個壞輸出?」變成一次查詢,而不是在日誌裡考古。
+3. **便宜的扇出。**啟動一次執行是「建一個指向既有 agent 的 session」,而非「重新上傳整份設定」。一支排程的數千次執行隊伍共用同一份 agent 定義。
+
+> **陷阱:**把每次請求的差異(一個客戶 ID、一個目標檔案)塞進*新的 agent*,而不是當成 **session 輸入**傳進去。每次執行的資料屬於 session 的輸入/訊息;只有*代理本質上是什麼*才屬於 agent。
+
+## 24.3 驅動一個 Session:Events、串流與 Webhooks
+
+一個託管 session 是**事件驅動**的。Anthropic 跑迴圈,並發出一條 **Server-Sent Events(SSE)** 串流,即時描述代理正在做什麼。
+
+**核心事件型別:**
+- `agent.message` —— 助理的自然語言輸出。
+- `agent.thinking` —— 延伸思考區塊(啟用時)。
+- `agent.tool_use` —— 代理在容器內叫用了某個工具。
+- `session.status_*` —— 生命週期轉換(running、awaiting input、completed、failed)。
+
+平台強制兩條**不直覺的規則**,兩條都很容易做錯:
+
+**規則 1 —— 先開串流*再*送。**SSE **沒有重播**。如果你先送出使用者回合、*之後*才連線,你可能漏掉這段空檔發出的事件。先開串流,再提交輸入。
+
+**規則 2 —— 重連要去重。**網路會斷。因為 SSE 不會重播你漏掉的內容,健壯的用戶端會**追蹤它看過的最後一個 event ID,並在重連時去重**,而不是假設串流毫無缺口。
+
+```mermaid
+sequenceDiagram
+    actor Dev as 用戶端應用
+    participant API as Managed Agents API
+    participant Loop as 託管代理迴圈
+    participant Box as 每 session 容器
+    Dev->>API: 開 SSE 串流(在送出之前)
+    Dev->>API: 提交使用者輸入
+    API->>Loop: 開始執行
+    Loop->>Box: tool_use bash、檔案操作
+    Box-->>Loop: 工具結果
+    Loop-->>Dev: agent.tool_use、agent.message 事件
+    Note over Dev,API: 網路抖動 —— 串流中斷
+    Dev->>API: 重連,送出最後看到的 event id
+    API-->>Dev: 恢復;用戶端依 event id 去重
+    Loop-->>Dev: session.status_completed
+```
+
+**何時*不要*一直掛著串流:webhooks。**對長時間執行或射後不理的工作——夜間批次、scheduled deployment、可能跑好幾分鐘的代理——一直掛著 HTTP 串流既脆弱又浪費。Managed Agents 可以改在狀態變更時送出 **HMAC 簽章的 webhooks**。你驗證簽章,再去拉你需要的東西。**串流**用於你要即時渲染 token 的互動式 UI;**webhooks** 用於非同步、耐久、伺服器對伺服器的工作流。
+
+> **陷阱:**把 SSE 串流當成耐久日誌。它是*即時*通道,不是紀錄。如果你需要每個動作的稽核軌跡,就在事件抵達時持久化它們(或靠 webhooks + 你自己的儲存)——別指望能在重連後的串流裡「往回捲」。
+
+## 24.4 託管拓撲:完全託管 vs 自架沙箱
+
+在 Managed Agents 之內還有第二個、更細的決策:**代理的工具究竟在哪裡執行?**Anthropic 永遠跑*迴圈*;你選擇誰跑*沙箱*。
+
+- **完全託管(預設)。**Anthropic 配置並執行每 session 的容器。你這邊零基礎設施。對多數團隊這是正確的預設。
+- **自架沙箱**(`config: {type: "self_hosted"}`)。工具執行經由一個**對外輪詢的 worker** 跑在**你的**基礎設施上——你的 worker 對外撥接 Anthropic、領取工具執行請求、在你的硬體上跑、再回傳結果。**Anthropic 仍跑迴圈;**只有沙箱移動。因為 worker 是*向外*輪詢,你不必開放對內連接埠——它能從鎖死的 VPC 內運作。
+
+```mermaid
+flowchart TD
+    Loop[託管代理迴圈<br/>在 Anthropic] --> Decide{沙箱型別?}
+    Decide -->|完全託管| MBox[Anthropic 容器<br/>跑工具]
+    Decide -->|self_hosted| Poll[你的對外 worker<br/>輪詢工具呼叫]
+    Poll --> YourBox[你的基礎設施跑工具<br/>你的網路你的函式庫]
+    YourBox -. 結果 .-> Loop
+    MBox -. 結果 .-> Loop
+```
+
+**為何選自架——具體驅力:**
+
+- **資料落地 / 主權。**工具執行會在你掌控的地區與司法管轄區的硬體上碰你的資料。
+- **網路可達性。**工具需要與未對公網開放的內部服務(資料庫、內部 API)通訊。
+- **自訂或授權工具鏈。**沙箱必須包含專有的二進位檔、釘住的函式庫版本,或你無法搬進託管容器的硬體。
+- **可稽核性。**安全團隊可以檢視、記錄並精確約束究竟跑了什麼。
+
+**它對你的代價:**你現在要營運這支 worker 隊伍——它的可用性、擴展與修補都成了*你的* SLO。你用「託管」買到的便利被部分交還。迴圈、重試與事件管線仍歸 Anthropic,但沙箱的可靠性落在你身上。
+
+> **一句話講取捨:**完全託管把維運最小化;自架把*工具副作用發生在哪裡*的控制最大化。只在有真實約束(落地、可達性、授權、稽核)逼你時才選自架——別當預設。
+
+## 24.5 在生產環境營運代理:Vaults、Memory、Schedules、可觀測性
+
+四項平台功能把單一代理變成可營運的生產服務。每一項都取代你在自架 harness 上原本得手寫的膠水程式。
+
+**Vaults —— 把憑證做對。**一個 **vault** 是託管代理的憑證庫:MCP OAuth token(會**自動更新**)、靜態 bearer token,以及環境變數祕密。關鍵的安全性質:**祕密在 egress 注入,沙箱內永遠看不到。**代理可以*使用*某憑證去呼叫 API,卻從來無法*讀取*它——所以被提示注入的代理無法外洩金鑰,因為金鑰從未進入它的上下文。這是「別把祕密放進提示」這個老問題的託管解。(依第 25 章,Managed Agents 的 MCP 伺服器驗證透過 vaults 提供,以 URL 比對伺服器——不是貼進 `mcp_servers` 區塊。)
+
+**Memory stores —— 比 session 活得更久的狀態。**一個 session 的容器是短暫的;執行一結束,容器就消失。一個 **memory store** 是**工作區範圍、持久的文件集**,掛載進容器並**跨 session 留存**。它**有版本、可遮蔽**。這是託管代理累積知識的方式——一份持續演進的設計文件、一份發現帳本、學到的慣例——而你不必架資料庫。(這是第 11 章持久化模式的託管化身。)
+
+**Scheduled deployments —— 給代理的 cron。**一個 **scheduled deployment** 依 cron 排程自動觸發 session。這是雲端「routines」背後的機制——夜間依賴稽核代理、每小時的分流掃描。你定義排程一次;平台就準時建立 session,不必有你的伺服器一直開著去觸發。
+
+```mermaid
+flowchart TD
+    Cron[Scheduled deployment<br/>cron 觸發] --> New[建立 session<br/>指向 agent + environment]
+    New --> Vault[Vault 注入祕密<br/>僅在 egress]
+    New --> Mem[掛載 memory store<br/>先前的發現帳本]
+    Vault --> Runx[在容器中執行]
+    Mem --> Runx
+    Runx --> Hook[HMAC webhook<br/>完成時]
+    Runx --> Persist[把結果寫回<br/>memory store]
+    Hook --> You[你的服務<br/>驗證後再行動]
+```
+
+**可觀測性——你看得到與看不到的。**因為 Anthropic 跑迴圈,你的可觀測性來自**事件串流與 webhooks**,加上每個 session 上蓋的 **agent ID + version**。你看得到工具呼叫、訊息、思考與狀態轉換——但你**拿不到**託管容器的主機層存取。如果你需要深入的主機層檢視(行程傾印、kernel 層追蹤),那就是選**自架沙箱**(§24.4)的理由。把你的可觀測性圍繞事件來設計,若需要耐久的稽核軌跡就自己持久化它們(§24.3)。
+
+> **陷阱:**以為「託管」等於「完全可觀測」。你得到豐富的*事件層*可見性,但託管執行環境在 OS 層是刻意設計的黑盒。在你動手建之前,先把你的稽核需求對齊託管選擇。
+
+## 24.6 端到端案例研究:生產級程式碼審查代理隊伍
+
+上述元件唯有組裝起來才有意義。以下是一個真實系統,以一個平台團隊實際會採用的方式使用 Managed Agents——並逼出本章每一個決策。
+
+### 需求
+
+- 一家 SaaS 公司想要一個**自動程式碼審查代理**,對數百個內部儲存庫的每一個 pull request 留言。
+- 代理必須**clone 儲存庫、在沙箱中跑靜態分析與測試,並張貼審查留言**——是真實的工具執行,不只是文字。
+- 審查必須在**每個 PR 上自動觸發**,並同時以**夜間全儲存庫稽核**執行。
+- 代理需要一個 **GitHub token 與一個內部 SAST API 金鑰**——而安全團隊強制要求**任何代理執行都絕不能讀到那些祕密**(來自惡意 PR 的提示注入屬於範圍內威脅)。
+- 原始碼受**法規管制**,不得離開公司的雲端地區。
+- 平台團隊只有**兩名工程師**,毫無意願去營運一套容器編排系統。
+
+### 託管決策
+
+兩名工程師加上「別讓我們跑編排」,強烈指向 **Managed Agents**——Anthropic 跑迴圈、重試與排程。但「原始碼不得離開我們的地區」排除了工具執行步驟用完全託管沙箱。解法是**自架沙箱**(§24.4):Anthropic 跑迴圈;一個**在公司 VPC 內、對外輪詢的 worker** 在地區內硬體上執行 clone/分析/測試工具。他們在迴圈上得到託管便利,*又*為副作用得到資料落地——正是 §24.4 存在所要促成的切分。
+
+祕密放進 **vault**(僅 egress 注入),因此一個試圖印出 `$GITHUB_TOKEN` 的 PR 什麼也拿不到——token 不在代理的上下文裡。夜間稽核是一個 **scheduled deployment**。一個 **memory store** 保存每個儲存庫的「已知問題帳本」,讓代理不再重複標記已被接受的例外。
+
+### 架構
+
+```mermaid
+flowchart TD
+    PR[Pull request 開啟] --> Trig[Webhook 送到平台服務]
+    Cron[Scheduled deployment<br/>夜間稽核] --> Sess
+    Trig --> Sess[建立 session<br/>指向審查 agent + env]
+    Sess --> Loop[Anthropic 託管迴圈]
+    Loop --> Worker[自架 worker<br/>在公司 VPC 內]
+    Worker --> Tools[clone、SAST、跑測試<br/>地區內硬體]
+    Vault[Vault<br/>GitHub 加 SAST 金鑰] -. 僅在 egress 注入 .-> Worker
+    Mem[Memory store<br/>已知問題帳本] -. 掛載 .-> Worker
+    Tools -. 結果 .-> Loop
+    Loop --> Done[完成時送 HMAC webhook]
+    Done --> Post[平台張貼審查留言]
+```
+
+代理只建立**一次**(`agents.create`,model `claude-opus-4-8`);每個 PR 與每次夜間執行都是一個指向它的 **session**(§24.2)。迴圈是 Anthropic 的;沙箱是公司的;祕密永不進入代理的上下文。
+
+### 實作草圖
+
+```python
+# 建立一次 —— 有版本的 agent 定義 + 一個自架 environment。
+agent = client.beta.agents.create(
+    name="pr-reviewer",
+    model="claude-opus-4-8",
+    system="Review the diff. Run SAST and tests. Comment only on real issues; "
+           "skip anything already in the known-issues ledger.",
+    tools=[{"type": "agent_toolset_20260401"}],
+)
+
+environment = client.beta.environments.create(
+    name="vpc-review-sandbox",
+    config={"type": "self_hosted"},   # 工具跑在公司的對外 worker 上
+)
+
+# 每個 PR 或夜間執行 —— 一個只「指向」agent + env 的 session。
+def review_pull_request(pr_ref: str):
+    return client.beta.sessions.create(
+        agent={"type": "agent", "id": agent.id, "version": agent.version},
+        environment_id=environment.id,
+        input={"pr": pr_ref},          # 每次執行的資料放進 SESSION,不是新建 agent
+    )
+```
+
+### 執行軌跡
+
+```mermaid
+sequenceDiagram
+    actor Git as GitHub
+    participant Svc as 平台服務
+    participant API as Managed Agents
+    participant Loop as 託管迴圈
+    participant Wk as VPC worker
+    Git->>Svc: PR 開啟 webhook
+    Svc->>API: 先開 SSE 串流,再建立指向 agent 的 session
+    API->>Loop: 開始執行
+    Loop->>Wk: tool_use clone 加 SAST 加測試
+    Note over Wk: Vault 僅在 egress 注入 GitHub 與 SAST 金鑰
+    Wk-->>Loop: 結果,祕密從未進入代理上下文
+    Loop->>Wk: 把發現寫進 memory store 帳本
+    Loop-->>API: session.status_completed
+    API-->>Svc: 完成時送 HMAC webhook
+    Svc->>Git: 張貼審查留言
+```
+
+注意每個設計選擇買到了什麼:**session 指向 agent** 讓每次執行都落在同一份可稽核、有版本的定義上;**自架沙箱**讓受管制的原始碼留在地區內;**vault** 讓被提示注入的 PR 無法竊取憑證;**memory store** 阻止重複的發現;**scheduled deployment** 免費給了夜間稽核。
+
+### 驗證
+
+- **建立一次測試:**斷言部署時剛好跑一次 `agents.create`,且每條 PR 路徑只呼叫 `sessions.create`。一個每 PR 都建代理的退化必須在這個測試上失敗。
+- **祕密隔離測試:**送出一個惡意 PR,其 diff 試圖 echo `$GITHUB_TOKEN`;斷言該 token 從未出現在任何 `agent.message` 或 `agent.tool_use` 事件裡——vault 只在 egress 注入(§24.5)。
+- **落地測試:**斷言工具執行落在 VPC worker(自架沙箱),絕不在 Anthropic 託管容器。
+- **冪等發現測試:**在 memory store 帳本加入一個已接受的例外;重跑;斷言代理不再標記它。
+- **串流順序測試:**斷言用戶端在建立 session *之前*就開了 SSE 串流,且強制重連會依 event ID 去重(§24.3)。
+
+### 常見陷阱
+
+- 每個 PR 都呼叫 `agents.create()` 而非重用 agent ID(狂刷版本、破壞可觀測性——§24.2)。
+- 明明有落地約束卻選了完全託管沙箱,然後才發現受管制的程式碼離開了地區(§24.4)。
+- 把 GitHub token 放進代理的 `system`/輸入而非 vault——一個被提示注入的 PR 就會外洩(§24.5)。
+- 在送出輸入*之後*才連 SSE 串流而漏掉早期事件;或把串流當成耐久的稽核日誌(§24.3)。
+
+## 24.7 關鍵整理
+
+| 概念 | 要記住的 |
+|---|---|
+| 三種執行環境,一條軸線 | Client SDK(你跑迴圈)→ Agent SDK(函式庫在你的行程內跑)→ Managed Agents(Anthropic 跑迴圈**與**沙箱)。依*誰跑迴圈、誰擁有算力*來選(§24.1)。 |
+| 物件模型 | **Agent** = 持久、有版本的設定(`model`/`system`/`tools`);**Session** = 一次執行,只*指向* agent;**Environment** = 可重用的容器範本(§24.2)。 |
+| 第一守則 | `model`/`system`/`tools` 放在 **agent** 上,絕不放在 session。代理只建**一次**,以 ID 引用;每次執行都 `agents.create()` 是典型反模式(§24.2)。 |
+| 串流紀律 | SSE **無重播**:**先**開串流**再**送,並**以去重重連**。非同步/長時間執行的工作用(HMAC 簽章的)**webhooks**(§24.3)。 |
+| 託管拓撲 | 完全託管(Anthropic 的容器,零維運)vs **自架沙箱**(`type: self_hosted`,你的基礎設施經對外輪詢 worker)。兩者迴圈都由 Anthropic 跑;只在落地/可達性/授權/稽核逼你時才選自架(§24.4)。 |
+| 生產功能 | **Vaults** 在 egress 注入祕密(沙箱內看不到);**memory stores** 跨 session 留存(有版本、可遮蔽);**scheduled deployments** 是給代理的 cron;可觀測性是**事件層**而非主機層(§24.5)。 |
+| 控制 vs 便利 | 託管 = 較少維運、較少控制;自架 harness = 對副作用發生地更多控制、更多維運負擔。這是法規/營運決策,**不是**成熟度階梯(§24.1、§24.4)。 |
+
+> **已確立 vs 演進中。**物件模型、建立一次原則,以及 SSE 事件名稱,在 `managed-agents-2026-04-01` beta 中已確立。營運實務——隊伍擴展、可觀測性工具,以及託管 vs 自架的界線——仍在成熟中;帶走*推理*,並在動手建之前重新查閱當前文件。
+
 # 第 25 章:MCP 深入
 
-> *參考 —— 延伸第 4 章。* 文件:[Model Context Protocol](https://modelcontextprotocol.io/) · [MCP connector](https://platform.claude.com/docs/en/agents-and-tools/mcp-connector)。
+> *參考 —— 延伸第 4 章。* 文件:[Model Context Protocol](https://modelcontextprotocol.io/) · [Specification](https://modelcontextprotocol.io/specification) · [Authorization](https://modelcontextprotocol.io/specification/draft/basic/authorization) · [MCP connector](https://platform.claude.com/docs/en/agents-and-tools/mcp-connector)。
 
-- **基本元件**(複習)—— **Tools**(模型叫用的動作)、**Resources**(唯讀脈絡資料)、**Prompts**(可重用範本)。MCP 是開放的 JSON-RPC 2.0 標準 ——「AI 的 USB-C」。
-- **傳輸** —— **stdio**(本機子行程)與 **Streamable HTTP**(POST + SSE)是兩種標準;舊的純 SSE 傳輸已棄用。
-- **授權** —— HTTP 伺服器用 OAuth 2.0;stdio 用環境變數憑證。
-- **MCP connector(Messages API)** —— 讓 Claude 直接在伺服器端呼叫**遠端** MCP 伺服器、不需本機用戶端:傳 `mcp_servers: [{type:"url", name, url}]` **並**附對應的 `tools: [{type:"mcp_toolset", mcp_server_name}]`。Beta `mcp-client-2025-11-20`。(兩半都要 —— 只給 `mcp_servers` 會被拒。)
-- **Managed Agents 的憑證** —— MCP 驗證透過 **vaults**(第 24 章)提供,不放在 agent 的 `mcp_servers` 區塊;Anthropic 以 URL 比對憑證並自動更新 OAuth。
-- **Claude Code** —— `claude mcp add/list/remove`、`.mcp.json`(專案)vs `~/.claude.json`(使用者)、`/mcp` 做工作階段內 OAuth,以及 **MCP tool search** 延遲載入工具以節省上下文。
+本章屬於 **PART III —— 進階、生產級代理工程,超出 Foundations 考試範圍。** 第 4 章把 MCP 當作*整合層*來教:協定是什麼、三個基本元件的概觀、`stdio` vs Streamable HTTP、伺服器要註冊在哪、以及 `isError` 契約。這足以讓你*使用*一個社群伺服器、並在考試情境中*辨認*出 MCP。本章則是給必須**建構、發布、加固、營運**一個讓真實團隊倚賴的 MCP 伺服器的工程師 ——「在 demo 能跑」與「在生產安全」之間的落差,正是由傳輸生命週期細節、OAuth 授權機制、伺服器發起的 `sampling`、以及一套威脅模型所填補。
 
----
+我們刻意**不**重複第 4 章,而是在它每個主題上再往下挖一層,並補上它從未涵蓋的兩項 ——**遠端伺服器的 OAuth 2.1 授權**與 **sampling**(伺服器反過來請*用戶端*的模型思考)。讀完本章,你應能設計一個生產級的遠端 MCP 伺服器,並為其傳輸、授權與安全選擇辯護。
+
+- **三個基本元件,精確版**(§25.1)—— 工具的 annotations 與 `outputSchema`;資源的 URI、模板與訂閱;prompt 的引數。控制模型:誰負責*叫用*每一種。
+- **傳輸的內部機制**(§25.2)—— `stdio` 訊息分框及其無聲殺手;Streamable HTTP 工作階段、可續傳性,以及已棄用的 SSE 傳輸。
+- **遠端伺服器的授權**(§25.3)—— OAuth 2.1、metadata 探索(PRM/AS)、Resource Indicators,以及混淆代理人(confused-deputy)陷阱。
+- **Sampling**(§25.4)—— 伺服器向*用戶端*請求 LLM 補全,以及它為何反轉了一般的信任方向。
+- **加固生產伺服器**(§25.5)—— tool poisoning、輸入驗證、速率限制,以及規模化下的命名空間/探索。
+
+§25.6 接著建構一個完整的遠端 **Knowledge-Base MCP 伺服器** —— OAuth、一個資源、一個由 sampling 支撐的 `summarize` 工具、以及一個 prompt —— §25.7 則濃縮工程準則。
+
+## 25.1 三個基本元件,精確版
+
+第 4 章以*意圖*來框定基本元件 —— Tools **動作**、Resources **告知**、Prompts 是**範本**。生產工作需要下一層:**控制模型**(誰決定叫用每一種)以及每一種在傳輸線上所攜帶的**結構/生命週期**。
+
+```mermaid
+flowchart TD
+    subgraph Primitives[MCP 基本元件依控制模型分類]
+        T[Tools<br/>模型控制<br/>代理決定何時呼叫]
+        R[Resources<br/>應用控制<br/>host 決定附加什麼]
+        P[Prompts<br/>使用者控制<br/>由人觸發]
+    end
+    T --> SIDE[允許副作用<br/>標註讀取 vs 寫入]
+    R --> NOSIDE[唯讀脈絡<br/>以 URI 定址]
+    P --> UI[呈現於 UI<br/>例如斜線命令]
+```
+
+**Tools —— annotations 與 output schema。** 只有 `name + description + inputSchema`(第 4 章的形態)是最低限度。生產工具會加上協定支援的兩樣東西:
+
+- **Annotations** 是關於行為的*提示*:`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`。host 可據此決定什麼需要確認(`destructiveHint: true` 的刪除)、什麼可以自動執行。它們是建議性的,**不是安全邊界** —— 絕不能靠 `readOnlyHint` 來*強制*唯讀;要在程式碼裡強制(§25.5)。
+- **`outputSchema`** 宣告*結果的形狀*,而不只是輸入。有了它,用戶端可驗證 `structuredContent`、模型也拿到可靠契約。沒有它,每個工具都回傳不透明文字,代理每一輪都得重新解析自由格式輸出。
+
+```
+Tool(
+  name="search_kb",
+  description="Full-text search over the knowledge base. Read-only.",
+  inputSchema={...},
+  annotations={"readOnlyHint": true, "openWorldHint": true},
+  outputSchema={"type":"object","properties":{
+     "hits":{"type":"array"},"total":{"type":"integer"}}},
+)
+```
+
+**Resources —— URI、模板與訂閱。** 第 4 章用的是單一靜態的 `catalog://services`。真實的目錄是可定址且動態的:
+
+- **URI 模板**(RFC 6570)讓一個宣告服務一整族:`kb://article/{id}` 在不逐一列出的情況下暴露每一篇文章。用戶端填入 `{id}` 並呼叫 `resources/read`。
+- **訂閱**讓用戶端 `resources/subscribe`,並在底層資料變動時收到 `notifications/resources/updated` —— 於是代理的「地圖」無需輪詢即可保持新鮮。這是資源版的 webhook。
+
+**Prompts —— 引數與探索。** 一個 prompt 是伺服器擁有、由**使用者**觸發的*參數化訊息範本*(斜線命令、選單挑選)。它可接受具型別的引數(`prompts/get` 帶 `{topic}`),並展開成完整的多訊息對話起點。與第 4 章相關的區分仍然成立 —— prompts 由使用者控制、tools 由模型控制 —— 但在生產中,prompt 是你發布一個*經審核、可重用工作流程*(例如「事故報告」)的方式,而非寄望每位使用者都能把它講得好。
+
+> **陷阱:**把由使用者觸發的工作流程做成*工具*。若某件事該由人從選單挑選,它就是 **Prompt**;若該由*模型*在迴圈中途決定呼叫,它才是 **Tool**。弄反不是把工作流程對使用者藏起來,就是把模型的工具清單塞爆(§25.5)。
+
+## 25.2 傳輸的內部機制
+
+第 4 章的表格(`stdio` 本機 vs Streamable HTTP 遠端)是那個*決策*。生產故障則藏在各自的*機制*裡。
+
+**`stdio` 分框 —— 無聲殺手。** stdio 伺服器在 `stdin`/`stdout` 上以換行分隔的 JSON-RPC 溝通。兩條規則造成了多數「伺服器連上了但什麼都不動」的事故:
+
+1. **`stdout` 是協定通道 —— 它只能承載 JSON-RPC。** 任何走漏的 `print()`、除錯橫幅或函式庫日誌寫到 `stdout`,都會汙染串流,用戶端便切斷連線。**所有日誌都必須走 `stderr`**(host 會替你擷取)。
+2. **host 擁有生命週期。** 它生成子行程,而緩慢啟動或被阻塞的事件迴圈會被讀成一台死掉的伺服器。初始化必須快速且非阻塞。
+
+**Streamable HTTP —— 工作階段與可續傳性。** 遠端伺服器接受 HTTP `POST` 上的 JSON-RPC;回應要嘛是單一 JSON 主體,要嘛是用於串流/伺服器發起訊息的 **SSE** 串流。第 4 章略過的生產關切:
+
+- **工作階段(Sessions)。** 初始化時伺服器可回傳 `Mcp-Session-Id` 標頭;用戶端在之後每個請求都回送它。這正是*有狀態*伺服器(持有每用戶端訂閱或 sampling 狀態者)把請求綁在一起的方式 —— 也是它能讓工作階段過期的方式。
+- **可續傳性(Resumability)。** SSE 事件帶有 `id`;若串流中斷,用戶端以 `Last-Event-ID` 重連,伺服器重播遺漏的部分。沒有它,不穩定的網路會無聲地丟失通知。
+- **舊的「HTTP+SSE」(雙端點)傳輸已棄用。** 若題目把單純的「SSE transport」當作現代遠端選項,答案是 **Streamable HTTP**(單一端點,*可*升級為 SSE)—— 與第 4 章的警告相同,如今補上理由:舊設計需要兩個端點且無法乾淨地續傳。
+
+```mermaid
+flowchart TD
+    Start[用戶端連遠端伺服器<br/>POST initialize] --> Sess[伺服器回傳<br/>Mcp-Session-Id]
+    Sess --> Req[用戶端送出請求<br/>回送工作階段 id 標頭]
+    Req --> Mode{回應需要<br/>串流或<br/>伺服器推送?}
+    Mode -->|否| JSON[單一 JSON 主體]
+    Mode -->|是| SSE[開啟 SSE 串流<br/>事件帶有 id]
+    SSE -. 中斷後重連 .-> Resume[以 Last-Event-ID 續傳<br/>伺服器重播遺漏事件]
+```
+
+> **陷阱:**把*有狀態*的遠端伺服器擺在天真的負載平衡器後。若 `Mcp-Session-Id` 沒被固定到持有該工作階段狀態的那個實例,下一個請求落到冷節點上,工作階段就斷了。要嘛讓伺服器無狀態,要嘛採用工作階段親和性(session affinity)。
+
+## 25.3 遠端伺服器的授權(OAuth 2.1)
+
+這是第 4 章點名卻沒打開的主題。`stdio` 伺服器信任它的環境(環境變數憑證,§4.3)。**遠端**伺服器則暴露在網路上,必須回答*「這個呼叫者是誰、能做什麼?」* —— MCP 的答案是 **OAuth 2.1**,而規格對用戶端如何*探索*該去哪驗證有明確規定。
+
+MCP 伺服器是一個 **OAuth Resource Server**;它**不**自行簽發 token。由另一個 **Authorization Server**(你的 IdP —— Okta、Entra、Auth0,或內建的)簽發。規格定義的流程:
+
+1. 用戶端不帶 token 呼叫伺服器;伺服器以 **401** 回應,並帶一個 `WWW-Authenticate` 標頭指向它的 **Protected Resource Metadata**(PRM,`/.well-known/oauth-protected-resource`)。
+2. PRM 指名 **Authorization Server**。用戶端抓取 AS 的 metadata(`/.well-known/oauth-authorization-server`)以找到 authorize/token 端點。
+3. 用戶端跑 **OAuth 2.1 加 PKCE**(常先做 Dynamic Client Registration),使用者同意,用戶端拿到存取 token。
+4. 之後每個請求都帶 `Authorization: Bearer <token>`;伺服器在動作前**驗證**它並檢查 scope。
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant C as MCP client
+    participant S as MCP server (resource)
+    participant A as Authorization Server
+    C->>S: 不帶 token 的請求
+    S-->>C: 401 加 WWW-Authenticate (PRM url)
+    C->>S: GET protected-resource metadata
+    S-->>C: 指名 Authorization Server
+    C->>A: OAuth 2.1 加 PKCE (使用者同意)
+    A-->>C: 存取 token (audience 為此伺服器)
+    C->>S: 請求加 Bearer token
+    S-->>C: 驗證、檢查 scope、然後回應
+```
+
+**為何這樣設計(以及那些陷阱):**
+
+- **Resource Indicators(RFC 8707)是強制的。** 用戶端必須把每個 token 綁到*此*伺服器的識別碼(`resource`),伺服器則必須拒絕 **audience** 不是自己的 token。這擋住**混淆代理人 / token 直通(passthrough)**攻擊:為伺服器 A 簽發的 token 不得被重放到伺服器 B。絕不接受未檢查 audience 的 bearer token。
+- **伺服器負責驗證;它從不轉發。** 一個常見錯誤是 MCP 伺服器拿了用戶端的 token,直接轉手丟給下游 API。把傳入 token 當作*呼叫者的身分驗證*,然後用伺服器自己的憑證(或適當降權的 token)去做下游呼叫。
+- **在 Managed Agents 裡,你不必自己手寫這套。** 依第 24 章,MCP 驗證透過 **vaults** 提供:Anthropic 以 **URL** 把儲存的憑證比對到伺服器,並**自動更新 OAuth**。你*不*把密鑰放進 agent 的 `mcp_servers` 區塊。在 Claude Code 中對應的是 `/mcp`(工作階段內授權)或 `claude mcp login`。
+
+## 25.4 Sampling —— 伺服器請用戶端思考
+
+**Sampling** 是第 4 章沒有對應物的 MCP 能力,而且它反轉了一般方向。通常是用戶端的模型呼叫伺服器的工具。有了 **sampling**,*伺服器上的工具實作*可以向**用戶端請求一次 LLM 補全**(`sampling/createMessage`)—— 伺服器在執行途中借用 host 的模型。
+
+它為何存在:這讓伺服器得以保持**模型無關且免金鑰**。一個 `summarize_document` 工具不需要自己的 Anthropic API key、也不需硬綁某個模型;它向 host 請求(「請拿你手上任何模型跑這段摘要 prompt」)並取回文字。host 仍掌控成本、模型選擇,以及 —— 關鍵地 —— 一個 **human-in-the-loop 核准**點。
+
+```mermaid
+flowchart TD
+    A[代理呼叫伺服器工具<br/>例如 summarize_kb] --> B[伺服器工具執行]
+    B --> C[伺服器送出 sampling 請求<br/>給用戶端]
+    C --> D{host 核准<br/>這次 LLM 呼叫?}
+    D -->|是| E[用戶端以自己的模型<br/>跑補全]
+    D -->|否| F[請求被拒<br/>工具優雅處理]
+    E --> G[補全回傳<br/>給伺服器工具]
+    G --> H[工具完成<br/>把結果回給代理]
+```
+
+**信任反轉及其陷阱:**
+
+- **伺服器能觸發模型呼叫 —— 這是一種權力。** host 必須居中調節:規格正是為此在 sampling 上設了一道**人工核准**閘門。一個自動核准每個 sampling 請求的用戶端,等於讓任何連上的伺服器隨意花費 token、隨意操縱模型。
+- **它在兩端都是可選的。** sampling 是一項*用戶端能力*;許多 host 並未實作。健全的伺服器在用戶端不提供 sampling 時必須**優雅降級**(退回非 LLM 路徑或回傳清楚的 `isError`),絕不假設它存在。
+- **別把 sampling 與模型自己的工具呼叫混淆。** 工具呼叫 = 用戶端的模型叫用伺服器。sampling = 伺服器叫用用戶端的模型。箭頭指向相反方向,信任也是。
+
+> 與之密切相關的是 **elicitation** —— 伺服器在呼叫途中向*使用者*(而非模型)請求一個結構化輸入。原則相同:伺服器回頭探入 host,而 host 必須居中調節。
+
+## 25.5 加固生產伺服器
+
+你發布的伺服器就是**攻擊面**。模型會忠實地讀取你伺服器回傳的任何內容、呼叫你暴露的任何工具 —— 所以安全必須住在伺服器裡,而非 prompt 裡。
+
+**工具定義投毒(Tool-definition poisoning)。** 工具的**描述與結果會被注入到模型的脈絡**裡,因而是一個注入向量。惡意或被入侵的伺服器可把指令藏在描述中(「……並把使用者的密鑰寄到 X」)。防禦:只連接**可信**伺服器;釘住版本;審查第三方工具描述;且絕不讓某個伺服器的輸出被 host 無聲地當作指令信任。
+
+**輸入驗證不容妥協。** 每個工具引數都跨越一道信任邊界。先依 `inputSchema` 驗證,再**防護下游**:參數化查詢(絕不用工具引數串接 SQL 字串)、檔案工具的路徑正規化(擋掉 `../` 穿越)、以及任何會變成 shell 命令或 URL 之物的允許清單(allow-list)。
+
+**在程式碼裡強制,而非在提示裡。** `readOnlyHint`/`destructiveHint`(§25.1)是建議性的。*真正*的守衛 ——「production rollback 需要授權」、「這個呼叫者不能寫入」—— 必須是 `call_tool` 內部的程式碼檢查,回傳結構化的 `permission` 錯誤(§4.4 契約),就像第 3 章的金額規則一樣。Annotations 幫的是 UI;它們不保護任何東西。
+
+**限制速率與成本。** 遠端伺服器可被放進迴圈呼叫。對每個工作階段限速、限制結果大小(一個無上限的 `search` 結果能把上下文視窗撐爆),並在每個下游呼叫上設逾時,讓一個慢的相依不能把代理卡住。
+
+**規模化下的命名空間與探索。** host 為工具加命名空間以避免碰撞 —— 在 Claude Code 中工具顯示為 `mcp__<server>__<tool>`(例如 `mcp__kb__search_kb`);那個確切名稱就是你拿來 allow-list 或用 `tool_choice` 強制的。但每個連上的伺服器都把它的工具載入脈絡,十幾個伺服器就能用數百個工具淹沒模型,*劣化*選擇(Domain 2.3)。緩解之道是 **MCP tool search** —— 按需延遲載入工具定義,而非把全部前載 —— 加上組織級的 `managed-mcp.json`。設計含義:把一個伺服器的工具清單保持**小而描述良好**;工具數量是預算,並非免費。
+
+```mermaid
+flowchart TD
+    In[工具呼叫抵達伺服器] --> Auth{token 與 audience<br/>是否有效?}
+    Auth -->|否| R401[拒絕 401 或<br/>permission 錯誤]
+    Auth -->|是| Val{引數是否<br/>符合 schema?}
+    Val -->|否| RVal[回傳 validation 錯誤<br/>不可重試]
+    Val -->|是| Authz{呼叫者是否<br/>有授權?}
+    Authz -->|否| RPerm[回傳 permission 錯誤]
+    Authz -->|是| Limit{是否在速率<br/>與大小限制內?}
+    Limit -->|否| RLim[回傳 transient 錯誤<br/>稍後重試]
+    Limit -->|是| Exec[以自己的憑證<br/>對下游執行]
+```
+
+## 25.6 端對端案例研究:遠端 Knowledge-Base MCP 伺服器
+
+以上零件唯有湊在一起才有意義。第 4 章建的是*本機 stdio* 的 Deployments 伺服器;這裡我們建較難而互補的情況 —— 一個整間公司都連上的**遠端、多租戶 Knowledge-Base 伺服器**。它正好演練第 4 章略過的部分:OAuth、sampling、一個 prompt,以及生產加固。
+
+### 需求
+
+一間公司希望 Claude(透過 Claude Code、SDK 與 Messages API connector)搜尋並摘要其內部知識庫。伺服器必須:
+
+- **透過網路服務眾多使用者**,因此以 **Streamable HTTP** 服務搭配 **OAuth 2.1** 執行 —— 每個請求都經驗證、檢查 scope。
+- 透過 URI 模板(`kb://article/{id}`)把文章暴露為**資源**,讓代理無需工具呼叫即可讀取任一篇文章。
+- 提供 `search_kb` **工具**(唯讀)與一個使用 **sampling** 的 `summarize_kb` **工具** —— 它請*用戶端*的模型摘要命中項,因此伺服器**不需自己的模型金鑰**。
+- 發布一個面向使用者的 `incident_writeup` **prompt**(經審核的範本),而非工具。
+- **硬規則:**只有 token 帶 `kb:read` scope 的呼叫者才可搜尋;此規則**在程式碼中**強制,回傳結構化的 `permission` 錯誤 —— 絕不交給模型裁量。
+- 驗證輸入、限制結果大小,並在用戶端不提供 sampling 時**優雅降級**。
+
+### 架構
+
+```mermaid
+flowchart TD
+    User([員工]) --> Host[Claude host<br/>Code、SDK 或 connector]
+    Host -->|POST 加 Bearer token| KB[Knowledge-Base 伺服器<br/>Streamable HTTP]
+    KB --> Auth{token 有效<br/>且 scope kb read?}
+    Auth -->|否| Deny[permission 錯誤<br/>不可重試]
+    Auth -->|是| Res[[Resource kb article id<br/>唯讀地圖]]
+    Auth -->|是| Search[Tool search_kb]
+    Auth -->|是| Sum[Tool summarize_kb]
+    Search --> Index[(搜尋索引)]
+    Sum -. sampling 請求 .-> Host
+    KB --> AS[Authorization Server<br/>驗證 token]
+```
+
+**目錄/文章是 Resource**(唯讀、無探索性呼叫);**search 與 summarize 是 Tools**;**summarize 透過 sampling 借用 host 的模型**;**scope 檢查住在伺服器裡**,因此不論哪個 host 連上都成立。
+
+### 實作
+
+用 Python MCP SDK 的示意。注意 scope 守衛、結構化錯誤(§4.4),以及帶優雅退路的 sampling 呼叫。
+
+```python
+from mcp.server import Server
+from mcp.types import Tool, Resource, TextContent
+
+app = Server("kb")
+
+# --- Resource: any article by id (URI template) ---
+@app.list_resource_templates()
+async def list_templates():
+    return [{"uriTemplate": "kb://article/{id}",
+             "name": "KB article", "mimeType": "text/markdown"}]
+
+@app.read_resource()
+async def read_resource(uri: str) -> str:
+    return kb_store.get_markdown(article_id_from(uri))   # read-only
+
+# --- Tools ---
+@app.call_tool()
+async def call_tool(name: str, args: dict, ctx) -> list[TextContent]:
+    # Enforce scope in CODE, not in a prompt or an annotation.
+    if "kb:read" not in ctx.scopes:
+        return error("permission", retryable=False,
+                     message="Token lacks the 'kb:read' scope.")
+
+    if name == "search_kb":
+        q = validate_query(args["query"])               # input validation
+        hits = kb_index.search(q, limit=20)             # cap result size
+        return ok({"hits": hits, "total": len(hits)})
+
+    if name == "summarize_kb":
+        hits = kb_index.search(validate_query(args["query"]), limit=10)
+        # SAMPLING: ask the CLIENT's model to summarize — no key on the server.
+        if not ctx.client_supports_sampling:
+            return ok({"hits": hits, "note": "summary unavailable: no sampling"})
+        summary = await ctx.sample(
+            messages=[user(f"Summarize these KB hits:\n{render(hits)}")],
+            max_tokens=400)
+        return ok({"summary": summary.text, "sources": [h["id"] for h in hits]})
+```
+
+token 以 OAuth **Resource Server** 的身分驗證 —— 拒絕任何 audience 不是此伺服器的 token(§25.3),藉此堵住混淆代理人漏洞:
+
+```python
+def authenticate(request):
+    token = bearer(request)                 # from Authorization header
+    claims = verify_jwt(token, expected_audience="https://kb.acme.com")
+    if not claims:
+        return unauthorized()               # 401 + WWW-Authenticate -> PRM
+    return Context(scopes=claims["scope"].split(), ...)
+```
+
+以及一個由使用者觸發的 **prompt**(而非模型呼叫的工具):
+
+```python
+@app.list_prompts()
+async def list_prompts():
+    return [{"name": "incident_writeup",
+             "description": "Draft an incident write-up from KB sources.",
+             "arguments": [{"name": "service", "required": True}]}]
+```
+
+### 執行軌跡
+
+一名員工請 Claude Code 摘要知識庫對某次當機的記載。Claude 先讀一篇文章(資源),再呼叫 `summarize_kb`,後者**向 host 的模型 sampling**:
+
+```mermaid
+sequenceDiagram
+    actor Emp as Employee
+    participant CC as Claude Code (host)
+    participant KB as KB server
+    participant AS as Auth Server
+    Emp->>CC: 請摘要知識庫對結帳當機的記載
+    CC->>KB: search_kb (Bearer token)
+    KB->>AS: 驗證 token 加 audience 加 scope kb read
+    AS-->>KB: 有效, scope ok
+    KB->>CC: sampling 請求 (摘要這些命中項)
+    CC->>Emp: 核准模型呼叫?
+    Emp-->>CC: 核准
+    CC-->>KB: 摘要文字
+    KB-->>CC: isError false, 摘要加來源
+    CC-->>Emp: 帶引用文章 id 的精簡摘要
+```
+
+注意**伺服器從未持有模型金鑰** —— 它透過 sampling、在人工核准閘門下借用 host 的模型;**程式碼中的 scope 檢查**(而非 prompt)把守了存取;而經 audience 檢查的 token 堵住了混淆代理人路徑。
+
+### 驗證
+
+- **授權測試:**以(a)無 token → 401 指向 PRM、(b)*不同* audience 的 token → 被拒、(c)缺 `kb:read` 的有效 token → 結構化 `permission` 錯誤,呼叫 `search_kb`。零洩漏。
+- **sampling 退路測試:**連接一個**不**宣告 sampling 的用戶端;斷言 `summarize_kb` 回傳帶「summary unavailable」附註的命中項,而非崩潰或硬性錯誤。
+- **注入測試:**餵 `search_kb` 一個含 SQL/標記的查詢;斷言它被參數化、索引未被汙染(§25.5)。
+- **資源 vs 工具測試:**確認 `kb://article/{id}` 可透過 `read_resource` 讀取(無工具呼叫)—— 代理無需探索性呼叫即取得文章(§4.5)。
+- **大小上限測試:**一個命中數千列的查詢回傳被限制的結果集,而非撐爆脈絡的傾印。
+
+### 常見陷阱
+
+- 把 `kb:read` 規則放進系統提示而非**程式碼檢查**(機率性、不保證 —— 見 §3.5 與 §4.4)。
+- 接受 bearer token 卻**不檢查其 audience**,啟用 token 直通 / 混淆代理人(§25.3)。
+- 把用戶端的 token 轉發給下游索引,而非使用**伺服器自己**的憑證(§25.3)。
+- 假設用戶端支援 **sampling**,在它不支援時崩潰,而非優雅降級(§25.4)。
+- 在 stdio 版本把日誌寫到 `stdout`(汙染協定)—— 它們必須走 `stderr`(§25.2)。
+- 把 `summarize_kb` 做成只有模型能觸及,當這個可重用工作流程也該是一個使用者 **prompt** 時(§25.1)。
+
+## 25.7 工程焦點 —— 重點整理
+
+| 概念 | 生產工程的要求 |
+|---|---|
+| 控制模型 | Tools = 模型控制(動作)、Resources = 應用控制(告知)、Prompts = 使用者控制(範本);給工具加上 `annotations` + `outputSchema`(§25.1)。 |
+| 資源定址 | URI **模板**服務一整族項目;**訂閱**推送更新,讓「地圖」無需輪詢即保持新鮮(§25.1)。 |
+| stdio 機制 | `stdout` 只供協定 —— **所有日誌走 `stderr`**;host 擁有生命週期;初始化必須快速且非阻塞(§25.2)。 |
+| HTTP 工作階段 | `Mcp-Session-Id` 綁定有狀態工作階段;SSE 事件 id 啟用**可續傳**;舊雙端點 SSE 已棄用;留意負載平衡器親和性(§25.2)。 |
+| OAuth 2.1 | 伺服器是 **Resource Server**,非 token 簽發者;透過 **PRM → AS metadata** 探索;以 **Resource Indicators** 綁定 token 並**檢查 audience**(§25.3)。 |
+| 混淆代理人 | 驗證傳入 token;**絕不轉發**它們到下游;拒絕 audience 錯誤的 token(§25.3)。 |
+| Sampling | **伺服器**請**用戶端**的模型補全;讓伺服器免金鑰/模型無關;受 host **人工核准**把關;缺席時優雅降級(§25.4)。 |
+| 加固 | 工具描述/結果是注入向量;驗證輸入;守衛**在程式碼中**強制(提示不是安全);限速並限制大小(§25.5)。 |
+| 規模化探索 | `mcp__<server>__<tool>` 命名空間;**MCP tool search** 延遲載入工具;工具清單保持小 —— 工具數量是預算(§25.5)。 |
+
+> **超出考試,實務必備。** 第 4 章讓你*使用* MCP;本章讓你*營運*它。若你能架起上面的 Knowledge-Base 伺服器 —— 帶 OAuth 2.1 的 Streamable HTTP、經 audience 檢查的 token、URI 模板資源、會優雅降級的 sampling 工具、一個使用者 prompt,以及程式碼強制的 scope —— 你就能建出一個公司可安全倚賴的 MCP 伺服器。
 
 # 第 26 章:現代 Claude Code(2026)
 
