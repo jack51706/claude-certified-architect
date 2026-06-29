@@ -8120,6 +8120,8 @@ flowchart TD
 - **Code execution 是「動態過濾」背後的引擎。** 使用 `web_search_20260209`+(或對應的 web fetch 版本)時,Claude 會寫程式碼,在原始搜尋結果*進入上下文視窗之前*先做後處理——只留下相關內容。這就是為何那些 web 工具版本會默默配置一個 code execution 容器,也是為何**code execution 與 web search 或 web fetch 併用時免費**。
 - **`tool_search` 是為了規模而存在,不是為了功能。** 若代理可存取數百個工具,把每份結構描述都放進提示既昂貴又稀釋注意力。延遲載入其中大多數,讓 Claude 搜尋它需要的那幾個;探索到的結構描述以附加方式載入,因此較早的快取斷點得以保留(第 18 章)。
 
+**程式化工具呼叫(programmatic tool calling)—— Claude 從 code execution 內部呼叫*你的*工具。** 動態過濾只是一個更通用能力的特例。把某個用戶端工具標上 `"allowed_callers": ["code_execution_20260120"]`,Claude 就不再為每次呼叫走一趟模型往返:該工具會以一個 async Python 函式的形式暴露給它的沙箱程式碼。Claude 寫**一支**指令稿,多次呼叫該工具(透過 `asyncio.gather` 並行),在容器內過濾與彙整,只把精簡後的答案送回上下文視窗——稽核 20 份支出報告變成一支指令稿,而不是 20 個回合把每一筆明細都拖過上下文。在代理式搜尋基準上,Anthropic 量測到**準確率約高 11%、輸入 token 約少 24%**。機制上這是一個暫停的回合:當指令稿呼叫該工具時,code execution 會**暫停**,API 回傳 `stop_reason: "tool_use"`,其 `tool_use` 區塊帶有 `caller` 欄位與一個 `container` id;**你仍要執行該工具並回傳 `tool_result`**——只放 `tool_result` 區塊、回傳該 `container` id、重送同一個 `tools` 陣列(與 §20.4 相同的回合中紀律)——容器隨後恢復執行指令稿。需要 code execution 工具加上 `code_execution_20260120`+(Fable 5、Mythos 5、Opus 4.5+、Sonnet 4.5+);**不**符合 ZDR 資格。`allowed_callers` 會引導 Claude,但**不是**安全邊界——仍須準備好處理對同一工具的直接 `tool_use`。
+
 ## 20.3 Anthropic 結構描述的用戶端工具(仍由你執行)
 
 有一個微妙的中間類別會絆倒架構師:**Anthropic 公布了結構描述,但執行呼叫的是你的應用程式。** 它們看似「內建」,行為卻像用戶端工具——`stop_reason: "tool_use"`,由你執行,由你回傳 `tool_result`。
@@ -8283,6 +8285,7 @@ sequenceDiagram
 |---|---|
 | 兩種執行模型 | 用戶端工具 → `tool_use`,由*你*執行並回傳 `tool_result`;伺服器端工具 → `server_tool_use`(`srvtoolu_`),由 Anthropic 在回合內部執行,**不回傳 `tool_result`**(§20.1)。 |
 | 伺服器端目錄 | Web search、web fetch、code execution、tool search、advisor —— 在 `tools` 宣告,不必託管基礎設施(§20.2)。 |
+| 程式化工具呼叫 | 把用戶端工具標上 `allowed_callers: ["code_execution_20260120"]`,讓 Claude 從沙箱程式碼呼叫它——多次呼叫、在容器內過濾、只把精簡結果送回上下文(輸入 token 約少 24%)。仍是暫停的 `tool_use`:由你執行並回傳 `tool_result`;不是安全邊界,也不符合 ZDR(§20.2)。 |
 | Anthropic 結構描述的用戶端工具 | `bash`、`text_editor`、`memory`、computer use 附帶結構描述,但**由你執行**——請據此沙箱化(§20.3)。 |
 | `pause_turn` 對比混合 `tool_use` | 長伺服器端迴圈 → `pause_turn`,原樣回傳(相同 tools)。伺服器端**加**用戶端在同一回合 → `tool_use`;回覆**只含** `tool_result` 區塊(§20.4)。 |
 | 成本計費表 | Web search **每千次 $10**(用 `max_uses` 設上限);code execution **與 web 工具併用免費**,否則 1,550 免費小時後**每容器每小時 $0.05**(§20.5)。 |
