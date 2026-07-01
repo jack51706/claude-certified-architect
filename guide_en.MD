@@ -136,7 +136,7 @@ The Claude API follows a request–response model. Each request to the Claude Me
 
 ```json
 {
-  "model": "claude-sonnet-4-6",
+  "model": "claude-sonnet-5",
   "max_tokens": 1024,
   "system": "You are a helpful assistant.",
   "messages": [
@@ -150,7 +150,7 @@ The Claude API follows a request–response model. Each request to the Claude Me
 ```
 
 **Key fields:**
-- `model` — model selection (`claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5`)
+- `model` — model selection (`claude-opus-4-8`, `claude-sonnet-5`, `claude-haiku-4-5`)
 - `max_tokens` — maximum number of tokens in the response
 - `system` — the system prompt (defines model behavior)
 - `messages` — conversation history (**you must send the full history** to maintain coherence)
@@ -159,7 +159,7 @@ The Claude API follows a request–response model. Each request to the Claude Me
 
 **Why each field is the way it is — and the common mistakes:**
 
-- **`model`** is an exact ID string, not a fuzzy alias you can decorate. `claude-opus-4-8` is the most capable tier; `claude-sonnet-4-6` balances cost and intelligence; `claude-haiku-4-5` is fastest and cheapest. A typo (`claude-sonnet-4.6`) or an invented date suffix (`claude-sonnet-4-6-20251114`) returns **404 `not_found_error`** — the exam likes to test that you do not construct IDs.
+- **`model`** is an exact ID string, not a fuzzy alias you can decorate. `claude-opus-4-8` is the most capable tier; `claude-sonnet-5` balances cost and intelligence; `claude-haiku-4-5` is fastest and cheapest. A typo (`claude-sonnet-5.0`) or an invented date suffix (`claude-sonnet-5-20260601`) returns **404 `not_found_error`** — the exam likes to test that you do not construct IDs.
 - **`max_tokens`** caps only the *output*, and the model does not know about it. Set it too low and the response is silently cut off mid-sentence with `stop_reason == "max_tokens"`. Set a generous value for open-ended generation (16K for non-streaming; up to 64K–128K when streaming), and a tiny one (e.g. 256) for classification. Underestimating `max_tokens` is the single most common cause of "the model stopped halfway."
 - **`system`** is a *separate top-level field*, not the first element of `messages`. New developers often try to prepend a `{"role": "system", ...}` entry to the array — historically that returns an error, and even where mid-conversation system messages are now supported, the *initial* instructions belong in the top-level `system` field. (More in §1.4.)
 - **`messages`** must be non-empty, must start with a `user` turn, and the first message can never be `assistant` — a `400` otherwise. Roles are combined across consecutive same-role entries, but the array as a whole is the entire memory the model has (see §1.2).
@@ -323,7 +323,7 @@ Pricing is per-token, billed separately for input and output, and varies by mode
 | Model | Input $/1M | Output $/1M | Context |
 |---|---|---|---|
 | `claude-opus-4-8` | $5.00 | $25.00 | 1M |
-| `claude-sonnet-4-6` | $3.00 | $15.00 | 1M |
+| `claude-sonnet-5` | $3.00 | $15.00 | 1M |
 | `claude-haiku-4-5` | $1.00 | $5.00 | 200K |
 
 - **Output is far more expensive than input** (5× on every model above). A response that rambles costs more than the prompt that asked for it — another reason a well-scoped `max_tokens` and a concise system prompt matter.
@@ -393,7 +393,7 @@ def handle_turn(conversation_id: str, user_text: str) -> dict:
     history.append({"role": "user", "content": user_text})
 
     with client.messages.stream(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         max_tokens=1024,
         cache_control={"type": "ephemeral"},       # cache the stable system prefix
         system=SUPPORT_SYSTEM,
@@ -801,7 +801,7 @@ Force the extractor on the first turn so you never get prose back:
 
 ```python
 resp = client.messages.create(
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5",
     max_tokens=1024,
     tools=[extract_invoice, get_tax_rate, get_vendor],
     tool_choice={"type": "tool", "name": "extract_invoice"},   # guaranteed structure
@@ -7186,7 +7186,7 @@ The crash costs **one file of rework at most** (file 42, which had not been chec
 
 # PART IV: Complete Claude Platform Reference (Beyond the Foundations Exam)
 
-> **Scope note:** PART IV is a reference to the **full current Claude platform** (2026) for comprehensive mastery — the API, tools, SDKs, Managed Agents, MCP, and modern Claude Code. Most of it is **beyond the official Foundations syllabus** (some is even on the exam's explicit out-of-scope list); it is here so you can *learn all of Claude*, not only pass the exam. Each chapter cites official docs. Current models referenced: flagship **Claude Fable 5** (`claude-fable-5`); default Opus **Claude Opus 4.8** (`claude-opus-4-8`); plus **Sonnet 4.6** and **Haiku 4.5**.
+> **Scope note:** PART IV is a reference to the **full current Claude platform** (2026) for comprehensive mastery — the API, tools, SDKs, Managed Agents, MCP, and modern Claude Code. Most of it is **beyond the official Foundations syllabus** (some is even on the exam's explicit out-of-scope list); it is here so you can *learn all of Claude*, not only pass the exam. Each chapter cites official docs. Current models referenced: flagship **Claude Fable 5** (`claude-fable-5`); default Opus **Claude Opus 4.8** (`claude-opus-4-8`); plus **Sonnet 5** and **Haiku 4.5**.
 
 ---
 
@@ -8313,7 +8313,7 @@ Every request renders in a fixed order — **`tools` → `system` → `messages`
 
 | Model | Context window | Note |
 |---|---|---|
-| Claude Opus 4.8 / 4.7 / 4.6, Sonnet 4.6, Fable 5 | **1M tokens** | 1M at standard pricing on Opus — no long-context premium |
+| Claude Opus 4.8 / 4.7 / 4.6, Sonnet 5 / 4.6, Fable 5 | **1M tokens** | 1M at standard pricing on Opus — no long-context premium |
 | Claude Haiku 4.5 | **200K tokens** | The cheap, fast tier — and the one you hit *first* |
 
 **The trap is treating a bigger window as a fix.** It is not, for three reasons an architect must internalize:
@@ -10405,7 +10405,7 @@ The LLM-as-judge scores only the PR description, with a concrete rubric and — 
 ```python
 def grade_pr_text(pr_text, diff) -> JudgeVerdict:
     return judge(
-        model="claude-sonnet-4-6",          # NOT the model that wrote the PR -> avoids self-enhancement bias
+        model="claude-sonnet-5",          # NOT the model that wrote the PR -> avoids self-enhancement bias
         rubric=PR_RUBRIC,                    # faithful / complete / flags-risk, each pass/fail
         inputs={"pr_text": pr_text, "diff": diff},
         randomize_option_order=True,
@@ -10501,15 +10501,17 @@ Four model families are in active service. They differ on three axes that matter
 |---|---|---|---|---|---|
 | **Claude Fable 5** | `claude-fable-5` | 1M | 128K | $10 / $50 | The hardest reasoning & long-horizon agentic work (flagship) |
 | **Claude Opus 4.8** | `claude-opus-4-8` | 1M | 128K | $5 / $25 | Default for complex/agentic tasks |
-| **Claude Sonnet 4.6** | `claude-sonnet-4-6` | 1M | 128K | $3 / $15 | Best speed/intelligence balance; high-volume |
+| **Claude Sonnet 5** | `claude-sonnet-5` | 1M | 128K | $3 / $15 | Best speed/intelligence balance; high-volume |
 | **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | Fast, cheap, simple/latency-critical tasks |
+
+> **Sonnet 5 is the current balanced tier**, succeeding Sonnet 4.6 (now a legacy model that is still callable via `claude-sonnet-4-6`). Sonnet 5 carries **introductory pricing of $2 / $10 per MTok through 2026-08-31**, after which standard **$3 / $15** applies. On Claude Sonnet 5 the `effort` parameter defaults to `high` on the Claude API and Claude Code. Source: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview), [Pricing](https://platform.claude.com/docs/en/about-claude/pricing).
 
 Read this as a ladder, not a menu. Each rung roughly doubles price for a step up in capability, so the engineering question is never "what is the best model" — it is "what is the **cheapest** rung that clears this task's bar with margin to spare."
 
 **The four families in one line each:**
 
 - **Haiku 4.5** — the workhorse for high-volume, well-specified, latency-sensitive work: classification, extraction, routing, formatting, and *cheap subagents* in a larger system. Note the smaller envelope — 200K context, 64K output — which is plenty for these jobs but rules it out for whole-repository reasoning.
-- **Sonnet 4.6** — the default for production at scale. It carries the same 1M-context / 128K-output envelope as the flagships at a fraction of the price, which is why most user-facing agents and high-throughput pipelines should *start* here, not at Opus.
+- **Sonnet 5** — the default for production at scale. It carries the same 1M-context / 128K-output envelope as the flagships at a fraction of the price, which is why most user-facing agents and high-throughput pipelines should *start* here, not at Opus.
 - **Opus 4.8** — the flagship Opus, and the right default when the task is genuinely complex or agentic: multi-step planning, hard code, long-horizon autonomous loops, nuanced judgment. You pay ~1.7× Sonnet on output; you buy reliability on tasks Sonnet would only *sometimes* get right.
 - **Fable 5** — the absolute ceiling, for the hardest reasoning and longest-horizon work. At $10/$50 it is twice Opus on output, so reserve it for the small slice of tasks where Opus measurably under-delivers; using it as a default is the single most common way to burn budget for no gain.
 
@@ -10530,7 +10532,7 @@ flowchart TD
     A[Incoming task] --> B{Complex reasoning<br/>or long-horizon agentic?}
     B -->|no, well specified| C{Latency critical<br/>or very high volume?}
     C -->|yes| D[Haiku 4.5<br/>fast and cheap]
-    C -->|no| E[Sonnet 4.6<br/>balanced default]
+    C -->|no| E[Sonnet 5<br/>balanced default]
     B -->|yes| F{Does Sonnet pass<br/>your eval set?}
     F -->|yes| E
     F -->|no| G[Opus 4.8<br/>flagship default]
@@ -10539,7 +10541,7 @@ flowchart TD
     H -->|no| G
 ```
 
-**How to read the tree.** The default path lands on **Sonnet 4.6** — that is deliberate. You move *down* to Haiku only when the task is simple *and* you need speed or scale; you move *up* to Opus only when an eval set proves Sonnet leaves quality on the table; you reach **Fable 5** only at the very top, for the residual cases Opus still misses.
+**How to read the tree.** The default path lands on **Sonnet 5** — that is deliberate. You move *down* to Haiku only when the task is simple *and* you need speed or scale; you move *up* to Opus only when an eval set proves Sonnet leaves quality on the table; you reach **Fable 5** only at the very top, for the residual cases Opus still misses.
 
 **Pitfalls this tree exists to prevent:**
 
@@ -10560,7 +10562,7 @@ A small, fast model triages each request and dispatches it to the right tier. Th
 flowchart TD
     U[User request] --> R[Router<br/>Haiku 4.5 classifier]
     R -->|simple FAQ| H[Haiku 4.5<br/>answer directly]
-    R -->|standard task| S[Sonnet 4.6<br/>handle end to end]
+    R -->|standard task| S[Sonnet 5<br/>handle end to end]
     R -->|complex or high stakes| O[Opus 4.8<br/>deep reasoning]
     H --> Z[Response]
     S --> Z
@@ -10622,7 +10624,7 @@ Model selection is not a one-time decision; the lineup changes under you, and ho
 
 - **IDs are exact, pinned snapshots — never construct them.** `model` is an exact string, not a fuzzy alias you decorate. From the 4.6 generation on, IDs are *dateless but still pinned* (e.g. `claude-opus-4-8`); older models resolve via dated aliases. A typo (`claude-sonnet-4.6`) or an invented date suffix (`claude-opus-4-8-20260114`) returns **404 `not_found_error`**. Pin the model in one config constant, not scattered across the codebase.
 - **Discover capabilities at runtime, don't hardcode them.** Context windows, output caps, and feature support move with the lineup. Query the **Models API** (`GET /v1/models/{id}` → `max_input_tokens`, `max_tokens`, `capabilities`) rather than baking "200K" or "128K" into your code. This is what lets a downstream service adapt when you swap tiers.
-- **Legacy and deprecation.** Older models stay active for a while — Opus 4.7/4.6, Sonnet 4.5, Opus 4.5 are still callable — but deprecated ones retire on a date, after which the ID **404s for good**. This is not hypothetical: the original Claude Sonnet 4 (`claude-sonnet-4-20250514`) and Claude Opus 4 (`claude-opus-4-20250514`) were **retired on 2026-06-15 and now return an error**, and Opus 4.1 (`claude-opus-4-1-20250805`) retires 2026-08-05. Track retirement dates and migrate *before* the cutoff, not after the 404s start.
+- **Legacy and deprecation.** Older models stay active for a while — Opus 4.7/4.6, Sonnet 4.6, Sonnet 4.5, Opus 4.5 are still callable (Sonnet 4.6 became legacy when Sonnet 5 shipped) — but deprecated ones retire on a date, after which the ID **404s for good**. This is not hypothetical: the original Claude Sonnet 4 (`claude-sonnet-4-20250514`) and Claude Opus 4 (`claude-opus-4-20250514`) were **retired on 2026-06-15 and now return an error**, and Opus 4.1 (`claude-opus-4-1-20250805`) retires 2026-08-05. Track retirement dates and migrate *before* the cutoff, not after the 404s start.
 - **Upgrade and downgrade deliberately, behind an eval.** "Upgrade" (Sonnet→Opus) when quality metrics on real traffic miss target on hard cases; "downgrade" (Opus→Sonnet, Sonnet→Haiku) when an eval shows the cheaper tier now matches quality — newer cheap models often clear bars that needed a flagship a generation ago. Never flip a production model blind: run the candidate against your eval set, compare pass-rate *and* cost-per-task, then change the one config constant.
 
 ```mermaid
@@ -10656,7 +10658,7 @@ The patterns above only matter when they fit together under a real budget. Here 
 flowchart TD
     M[Inbound message stream] --> T[Triage<br/>Haiku 4.5 classifier]
     T -->|simple FAQ| FA[Haiku 4.5<br/>direct answer]
-    T -->|standard request| RS[Sonnet 4.6<br/>resolve end to end]
+    T -->|standard request| RS[Sonnet 5<br/>resolve end to end]
     T -->|complex or high stakes| CO[Coordinator<br/>Opus 4.8]
     CO -->|Task: pull history| SA1[Subagent<br/>Haiku 4.5]
     CO -->|Task: search policy| SA2[Subagent<br/>Haiku 4.5]
@@ -10666,7 +10668,7 @@ flowchart TD
     FA --> OUT[Outbound reply]
     RS --> OUT
     DR --> OUT
-    M -. archived .-> NB[Nightly Batch API<br/>Sonnet 4.6 at 50 percent off]
+    M -. archived .-> NB[Nightly Batch API<br/>Sonnet 5 at 50 percent off]
 ```
 
 Each rung is matched to its job: **Haiku** triages and answers FAQs (cheap, fast, simple); **Sonnet** resolves the standard bulk (balanced default); **Opus** coordinates the hard cases and validates the draft, delegating the *fetching* to **Haiku subagents** so flagship tokens are spent only on judgment; the **nightly archive** runs on the **Batch API at half price** because nothing is waiting.
@@ -10679,10 +10681,10 @@ Pin every model in one config block, so a tier change is a one-line edit and nev
 MODELS = {
     "triage":      "claude-haiku-4-5",   # cheap, fast classification
     "faq":         "claude-haiku-4-5",   # simple direct answers
-    "standard":    "claude-sonnet-4-6",  # balanced default for the bulk
+    "standard":    "claude-sonnet-5",  # balanced default for the bulk
     "coordinator": "claude-opus-4-8",    # hard reasoning + validation
     "subagent":    "claude-haiku-4-5",   # narrow fetch/extract under the coordinator
-    "nightly":     "claude-sonnet-4-6",  # quality enrichment, run via Batch API
+    "nightly":     "claude-sonnet-5",  # quality enrichment, run via Batch API
 }
 ```
 
@@ -10749,7 +10751,7 @@ Notice the triage model did **not** try to solve the security report — it reco
 |---|---|
 | The ladder, not the menu | Each tier ~2× the last; pick the **cheapest rung that clears the task with margin**, not the most capable (§28.1). |
 | Selection procedure | Drive by complexity → latency → volume; **start low, climb only when an eval set says so** (§28.2). |
-| Default to Sonnet | Sonnet 4.6 is the production default; move *down* to Haiku for simple/fast/high-volume, *up* to Opus only when quality demands it (§28.2). |
+| Default to Sonnet | Sonnet 5 is the production default; move *down* to Haiku for simple/fast/high-volume, *up* to Opus only when quality demands it (§28.2). |
 | Route the mix | A cheap Haiku router in front of expensive tiers; it must **fail upward** when unsure (§28.3). |
 | Tiered multi-agent | Strong coordinator (Opus) + cheap subagents (Haiku); never invert it (§28.3). |
 | Cost levers before downgrades | Caching (~0.1× reads), Batch API (50% off), tight `max_tokens` cut cost *without* touching quality — do these first (§28.4). |
@@ -12620,7 +12622,7 @@ All current models share a 1M-token context window except Haiku. Prices are USD 
 | Claude Opus 4.8 | `claude-opus-4-8` | 1M | 128K | $5 | $25 | Flagship Opus — default for most demanding work; state-of-the-art autonomous agents, knowledge work, memory. |
 | Claude Opus 4.7 | `claude-opus-4-7` | 1M | 128K | $5 | $25 | Previous-gen Opus; strong agentic + vision + memory. |
 | Claude Opus 4.6 | `claude-opus-4-6` | 1M | 128K | $5 | $25 | Older Opus; adaptive thinking, 128K output. |
-| Claude Sonnet 4.6 | `claude-sonnet-4-6` | 1M | 128K | $3 | $15 | Best speed/intelligence balance for high-volume production. |
+| Claude Sonnet 5 | `claude-sonnet-5` | 1M | 128K | $3 | $15 | Best speed/intelligence balance for high-volume production. Introductory $2 / $10 through 2026-08-31. |
 | Claude Haiku 4.5 | `claude-haiku-4-5` | 200K | 64K | $1 | $5 | Fastest, cheapest; simple/latency-sensitive tasks and cheap subagents. |
 
 - **Use exact IDs, never date-suffixed variants** (e.g. `claude-opus-4-8`, not `claude-opus-4-8-20xxxxxx`). Source: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview), [Pricing](https://platform.claude.com/docs/en/pricing).

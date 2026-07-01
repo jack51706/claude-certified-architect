@@ -136,7 +136,7 @@ Claude API 遵循請求—回應模型。每個送往 Claude Messages API 的請
 
 ```json
 {
-  "model": "claude-sonnet-4-6",
+  "model": "claude-sonnet-5",
   "max_tokens": 1024,
   "system": "You are a helpful assistant.",
   "messages": [
@@ -150,7 +150,7 @@ Claude API 遵循請求—回應模型。每個送往 Claude Messages API 的請
 ```
 
 **主要欄位:**
-- `model` — 模型選擇(`claude-opus-4-8`、`claude-sonnet-4-6`、`claude-haiku-4-5`)
+- `model` — 模型選擇(`claude-opus-4-8`、`claude-sonnet-5`、`claude-haiku-4-5`)
 - `max_tokens` — 回應中的最大 token 數
 - `system` — 系統提示(定義模型行為)
 - `messages` — 對話歷史(**你必須送出完整的歷史**以維持連貫性)
@@ -159,7 +159,7 @@ Claude API 遵循請求—回應模型。每個送往 Claude Messages API 的請
 
 **為何每個欄位是這樣設計——以及常見錯誤:**
 
-- **`model`** 是精確的 ID 字串,不是可以隨意加料的模糊別名。`claude-opus-4-8` 是能力最強的層級;`claude-sonnet-4-6` 平衡成本與智慧;`claude-haiku-4-5` 最快也最便宜。打錯字(`claude-sonnet-4.6`)或自己編造日期後綴(`claude-sonnet-4-6-20251114`)都會回傳 **404 `not_found_error`**——考試很喜歡測你「不要自己拼湊 ID」。
+- **`model`** 是精確的 ID 字串,不是可以隨意加料的模糊別名。`claude-opus-4-8` 是能力最強的層級;`claude-sonnet-5` 平衡成本與智慧;`claude-haiku-4-5` 最快也最便宜。打錯字(`claude-sonnet-5.0`)或自己編造日期後綴(`claude-sonnet-5-20260601`)都會回傳 **404 `not_found_error`**——考試很喜歡測你「不要自己拼湊 ID」。
 - **`max_tokens`** 只限制*輸出*,而且模型並不知道這個上限。設得太小,回應會在句子中途被無聲截斷,並帶著 `stop_reason == "max_tokens"`。開放式生成請設大一點(非串流 16K;串流時可到 64K–128K),分類則設極小值(例如 256)。低估 `max_tokens` 是「模型講到一半就停了」最常見的原因。
 - **`system`** 是*獨立的頂層欄位*,不是 `messages` 的第一個元素。新手常想在陣列前面塞一個 `{"role": "system", ...}`——這在過去會報錯;即使現在某些情況支援對話中途的 system 訊息,*最初*的指令仍應放在頂層 `system` 欄位。(詳見 §1.4。)
 - **`messages`** 必須非空、必須以 `user` 回合開頭,第一則訊息絕不能是 `assistant`——否則回 `400`。連續同角色的條目會被合併,但整個陣列就是模型擁有的全部記憶(見 §1.2)。
@@ -323,7 +323,7 @@ sequenceDiagram
 | 模型 | 輸入 $/1M | 輸出 $/1M | 上下文 |
 |---|---|---|---|
 | `claude-opus-4-8` | $5.00 | $25.00 | 1M |
-| `claude-sonnet-4-6` | $3.00 | $15.00 | 1M |
+| `claude-sonnet-5` | $3.00 | $15.00 | 1M |
 | `claude-haiku-4-5` | $1.00 | $5.00 | 200K |
 
 - **輸出遠比輸入昂貴**(上表每個模型都是 5 倍)。一個囉嗦的回應,比要求它的提示還貴——這又是一個「妥善界定 `max_tokens` 與精簡系統提示」很重要的理由。
@@ -393,7 +393,7 @@ def handle_turn(conversation_id: str, user_text: str) -> dict:
     history.append({"role": "user", "content": user_text})
 
     with client.messages.stream(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         max_tokens=1024,
         cache_control={"type": "ephemeral"},       # 快取穩定的 system 前綴
         system=SUPPORT_SYSTEM,
@@ -801,7 +801,7 @@ get_vendor = {
 
 ```python
 resp = client.messages.create(
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5",
     max_tokens=1024,
     tools=[extract_invoice, get_tax_rate, get_vendor],
     tool_choice={"type": "tool", "name": "extract_invoice"},   # 保證結構
@@ -7186,7 +7186,7 @@ sequenceDiagram
 
 # 第四部分:Claude 平台完整參考(超出基礎考綱)
 
-> **範圍說明:** 第四部分是 **2026 年 Claude 平台完整功能** 的參考 —— API、工具、SDK、Managed Agents、MCP 與現代 Claude Code,供你**完整掌握 Claude**,而非只為通過考試。其中**大多超出官方 Foundations 考綱**(部分甚至在考試明列的範圍外清單上)。每章都附官方文件。引用的現役模型:旗艦 **Claude Fable 5**(`claude-fable-5`);預設 Opus **Claude Opus 4.8**(`claude-opus-4-8`);以及 **Sonnet 4.6**、**Haiku 4.5**。
+> **範圍說明:** 第四部分是 **2026 年 Claude 平台完整功能** 的參考 —— API、工具、SDK、Managed Agents、MCP 與現代 Claude Code,供你**完整掌握 Claude**,而非只為通過考試。其中**大多超出官方 Foundations 考綱**(部分甚至在考試明列的範圍外清單上)。每章都附官方文件。引用的現役模型:旗艦 **Claude Fable 5**(`claude-fable-5`);預設 Opus **Claude Opus 4.8**(`claude-opus-4-8`);以及 **Sonnet 5**、**Haiku 4.5**。
 
 ---
 
@@ -8313,7 +8313,7 @@ sequenceDiagram
 
 | 模型 | 上下文視窗 | 備註 |
 |---|---|---|
-| Claude Opus 4.8 / 4.7 / 4.6、Sonnet 4.6、Fable 5 | **1M token** | Opus 的 1M 採標準計價 —— 無長上下文加價 |
+| Claude Opus 4.8 / 4.7 / 4.6、Sonnet 5／4.6、Fable 5 | **1M token** | Opus 的 1M 採標準計價 —— 無長上下文加價 |
 | Claude Haiku 4.5 | **200K token** | 便宜、快速的層級 —— 也是你*最先*撞到的那個 |
 
 **陷阱在於把更大的視窗當成解方。** 它不是,有三個架構師必須內化的理由:
@@ -10405,7 +10405,7 @@ LLM 當裁判只評 PR 描述,搭配具體的評分標準,且關鍵是 —— **
 ```python
 def grade_pr_text(pr_text, diff) -> JudgeVerdict:
     return judge(
-        model="claude-sonnet-4-6",          # 「不是」寫這個 PR 的模型 -> 避免自我增強偏誤
+        model="claude-sonnet-5",          # 「不是」寫這個 PR 的模型 -> 避免自我增強偏誤
         rubric=PR_RUBRIC,                    # faithful / complete / flags-risk,各為 pass/fail
         inputs={"pr_text": pr_text, "diff": diff},
         randomize_option_order=True,
@@ -10501,15 +10501,17 @@ sequenceDiagram
 |---|---|---|---|---|---|
 | **Claude Fable 5** | `claude-fable-5` | 1M | 128K | $10 / $50 | 最難的推理與長程代理工作(旗艦) |
 | **Claude Opus 4.8** | `claude-opus-4-8` | 1M | 128K | $5 / $25 | 複雜/代理任務的預設 |
-| **Claude Sonnet 4.6** | `claude-sonnet-4-6` | 1M | 128K | $3 / $15 | 速度/智慧最佳平衡;大量使用 |
+| **Claude Sonnet 5** | `claude-sonnet-5` | 1M | 128K | $3 / $15 | 速度/智慧最佳平衡;大量使用 |
 | **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | 快速、便宜、簡單/延遲關鍵任務 |
+
+> **Sonnet 5 是目前的平衡層級**,接替 Sonnet 4.6(現為舊版模型,仍可透過 `claude-sonnet-4-6` 呼叫)。Sonnet 5 具有**導入期定價 $2 / $10 每 MTok,至 2026-08-31**,之後套用標準 **$3 / $15**。在 Claude Sonnet 5 上,`effort` 參數在 Claude API 與 Claude Code 預設為 `high`。來源:[模型總覽](https://platform.claude.com/docs/en/about-claude/models/overview)、[定價](https://platform.claude.com/docs/en/about-claude/pricing)。
 
 把它讀成一道階梯,而非一份菜單。每往上一階,價格大致翻倍以換取能力的提升,所以工程問題從來不是「哪個模型最好」—— 而是「哪個是**最便宜**、且能以充裕餘裕通過這項任務門檻的階梯」。
 
 **四個家族各一句話:**
 
 - **Haiku 4.5** —— 高量、規格明確、延遲敏感工作的主力:分類、抽取、路由、格式化,以及大型系統中的*便宜子代理*。注意較小的範圍 —— 200K 上下文、64K 輸出 —— 對這些工作綽綽有餘,但因此無法勝任整個程式庫的推理。
-- **Sonnet 4.6** —— 規模化生產的預設。它以旗艦的同等範圍(1M 上下文 / 128K 輸出)只收一小部分價格,這正是為何大多數面向使用者的代理與高吞吐管線都應該從這裡*起步*,而非從 Opus。
+- **Sonnet 5** —— 規模化生產的預設。它以旗艦的同等範圍(1M 上下文 / 128K 輸出)只收一小部分價格,這正是為何大多數面向使用者的代理與高吞吐管線都應該從這裡*起步*,而非從 Opus。
 - **Opus 4.8** —— 旗艦 Opus,在任務確實複雜或具代理性時是正確的預設:多步規劃、困難程式碼、長程自主迴圈、細膩判斷。輸出價格約為 Sonnet 的 1.7 倍;你買到的是在 Sonnet 只能*有時*答對的任務上的可靠性。
 - **Fable 5** —— 絕對天花板,用於最難的推理與最長程的工作。在 $10/$50,其輸出是 Opus 的兩倍,所以只保留給 Opus 明顯做不好的那一小片任務;把它當預設用,是燒預算卻毫無收穫最常見的單一方式。
 
@@ -10530,7 +10532,7 @@ flowchart TD
     A[進來的任務] --> B{複雜推理<br/>或長程代理?}
     B -->|否,規格明確| C{延遲關鍵<br/>或極高量?}
     C -->|是| D[Haiku 4.5<br/>快又便宜]
-    C -->|否| E[Sonnet 4.6<br/>平衡預設]
+    C -->|否| E[Sonnet 5<br/>平衡預設]
     B -->|是| F{Sonnet 通過<br/>你的評測集嗎?}
     F -->|是| E
     F -->|否| G[Opus 4.8<br/>旗艦預設]
@@ -10539,7 +10541,7 @@ flowchart TD
     H -->|否| G
 ```
 
-**如何讀這棵樹。** 預設路徑落在 **Sonnet 4.6** —— 這是刻意的。你只在任務簡單*且*需要速度或規模時往*下*移到 Haiku;只在評測集證明 Sonnet 把品質留在桌上時往*上*移到 Opus;只在最頂端、Opus 仍漏掉的殘餘案例上,才用到 **Fable 5**。
+**如何讀這棵樹。** 預設路徑落在 **Sonnet 5** —— 這是刻意的。你只在任務簡單*且*需要速度或規模時往*下*移到 Haiku;只在評測集證明 Sonnet 把品質留在桌上時往*上*移到 Opus;只在最頂端、Opus 仍漏掉的殘餘案例上,才用到 **Fable 5**。
 
 **這棵樹要防的陷阱:**
 
@@ -10560,7 +10562,7 @@ flowchart TD
 flowchart TD
     U[使用者請求] --> R[路由器<br/>Haiku 4.5 分類器]
     R -->|簡單 FAQ| H[Haiku 4.5<br/>直接回答]
-    R -->|標準任務| S[Sonnet 4.6<br/>端到端處理]
+    R -->|標準任務| S[Sonnet 5<br/>端到端處理]
     R -->|複雜或高風險| O[Opus 4.8<br/>深度推理]
     H --> Z[回應]
     S --> Z
@@ -10622,7 +10624,7 @@ flowchart TD
 
 - **ID 是精確的釘選快照 —— 絕不自行構造。** `model` 是一個精確字串,不是你能裝飾的模糊別名。自 4.6 世代起,ID *無日期但仍是釘選*(如 `claude-opus-4-8`);更舊的模型以日期別名解析。一個錯字(`claude-sonnet-4.6`)或一個杜撰的日期後綴(`claude-opus-4-8-20260114`)會回傳 **404 `not_found_error`**。把模型釘在單一設定常數裡,別散落在程式庫各處。
 - **在執行期探索能力,別寫死。** 上下文視窗、輸出上限與功能支援都隨陣容變動。查詢 **Models API**(`GET /v1/models/{id}` → `max_input_tokens`、`max_tokens`、`capabilities`),而非把「200K」或「128K」烤進你的程式碼。這正是讓下游服務在你切換層級時能自我調適的關鍵。
-- **舊版與棄用。** 較舊的模型會繼續可用一段時間 —— Opus 4.7/4.6、Sonnet 4.5、Opus 4.5 仍可呼叫 —— 但被棄用的會在某個日期退役,之後該 ID 會**永久回傳 404**。這並非假設:最初的 Claude Sonnet 4(`claude-sonnet-4-20250514`)與 Claude Opus 4(`claude-opus-4-20250514`)已於 **2026-06-15 退役,現會回傳錯誤**,而 Opus 4.1(`claude-opus-4-1-20250805`)將於 2026-08-05 退役。追蹤退役日期,並在截止*之前*遷移,而非等 404 開始才動。
+- **舊版與棄用。** 較舊的模型會繼續可用一段時間 —— Opus 4.7/4.6、Sonnet 4.6、Sonnet 4.5、Opus 4.5 仍可呼叫(Sonnet 4.6 在 Sonnet 5 推出後成為舊版)—— 但被棄用的會在某個日期退役,之後該 ID 會**永久回傳 404**。這並非假設:最初的 Claude Sonnet 4(`claude-sonnet-4-20250514`)與 Claude Opus 4(`claude-opus-4-20250514`)已於 **2026-06-15 退役,現會回傳錯誤**,而 Opus 4.1(`claude-opus-4-1-20250805`)將於 2026-08-05 退役。追蹤退役日期,並在截止*之前*遷移,而非等 404 開始才動。
 - **刻意地、由評測把關地升級與降級。** 在真實流量的品質指標於困難案例上未達標時「升級」(Sonnet→Opus);在評測顯示更便宜層級現已追上品質時「降級」(Opus→Sonnet、Sonnet→Haiku)—— 較新的便宜模型常能通過一個世代前需要旗艦才行的門檻。絕不盲目切換生產模型:把候選對著你的評測集跑,比較通過率*與*每任務成本,然後改那一個設定常數。
 
 ```mermaid
@@ -10656,7 +10658,7 @@ flowchart TD
 flowchart TD
     M[進站訊息流] --> T[分流<br/>Haiku 4.5 分類器]
     T -->|簡單 FAQ| FA[Haiku 4.5<br/>直接回答]
-    T -->|標準請求| RS[Sonnet 4.6<br/>端到端解決]
+    T -->|標準請求| RS[Sonnet 5<br/>端到端解決]
     T -->|複雜或高風險| CO[協調者<br/>Opus 4.8]
     CO -->|Task: 拉歷史| SA1[子代理<br/>Haiku 4.5]
     CO -->|Task: 搜尋政策| SA2[子代理<br/>Haiku 4.5]
@@ -10666,7 +10668,7 @@ flowchart TD
     FA --> OUT[對外回覆]
     RS --> OUT
     DR --> OUT
-    M -. 封存 .-> NB[夜間 Batch API<br/>Sonnet 4.6 五折]
+    M -. 封存 .-> NB[夜間 Batch API<br/>Sonnet 5 五折]
 ```
 
 每一階都對上它的工作:**Haiku** 分流並回答 FAQ(便宜、快、簡單);**Sonnet** 解決標準的大宗(平衡預設);**Opus** 協調困難案例並驗證草稿,把*抓取*委派給 **Haiku 子代理**,好讓旗艦 token 只花在判斷上;**夜間封存**跑在**半價的 Batch API** 上,因為沒有人在等。
@@ -10679,10 +10681,10 @@ flowchart TD
 MODELS = {
     "triage":      "claude-haiku-4-5",   # 便宜、快速的分類
     "faq":         "claude-haiku-4-5",   # 簡單的直接回答
-    "standard":    "claude-sonnet-4-6",  # 大宗的平衡預設
+    "standard":    "claude-sonnet-5",  # 大宗的平衡預設
     "coordinator": "claude-opus-4-8",    # 困難推理 + 驗證
     "subagent":    "claude-haiku-4-5",   # 協調者底下的狹窄抓取/抽取
-    "nightly":     "claude-sonnet-4-6",  # 品質擴充,經由 Batch API 執行
+    "nightly":     "claude-sonnet-5",  # 品質擴充,經由 Batch API 執行
 }
 ```
 
@@ -10749,7 +10751,7 @@ sequenceDiagram
 |---|---|
 | 階梯,不是菜單 | 每層約為上一層的 2 倍;挑**能以充裕餘裕通過任務的最便宜階梯**,而非最強的(§28.1)。 |
 | 選擇流程 | 由複雜度 → 延遲 → 量驅動;**從低起步,只在評測集這麼說時才往上爬**(§28.2)。 |
-| 預設用 Sonnet | Sonnet 4.6 是生產預設;為簡單/快速/高量往*下*移到 Haiku,只在品質要求時往*上*移到 Opus(§28.2)。 |
+| 預設用 Sonnet | Sonnet 5 是生產預設;為簡單/快速/高量往*下*移到 Haiku,只在品質要求時往*上*移到 Opus(§28.2)。 |
 | 路由混合 | 在昂貴層級前放一個便宜的 Haiku 路由器;不確定時它必須**向上失敗**(§28.3)。 |
 | 分層多代理 | 強協調者(Opus)+ 便宜子代理(Haiku);絕不顛倒(§28.3)。 |
 | 先用成本槓桿再降級 | 快取(讀取約 0.1 倍)、Batch API(五折)、收緊 `max_tokens`,在*不動*品質下砍成本 —— 先做這些(§28.4)。 |
@@ -12620,7 +12622,7 @@ sequenceDiagram
 | Claude Opus 4.8 | `claude-opus-4-8` | 1M | 128K | $5 | $25 | 旗艦 Opus——多數高要求工作的預設；頂尖的自主代理、知識工作與記憶能力。 |
 | Claude Opus 4.7 | `claude-opus-4-7` | 1M | 128K | $5 | $25 | 上一代 Opus；強大的代理＋視覺＋記憶。 |
 | Claude Opus 4.6 | `claude-opus-4-6` | 1M | 128K | $5 | $25 | 較舊的 Opus；自適應思考、128K 輸出。 |
-| Claude Sonnet 4.6 | `claude-sonnet-4-6` | 1M | 128K | $3 | $15 | 速度／智慧最佳平衡，適合大量生產用途。 |
+| Claude Sonnet 5 | `claude-sonnet-5` | 1M | 128K | $3 | $15 | 速度／智慧最佳平衡，適合大量生產用途。導入期 $2 ／ $10 至 2026-08-31。 |
 | Claude Haiku 4.5 | `claude-haiku-4-5` | 200K | 64K | $1 | $5 | 最快、最便宜；適合簡單／低延遲任務與廉價子代理。 |
 
 - **使用精確 ID，切勿用帶日期後綴的變體**（例如 `claude-opus-4-8`，而非 `claude-opus-4-8-20xxxxxx`）。來源：[模型總覽](https://platform.claude.com/docs/en/about-claude/models/overview)、[定價](https://platform.claude.com/docs/en/pricing)。
