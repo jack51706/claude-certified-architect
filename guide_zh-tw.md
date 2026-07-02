@@ -7218,7 +7218,7 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     A[請求進來] --> B{模型家族?}
-    B -->|Opus 4.7 / 4.8 / Fable 5| C[thinking type adaptive<br/>budget_tokens 會被回傳 400]
+    B -->|Opus 4.7 / 4.8 / Fable 5 / Sonnet 5| C[thinking type adaptive<br/>budget_tokens 會被回傳 400]
     B -->|Opus 4.6 / Sonnet 4.6| D[thinking type adaptive<br/>budget_tokens 已棄用但仍可用]
     B -->|4.6 之前的模型| E[thinking type enabled<br/>budget_tokens 須小於 max_tokens]
     C --> F[深度由 effort 控制]
@@ -7228,7 +7228,7 @@ flowchart TD
 
 **為何這在生產上很重要:** 固定預算會在簡單請求上想太多、在困難請求上想太少 —— 它無法分辨兩者。自適應思考在瑣碎查詢上不花一分力,遇到真正的多步驟問題才加碼,而這正是代理在異質工作負載上所要的花費分布。
 
-**硬性陷阱。** 在 Opus 4.7、Opus 4.8 與 Fable 5 上,`thinking: {type: "enabled", budget_tokens: N}` 不只是不被建議 —— 它會回傳 **400 錯誤**。取樣參數 `temperature`、`top_p`、`top_k` 同樣如此。從較舊模型沿用過來的程式碼會直接失敗,而非悄悄降級。在 Opus 4.6 與 Sonnet 4.6 上,預算仍*可用*但已棄用(僅作為過渡的逃生口)。Fable 5 還多一個轉折:思考*永遠開啟*,所以連明確的 `thinking: {type: "disabled"}` 也是 400 —— 你得完全省略這個參數。
+**硬性陷阱。** 在 Opus 4.7、Opus 4.8、Fable 5 與 Sonnet 5 上,`thinking: {type: "enabled", budget_tokens: N}` 不只是不被建議 —— 它會回傳 **400 錯誤**。取樣參數 `temperature`、`top_p`、`top_k` 同樣如此。從較舊模型沿用過來的程式碼會直接失敗,而非悄悄降級。在 Opus 4.6 與 Sonnet 4.6 上,預算仍*可用*但已棄用(僅作為過渡的逃生口)。Fable 5 還多一個轉折:思考*永遠開啟*,所以連明確的 `thinking: {type: "disabled"}` 也是 400 —— 你得完全省略這個參數。
 
 ## 17.2 Effort 階梯
 
@@ -10505,6 +10505,8 @@ sequenceDiagram
 | **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | 快速、便宜、簡單/延遲關鍵任務 |
 
 > **Sonnet 5 是目前的平衡層級**,接替 Sonnet 4.6(現為舊版模型,仍可透過 `claude-sonnet-4-6` 呼叫)。Sonnet 5 具有**導入期定價 $2 / $10 每 MTok,至 2026-08-31**,之後套用標準 **$3 / $15**。在 Claude Sonnet 5 上,`effort` 參數在 Claude API 與 Claude Code 預設為 `high`。來源:[模型總覽](https://platform.claude.com/docs/en/about-claude/models/overview)、[定價](https://platform.claude.com/docs/en/about-claude/pricing)。
+>
+> **從 Sonnet 4.6 遷移到 Sonnet 5** —— 有三項 API 行為改變:[自適應思考(adaptive thinking)](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)現在**預設開啟**;手動延伸思考(`thinking: {type: "enabled", budget_tokens: N}`)已**移除並回傳 400 錯誤**;將取樣參數 `temperature` / `top_p` / `top_k` 設為非預設值也會**回傳 400 錯誤**。Sonnet 5 **不支援** [Priority Tier](https://platform.claude.com/docs/en/api/service-tiers)(其餘工具與平台功能與 Sonnet 4.6 相同,具備 1M 上下文視窗與 128K 最大輸出)。Sonnet 5 另外採用**新的分詞器(tokenizer),相同文字會產生約多 30% 的 token**,因此請用 [token 計數 API](https://platform.claude.com/docs/en/build-with-claude/token-counting)(`model="claude-sonnet-5"`)重新量測提示長度與成本,不要沿用 Sonnet 4.6 的估算。來源:[Claude Sonnet 5 的新功能](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5)。
 
 把它讀成一道階梯,而非一份菜單。每往上一階,價格大致翻倍以換取能力的提升,所以工程問題從來不是「哪個模型最好」—— 而是「哪個是**最便宜**、且能以充裕餘裕通過這項任務門檻的階梯」。
 

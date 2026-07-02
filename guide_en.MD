@@ -7218,7 +7218,7 @@ There are two generations of the thinking API, and mixing them is the most commo
 ```mermaid
 flowchart TD
     A[Request arrives] --> B{Model family?}
-    B -->|Opus 4.7 / 4.8 / Fable 5| C[thinking type adaptive<br/>budget_tokens rejected with 400]
+    B -->|Opus 4.7 / 4.8 / Fable 5 / Sonnet 5| C[thinking type adaptive<br/>budget_tokens rejected with 400]
     B -->|Opus 4.6 / Sonnet 4.6| D[thinking type adaptive<br/>budget_tokens deprecated but works]
     B -->|Pre-4.6 models| E[thinking type enabled<br/>budget_tokens less than max_tokens]
     C --> F[Depth controlled by effort]
@@ -7228,7 +7228,7 @@ flowchart TD
 
 **Why this matters in production:** a fixed budget over-thinks easy requests and under-thinks hard ones — it cannot tell them apart. Adaptive thinking spends nothing on a trivial lookup and ramps up for a genuine multi-step problem, which is exactly the spend profile an agent wants across a heterogeneous workload.
 
-**The hard pitfall.** On Opus 4.7, Opus 4.8, and Fable 5, `thinking: {type: "enabled", budget_tokens: N}` is not merely discouraged — it returns a **400 error**. So do the sampling parameters `temperature`, `top_p`, and `top_k`. Code carried forward from an older model will fail outright, not degrade quietly. On Opus 4.6 and Sonnet 4.6 the budget still *works* but is deprecated (a transitional escape hatch only). On Fable 5 there is one extra twist: thinking is *always on*, so even an explicit `thinking: {type: "disabled"}` is a 400 — you omit the parameter entirely.
+**The hard pitfall.** On Opus 4.7, Opus 4.8, Fable 5, and Sonnet 5, `thinking: {type: "enabled", budget_tokens: N}` is not merely discouraged — it returns a **400 error**. So do the sampling parameters `temperature`, `top_p`, and `top_k`. Code carried forward from an older model will fail outright, not degrade quietly. On Opus 4.6 and Sonnet 4.6 the budget still *works* but is deprecated (a transitional escape hatch only). On Fable 5 there is one extra twist: thinking is *always on*, so even an explicit `thinking: {type: "disabled"}` is a 400 — you omit the parameter entirely.
 
 ## 17.2 The effort ladder
 
@@ -10505,6 +10505,8 @@ Four model families are in active service. They differ on three axes that matter
 | **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | Fast, cheap, simple/latency-critical tasks |
 
 > **Sonnet 5 is the current balanced tier**, succeeding Sonnet 4.6 (now a legacy model that is still callable via `claude-sonnet-4-6`). Sonnet 5 carries **introductory pricing of $2 / $10 per MTok through 2026-08-31**, after which standard **$3 / $15** applies. On Claude Sonnet 5 the `effort` parameter defaults to `high` on the Claude API and Claude Code. Source: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview), [Pricing](https://platform.claude.com/docs/en/about-claude/pricing).
+>
+> **Migrating from Sonnet 4.6 to Sonnet 5** — three API behaviors changed: [adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) is now **on by default**; manual extended thinking (`thinking: {type: "enabled", budget_tokens: N}`) is **removed and returns a 400 error**; and setting the sampling parameters `temperature` / `top_p` / `top_k` to non-default values **returns a 400 error**. [Priority Tier](https://platform.claude.com/docs/en/api/service-tiers) is **not available** on Sonnet 5 (otherwise it carries the same tools and platform features as Sonnet 4.6, with a 1M context window and 128K max output). Sonnet 5 also uses a **new tokenizer that produces roughly 30% more tokens for the same text**, so re-measure prompt size and cost with the [token counting API](https://platform.claude.com/docs/en/build-with-claude/token-counting) (`model="claude-sonnet-5"`) instead of reusing Sonnet 4.6 estimates. Source: [What's new in Claude Sonnet 5](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5).
 
 Read this as a ladder, not a menu. Each rung roughly doubles price for a step up in capability, so the engineering question is never "what is the best model" — it is "what is the **cheapest** rung that clears this task's bar with margin to spare."
 
