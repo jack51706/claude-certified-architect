@@ -9393,6 +9393,8 @@ session = client.beta.sessions.create(
 
 > **Pitfall:** embedding per-request variation (a customer ID, a target file) into a *new agent* instead of passing it as **session input**. Per-run data belongs in the session's inputs/messages; only *what the agent fundamentally is* belongs in the agent.
 
+> **New (2026-06-30): sanctioned per-session overrides.** When you genuinely need to vary the model, system prompt, tools, MCP servers, or skills for *one* run — say, run a single session on a cheaper model — pass `agent: {"type": "agent_with_overrides", "id": ..., "version": ..., ...}` on `sessions.create`. The overrides apply to **that session only**; the persisted agent definition is unchanged. This is the correct alternative to — not a license for — the `agents.create()`-per-request anti-pattern above: it varies one run without churning versions or fragmenting observability. Source: [Managed Agents — override agent config for a session](https://platform.claude.com/docs/en/managed-agents/sessions#override-agent-configuration-for-a-session).
+
 ## 24.3 Driving a Session: Events, Streaming, and Webhooks
 
 A managed session is **event-driven**. Anthropic runs the loop and emits a **Server-Sent Events (SSE)** stream describing what the agent is doing in real time.
