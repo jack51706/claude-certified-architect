@@ -16,7 +16,7 @@ This repository contains study materials for the **Claude Certified Architect �
 
 ## Interactive Learning Site
 
-A bilingual (English + 繁體中文) interactive study site lives in [`web/`](./web/): the full guide with search and a language switcher, a 100-question practice bank, a timed mock exam (scaled 100–1000, pass 720), spaced-repetition flashcards, an EN↔中 glossary, and a progress dashboard.
+A bilingual (English + 繁體中文) interactive study site lives in [`web/`](./web/): the full guide with search and a language switcher, a 121-question practice bank, a timed mock exam (60 questions, scaled 100–1000, pass 720) with reviewable attempt history, spaced-repetition flashcards with deck selection, an EN↔中 glossary, a progress dashboard, and progress export/import.
 
 ```bash
 cd web && npm install && npm run dev   # http://localhost:4321

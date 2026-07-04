@@ -20,7 +20,7 @@ Three artifact layers, by source-of-truth precedence:
 
 ## Guide structure (every `guide_<lang>` mirrors this)
 
-Intro → Target Candidate → Exam Format → 5 Domains (weighted) → 8 Exam Scenarios → **PART I: Theory Foundations** (Chapters 1–13) → **PART II: Exam Domain Notes** → sample-question bank → **Practical Exercises** → **Appendix**. The English guide holds ~112 sample questions (12 in the examples section + 100 in the Practice Test, across all 8 exam scenarios). When editing one language, keep section ordering and headings parallel across languages.
+Intro → Target Candidate → Exam Format → 5 Domains (weighted) → 8 Exam Scenarios → **PART I: Theory Foundations** (Chapters 1–13) → **PART II: Exam Domain Notes** → **PART III: Modern Agent Engineering** (Ch 14–16) → **PART IV: Platform Reference** (Ch 17–28) → sample-question bank → **Practical Exercises** → **Appendices**. The English guide holds ~133 sample questions (12 in the examples section + 121 in the Practice Test, 15–16 per scenario across all 8 exam scenarios). When editing one language, keep section ordering and headings parallel across languages — `web/scripts/sync.mjs` **fails the build** on section/question-count drift between en and zh-tw.
 
 ### Question block format (what the quiz builder parses)
 
