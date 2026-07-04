@@ -9393,6 +9393,8 @@ session = client.beta.sessions.create(
 
 > **陷阱:**把每次請求的差異(一個客戶 ID、一個目標檔案)塞進*新的 agent*,而不是當成 **session 輸入**傳進去。每次執行的資料屬於 session 的輸入/訊息;只有*代理本質上是什麼*才屬於 agent。
 
+> **新增(2026-06-30):官方支援的單一 session 覆寫。**當你確實需要為*單一*執行變更 model、系統提示、工具、MCP 伺服器或 skills——例如讓某一個 session 改跑較便宜的模型——可在 `sessions.create` 傳入 `agent: {"type": "agent_with_overrides", "id": ..., "version": ..., ...}`。這些覆寫**只作用於該 session**;持久的 agent 定義維持不變。這是上述每次請求呼叫 `agents.create()` 反模式的*正確替代方案*、而非為其開脫:它讓單次執行產生差異,卻不會狂刷版本或切碎可觀測性。來源:[Managed Agents — override agent config for a session](https://platform.claude.com/docs/en/managed-agents/sessions#override-agent-configuration-for-a-session)。
+
 ## 24.3 驅動一個 Session:Events、串流與 Webhooks
 
 一個託管 session 是**事件驅動**的。Anthropic 跑迴圈,並發出一條 **Server-Sent Events(SSE)** 串流,即時描述代理正在做什麼。
