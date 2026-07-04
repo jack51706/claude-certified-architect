@@ -31,9 +31,12 @@ The ideal candidate is a **solution architect** who designs and ships production
 | Parameter | Value |
 |---|---|
 | Question type | Multiple choice (1 correct out of 4) |
+| Number of questions | 60 |
 | Scoring | 100–1000 scale, passing score **720** |
 | Guessing penalty | None (answer every question!) |
 | Scenarios | 4 out of 8 possible (randomly selected) |
+
+> **Certification roadmap:** Foundations is the entry credential — Anthropic has confirmed additional certification tiers (for sellers, developers, and an advanced architect level) arriving later in 2026.
 
 ---
 
@@ -4992,7 +4995,7 @@ flowchart TD
 
 **Why this beats a prompt instruction.** Telling the model in `CLAUDE.md` “never touch the secrets folder” is *probabilistic* — it usually complies, but “usually” is unacceptable for credentials or `rm -rf`. A `deny` rule is *deterministic*: it is enforced by the harness, not the model's judgement. This is the §3.5 hooks principle applied to Claude Code's own tools — **when failure has security or data-loss consequences, gate it with configuration, not wording.**
 
-**Modes and headless runs.** The default interactive mode is **ask**; `acceptEdits` auto-approves file edits while still gating Bash; **plan mode** lets the agent explore read-only and propose changes without executing them. In CI/headless runs (`claude -p`) there is no human to answer prompts, so you must pre-approve the needed tools with `--allowedTools` (and rely on `deny` for the guardrails) — an un-allowed tool simply fails rather than hanging.
+**Modes and headless runs.** The default interactive mode asks before each side-effecting action — surfaced as **Manual** in the UI since Claude Code 2.1.200 (July 2026); `acceptEdits` auto-approves file edits while still gating Bash; **plan mode** lets the agent explore read-only and propose changes without executing them. In CI/headless runs (`claude -p`) there is no human to answer prompts, so you must pre-approve the needed tools with `--allowedTools` (and rely on `deny` for the guardrails) — an un-allowed tool simply fails rather than hanging.
 
 **Pitfalls:**
 - **Over-broad allow.** `"allow": ["Bash"]` hands the agent unrestricted shell — the opposite of least privilege. Allow specific commands (`Bash(npm test:*)`), not the whole tool.
@@ -10057,7 +10060,7 @@ Unattended execution is where production diverges hardest from interactive use.
 
 | Mode | Behavior | Typical use |
 |---|---|---|
-| `default` | Ask before sensitive actions | Interactive development |
+| `default` (shown as **Manual** since July 2026) | Ask before sensitive actions | Interactive development |
 | `acceptEdits` | Auto-accept file edits, still gate commands | Trusted local editing |
 | `plan` | Read/investigate only — **no mutations** | Planning before approval |
 | `bypassPermissions` | No prompts at all | Sandboxed, fully-trusted automation only |
@@ -10898,7 +10901,7 @@ Notice the triage model did **not** try to solve the security report — it reco
 
 ---
 
-## Question 10 (Scenario: Claude Code for CI)
+## Question 10 (Scenario: Claude Code for Continuous Integration)
 
 **Situation:** A pipeline runs `claude "Analyze this pull request for security issues"`, but hangs waiting for interactive input.
 
@@ -10913,7 +10916,7 @@ Notice the triage model did **not** try to solve the security report — it reco
 
 ---
 
-## Question 11 (Scenario: Claude Code for CI)
+## Question 11 (Scenario: Claude Code for Continuous Integration)
 
 **Situation:** The team wants to reduce API cost for automated analysis. Claude currently serves two workflows in real time: (1) a blocking pre-merge check that must complete before developers can merge a PR, and (2) a tech-debt report generated overnight for morning review. A manager proposes moving both to the Message Batches API to save 50%.
 
@@ -10928,7 +10931,7 @@ Notice the triage model did **not** try to solve the security report — it reco
 
 ---
 
-## Question 12 (Scenario: Multi-file Code Review)
+## Question 12 (Scenario: Claude Code for Continuous Integration)
 
 **Situation:** A pull request changes 14 files in an inventory tracking module. A single-pass review of all files produces inconsistent results: detailed comments for some files but superficial ones for others, missed obvious bugs, and contradictory feedback (a pattern is flagged as problematic in one file but approved in identical code in another file).
 
@@ -12482,6 +12485,333 @@ Notice the triage model did **not** try to solve the security report — it reco
 
 ---
 
+## Scenario: Developer Productivity Tools
+
+---
+
+## Question 101 (Scenario: Developer Productivity Tools)
+
+**Situation:** The platform team maintains a 4,000-line internal API-design handbook. Engineers want the agent to apply it when working on API code, but pasting it into CLAUDE.md would load it into every session — most of which never touch the API.
+
+**How should the handbook be made available?**
+
+- A) Append the full handbook to the project CLAUDE.md so it is always loaded.
+- B) Package it as an Agent Skill (`.claude/skills/`) — a `SKILL.md` whose name and description are always visible but whose full content loads only when the task calls for it. **[CORRECT]**
+- C) Have engineers paste the relevant handbook sections into their prompts.
+- D) Split the handbook across several CLAUDE.md files in different directories.
+
+**Why B:** Skills implement progressive disclosure: the agent always sees a one-line description and pulls in the full material only when the task matches, so API sessions get the handbook and unrelated sessions pay nothing for it. Loading 4,000 lines into CLAUDE.md (A) taxes every session's context. Manual pasting (C) is inconsistent and unenforced. Scattering it across CLAUDE.md files (D) still loads whenever those directories are touched and fragments the source of truth.
+
+---
+
+## Question 102 (Scenario: Developer Productivity Tools)
+
+**Situation:** One team's `.claude/` setup — slash commands, a review skill, PreToolUse hooks, and MCP server config — has proven valuable. Forty other repositories want the same setup, and it must stay versioned and updatable rather than drifting per repo.
+
+**What is the right distribution mechanism?**
+
+- A) Package the commands, skills, hooks, and MCP config as a plugin and have teams install it from a shared plugin marketplace. **[CORRECT]**
+- B) Copy the `.claude/` directory into each of the 40 repositories.
+- C) Document the setup on a wiki page and let each team recreate it.
+- D) Zip the directory and share it in the team chat channel.
+
+**Why A:** Plugins exist precisely to bundle commands, skills, hooks, and MCP configuration into a versioned unit that many repos install and update from one source — fixing drift by construction. Copying directories (B) forks the config forty ways with no update path. A wiki (C) relies on manual, error-prone recreation. A zip in chat (D) is unversioned and immediately stale.
+
+---
+
+## Question 103 (Scenario: Developer Productivity Tools)
+
+**Situation:** Engineers connect a dozen MCP servers (issue tracker, CI, docs, cloud consoles…) totaling ~200 tool definitions. Loading them all up front consumes a large slice of the context window, yet a typical task uses fewer than five tools.
+
+**What is the best fix?**
+
+- A) Uninstall most of the MCP servers and keep only the two most-used.
+- B) Move the tool documentation into CLAUDE.md and disable the servers.
+- C) Enable MCP tool search so tool definitions are deferred and loaded on demand as the task needs them. **[CORRECT]**
+- D) Switch to a model with a larger context window.
+
+**Why C:** Tool search keeps the whole catalog discoverable while deferring full definitions until a task actually needs them, cutting the upfront context cost without losing any capability. Removing servers (A) trades capability for space. CLAUDE.md docs (B) aren't callable tools. A bigger window (D) costs more per request and still burns tokens on definitions that are never used.
+
+---
+
+## Question 104 (Scenario: Developer Productivity Tools)
+
+**Situation:** Halfway through a session, a sweeping rename across many files turns out to be wrong. Nothing has been committed. The engineer wants the working tree *and* the conversation back to the state just before the rename, without losing the session's earlier work.
+
+**Which mechanism does this?**
+
+- A) Rewind to the checkpoint taken before the rename, restoring files and conversation together. **[CORRECT]**
+- B) Run `git reset --hard HEAD` to discard changes.
+- C) Start a fresh session and re-explain the task.
+- D) Ask the agent to remember what each file looked like and re-edit them back.
+
+**Why A:** Claude Code checkpoints capture state as the session progresses, and rewind restores both the files and the conversation to a chosen point — exactly the "undo to just before the mistake" being asked for. `git reset --hard` (B) throws away *all* uncommitted work, including the good earlier edits, and does nothing for conversation state. A fresh session (C) loses accumulated context. Re-editing from memory (D) is unreliable at multi-file scale.
+
+---
+
+## Question 105 (Scenario: Developer Productivity Tools)
+
+**Situation:** The agent handles two very different workloads: subtle architectural refactors, and high-volume mechanical chores (renaming fields, regenerating fixtures). Running everything at maximum reasoning depth makes the mechanical chores slow and needlessly expensive.
+
+**What is the right cost/quality control?**
+
+- A) Route the chores to a lower `effort` setting (keeping high effort for the hard refactors) so reasoning depth matches task difficulty. **[CORRECT]**
+- B) Cut `max_tokens` in half for all requests.
+- C) Disable thinking globally so every task runs fast.
+- D) Add "think less" to the system prompt for chores.
+
+**Why A:** The effort dial exists to trade reasoning depth for speed and cost per task: low effort on mechanical work is faster and cheaper with no quality loss, while hard problems keep the depth they need. Halving `max_tokens` (B) truncates output rather than reducing deliberation. Disabling thinking everywhere (C) sacrifices the refactors that genuinely need it. Prompt wording (D) is an unreliable control compared to a first-class parameter.
+
+---
+
+## Question 106 (Scenario: Developer Productivity Tools)
+
+**Situation:** During sessions, the agent keeps rediscovering the same undocumented quirks — a flaky test that needs a retry, a build flag required on ARM machines. Each new session starts from zero and engineers re-explain the same facts.
+
+**How should this knowledge persist?**
+
+- A) Rely on session resume so one long-lived session holds everything.
+- B) Enable the agent's persistent memory so quirks discovered in one session are recorded and recalled in later ones. **[CORRECT]**
+- C) Ask engineers to paste the previous session's transcript at the start of each new one.
+- D) Increase the context window so sessions can run longer before restarting.
+
+**Why B:** Memory (auto memory in Claude Code / the memory-tool pattern) is built for exactly this: the agent writes durable notes as it *discovers* things and reads them back in future sessions, so knowledge accumulates without anyone hand-maintaining a document. Stable, agreed conventions still belong in CLAUDE.md — memory covers what is learned along the way. One eternal session (A) eventually hits context limits and excludes other engineers. Pasting transcripts (C) is manual and floods the window with noise. A larger window (D) delays the problem without persisting anything.
+
+---
+
+## Question 107 (Scenario: Developer Productivity Tools)
+
+**Situation:** A task needs the dev server running while the agent iterates on failing integration tests. Started normally, the server never exits, so the agent's tool call blocks forever and the loop stalls.
+
+**How should the agent run the server?**
+
+- A) As a background task, so the server keeps running while the agent continues working and checks its output when needed. **[CORRECT]**
+- B) In the foreground with a very long timeout.
+- C) Not at all — ask the engineer to run it in another terminal and paste logs.
+- D) Start it, kill it after each test run, and restart it for the next one.
+
+**Why A:** Background execution is designed for never-exiting processes: the command runs detached, the agent's loop stays free, and output is checked when relevant. A foreground call (B) blocks until the timeout finally kills the server. Manual copy-paste (C) surrenders the automation. Restart-per-test (D) adds startup latency to every iteration and can invalidate warm state.
+
+---
+
+## Scenario: Structured Data Extraction
+
+---
+
+## Question 108 (Scenario: Structured Data Extraction)
+
+**Situation:** A single-call extraction endpoint returns one JSON object per document — there is no tool loop. Despite a "respond only with JSON" instruction, a small fraction of responses arrive wrapped in markdown fences or preceded by prose, and the parser breaks.
+
+**What is the robust fix?**
+
+- A) Strip markdown fences and leading prose with a cleanup regex before parsing.
+- B) Strengthen the instruction: "NEVER include anything except JSON."
+- C) Use structured outputs (`output_config.format` with the JSON schema) so the response is guaranteed to be valid JSON matching the schema. **[CORRECT]**
+- D) Retry each unparseable response until it happens to parse.
+
+**Why C:** Request-level structured outputs make well-formed, schema-conforming JSON a *guarantee* enforced at generation time (and SDK helpers like `.parse()` return it already validated), eliminating the failure class instead of coping with it. Regex cleanup (A) and sterner wording (B) reduce but don't eliminate breakage. Blind retries (D) pay extra for output that was never guaranteed in the first place.
+
+---
+
+## Question 109 (Scenario: Structured Data Extraction)
+
+**Situation:** Compliance requires that every extracted field be traceable to the exact source passage. The team turns on citations *and* structured outputs for the same request — and discovers the two features cannot be combined.
+
+**What is the right pipeline design?**
+
+- A) Drop citations and have the model mention page numbers in a comment field.
+- B) Split into two passes: a citations-enabled pass that extracts each value with its cited source span, then a structuring pass that emits the schema-conforming record. **[CORRECT]**
+- C) Keep retrying the combined request until both features engage.
+- D) Abandon structured output and parse the cited prose downstream.
+
+**Why B:** Because citations and structured outputs are incompatible in a single request, the reliable design separates the concerns: pass one produces values with platform-grounded cited spans; pass two locks the final shape with structured outputs. Self-reported page numbers (A) are unverified — the point of citations is spans the platform actually grounds. Retrying an unsupported combination (C) cannot succeed. Parsing cited prose (D) reintroduces the fragility structured outputs exist to remove.
+
+---
+
+## Question 110 (Scenario: Structured Data Extraction)
+
+**Situation:** Every extraction request includes the same 180-page reference manual (a parts catalog the extractor consults) alongside the unique document. The pipeline re-encodes and re-uploads the manual on every call.
+
+**What removes the repeated upload?**
+
+- A) Upload the manual once via the Files API and reference its file ID in each request. **[CORRECT]**
+- B) Keep re-sending the manual as base64 but compress it first.
+- C) Summarize the manual and send the summary instead.
+- D) Paste the manual's key tables into the system prompt by hand.
+
+**Why A:** The Files API exists for exactly this: upload once, then reference the file by ID across any number of requests — the bytes are not re-sent each time (and the stable prefix pairs naturally with prompt caching). Compressed base64 (B) still re-uploads on every call. A summary (C) trades away the detail the extractor consults. Hand-pasted tables (D) are a stale, partial copy of the real document.
+
+---
+
+## Question 111 (Scenario: Structured Data Extraction)
+
+**Situation:** A scanned archive volume arrives as a single 900-page PDF. Requests that include it fail: it exceeds the documented PDF limits (32 MB, ≤600 pages).
+
+**What is the correct handling?**
+
+- A) Send it anyway and let the API sample the pages it can.
+- B) Raise `max_tokens` so the request has more room.
+- C) Convert the whole volume to plain text with local OCR and discard the page images.
+- D) Split the volume into page-range chunks within the limits, extract per chunk, and merge results keyed by page. **[CORRECT]**
+
+**Why D:** The PDF limits are hard caps, so the volume must be divided into conforming chunks; extracting per chunk and merging by page preserves everything. The API doesn't silently sample an oversized document (A) — the request fails. `max_tokens` (B) governs output length, not input document limits. Local OCR to bare text (C) throws away the layout and visual cues native PDF processing uses, and isn't necessary when chunking solves it.
+
+---
+
+## Question 112 (Scenario: Structured Data Extraction)
+
+**Situation:** Finance needs an accurate cost forecast before an 80,000-document extraction run. Character-count estimates have been off by 30%+ on past runs.
+
+**How do you produce a trustworthy forecast?**
+
+- A) Estimate tokens as characters divided by four.
+- B) Run a stratified sample of documents through the free token-counting endpoint and multiply the exact counts by per-model pricing. **[CORRECT]**
+- C) Ask the model to estimate how many tokens each document will use.
+- D) Process the first 5,000 documents for real and extrapolate from the bill.
+
+**Why B:** `count_tokens` returns the exact, model-specific token count and is free, so a stratified sample yields a precise forecast before spending anything. Character heuristics (A) are what produced the 30% misses. Model self-estimates (C) are guesses, not measurements. Running 5,000 documents (D) buys information at real cost that the free endpoint already provides.
+
+---
+
+## Question 113 (Scenario: Structured Data Extraction)
+
+**Situation:** An intraday pipeline extracts fields from documents as they arrive; latency matters, so batching is out. Every request starts with the same 18K-token preamble (instructions + schema + worked examples) followed by the unique document. Input tokens dominate the bill.
+
+**What cuts the cost without changing quality?**
+
+- A) Order the prompt static-first and set a cache breakpoint after the preamble, so repeat requests read it from the prompt cache at ~0.1×. **[CORRECT]**
+- B) Trim the worked examples out of the preamble.
+- C) Move the pipeline to the Message Batches API.
+- D) Put the unique document before the preamble.
+
+**Why A:** Prompt caching is prefix-matched: with the fixed 18K preamble first and a breakpoint after it, every subsequent request reads it at roughly a tenth of the price — a large, quality-neutral saving. Trimming examples (B) risks the accuracy those examples buy. Batches (C) cost half but violate the latency requirement. Putting the variable document first (D) destroys the shared prefix and makes caching useless.
+
+---
+
+## Question 114 (Scenario: Structured Data Extraction)
+
+**Situation:** Extraction accuracy is high on short documents, but for 300-page contracts, fields buried mid-document are missed or filled with plausible-but-wrong values.
+
+**What is the strongest mitigation?**
+
+- A) Tell the model to "read the middle sections carefully."
+- B) Switch to a model with a larger maximum output.
+- C) Require quote-then-extract: the model must first quote the exact passage supporting each field, then output the value derived from it. **[CORRECT]**
+- D) Lower the temperature.
+
+**Why C:** Forcing a verbatim supporting quote before each value grounds the extraction in retrieved text: a field with no quote surfaces as a gap instead of a confabulation, directly countering the lost-in-the-middle failure mode. "Read carefully" (A) is advisory. Output size (B) has nothing to do with mid-context attention. Temperature (D) changes variance, not grounding.
+
+---
+
+## Scenario: Agentic AI Tools
+
+---
+
+## Question 115 (Scenario: Agentic AI Tools)
+
+**Situation:** An operations agent registers ~300 tools across internal systems. Their definitions alone consume tens of thousands of tokens per request, yet any given task calls five or six tools.
+
+**What keeps the full catalog available without the upfront cost?**
+
+- A) Shorten every tool description to one terse line.
+- B) Use the tool-search tool with deferred loading: unloaded tools stay discoverable by search, and their definitions load only when needed. **[CORRECT]**
+- C) Split the agent into ten smaller agents, each owning 30 tools.
+- D) Rely on the 1M-token context window to absorb the definitions.
+
+**Why B:** Tool search flips tool definitions from "always loaded" to "loaded on demand": the model searches the catalog, pulls in the handful it needs, and the context stays solvent with capability intact. Terse descriptions (A) save tokens but degrade tool *selection* — the model chooses tools by their descriptions. Ten agents (C) is a heavy re-architecture with routing overhead. Paying for tens of thousands of definition tokens on every request (D) is exactly the cost being eliminated.
+
+---
+
+## Question 116 (Scenario: Agentic AI Tools)
+
+**Situation:** A pricing task must call `get_price` for 500 SKUs and compute aggregate statistics. As a plain tool loop this is hundreds of inference round-trips, and every individual price lands in the context window.
+
+**What is the efficient pattern?**
+
+- A) Issue the 500 calls as parallel tool use in as few turns as possible.
+- B) Raise `max_tokens` so the results fit.
+- C) Precompute all prices nightly and paste them into the prompt.
+- D) Use programmatic tool calling: the model writes code in the execution sandbox that loops over the SKUs, invokes the tool, and returns only the aggregates to the conversation. **[CORRECT]**
+
+**Why D:** Programmatic tool calling moves the loop into code: one round-trip sets it up, the sandbox drives the 500 tool invocations, and only the aggregate answer re-enters the context — collapsing both the round-trips and the token bloat. Parallel tool use (A) reduces turns but still returns 500 results into the window. `max_tokens` (B) is output length, not context pressure. Nightly precompute (C) serves stale prices to an on-demand question.
+
+---
+
+## Question 117 (Scenario: Agentic AI Tools)
+
+**Situation:** Hundreds of CI agent jobs authenticate with a long-lived `sk-ant-` API key stored in the secrets manager. Security mandates eliminating static credentials: workloads must present short-lived, scoped credentials tied to their own identity.
+
+**What satisfies the mandate?**
+
+- A) Workload Identity Federation: each job exchanges its provider-issued OIDC token (e.g., from GitHub Actions) for a scoped Anthropic token that expires in minutes. **[CORRECT]**
+- B) Rotate the static API key every week.
+- C) Move the key into a stronger vault with tighter ACLs.
+- D) Bake the key into the CI image so it never transits the network.
+
+**Why A:** WIF replaces the static secret entirely: the workload proves its identity with a short-lived OIDC JWT and receives a scoped, minutes-long token — nothing durable to mint, rotate, or leak. Weekly rotation (B) shrinks but keeps the static-credential window. A better vault (C) improves the storage of a secret that shouldn't exist at all. Baking the key into an image (D) is credential sprawl at its worst.
+
+---
+
+## Question 118 (Scenario: Agentic AI Tools)
+
+**Situation:** An enterprise wants its agents to connect only to security-approved MCP servers, with access decided centrally in the corporate identity provider (Okta) — not by individual developers clicking through per-server OAuth consents.
+
+**Which capability implements this?**
+
+- A) List the approved servers in CLAUDE.md and instruct agents to use only those.
+- B) Block unapproved servers' domains at the network firewall.
+- C) Enterprise-Managed Authorization (EMA): MCP authorization is governed centrally through the IdP, and the organization pins the approved server set. **[CORRECT]**
+- D) Have each developer promise to configure only approved servers.
+
+**Why C:** EMA moves MCP authorization into the enterprise identity layer: the IdP decides which users and workloads may use which servers, and the approved set is managed centrally — deterministic governance with an audit trail. A CLAUDE.md list (A) is prompt text, not enforcement. Firewall blocks (B) stop traffic but grant nothing and manage no identity or consent lifecycle. Developer promises (D) are not a control.
+
+---
+
+## Question 119 (Scenario: Agentic AI Tools)
+
+**Situation:** A 200-step operations run keeps tool outputs lean at the source, yet hundreds of accumulated `tool_result` blocks from long-finished steps still fill the window. The old results are never referenced again.
+
+**What reclaims the window mid-run?**
+
+- A) Context editing: automatically clear stale tool results (and stale thinking) past a threshold while keeping recent turns intact. **[CORRECT]**
+- B) Restart the session every 50 steps and re-brief the agent.
+- C) Switch to the largest available context window.
+- D) Lower `effort` so responses are shorter.
+
+**Why A:** Context editing is built for long loops: it strips tool results and thinking blocks that are no longer needed while preserving the recent working set, so the run continues with a solvent window. Restarting (B) pays a re-briefing cost and loses nuance every 50 steps. A bigger window (C) postpones the same accumulation at a higher price. Effort (D) tunes reasoning depth, not history size.
+
+---
+
+## Question 120 (Scenario: Agentic AI Tools)
+
+**Situation:** An autonomous agent occasionally gets stuck in an unproductive loop and burns tens of dollars of tokens before anyone notices. The team wants a hard, whole-run spending cap the run cannot exceed.
+
+**Which control does this?**
+
+- A) Set `max_tokens` low on every request.
+- B) Set a task budget: a total token budget for the run, tracked server-side, that ends the run when exhausted. **[CORRECT]**
+- C) Add "do not spend more than $20" to the system prompt.
+- D) Watch the usage dashboard and cancel runaway runs manually.
+
+**Why B:** A task budget caps the *entire run's* token spend server-side — a hard limit that ends a runaway loop by construction. `max_tokens` (A) caps a single response, not the loop; hundreds of small responses still add up. A prompt instruction (C) is advisory — the model cannot even observe its true cumulative spend. Manual monitoring (D) is exactly the "before anyone notices" failure being fixed.
+
+---
+
+## Question 121 (Scenario: Agentic AI Tools)
+
+**Situation:** A team wants a stateful agent with sandboxed code execution, versioned configuration, and MCP credentials injected from a secure store — but does not want to build or operate the loop, the containers, or the state layer.
+
+**Which platform choice fits?**
+
+- A) A custom agent loop on self-managed VMs.
+- B) The Message Batches API.
+- C) Client-side scripts on each engineer's laptop with a shared API key.
+- D) Managed Agents: define the Agent once (versioned config), start a Session per run, and keep credentials in a vault injected at egress. **[CORRECT]**
+
+**Why D:** Managed Agents are the hosted tier: Anthropic runs the loop and the sandboxed container, the Agent is a versioned server-side definition referenced by every Session, and vaults substitute credentials at egress — precisely the operational surface the team doesn't want to own. A custom loop on VMs (A) is that ownership. Batches (B) are async one-shot messages, not stateful agents. Laptop scripts with a shared key (C) are unmanaged, unsandboxed, and unauditable.
+
+---
+
 # Practical Exercises
 
 ## Exercise 1: Multi-tool Agent with Escalation Logic
@@ -12620,7 +12950,7 @@ All current models share a 1M-token context window except Haiku. Prices are USD 
 | Model | Model ID | Context | Max output | Input $/MTok | Output $/MTok | Positioning |
 |---|---|---|---|---|---|---|
 | Claude Fable 5 | `claude-fable-5` | 1M | 128K | $10 | $50 | Most capable widely-released model; hardest reasoning + long-horizon agentic work. Thinking always on; safety classifiers may refuse. |
-| Claude Mythos 5 | `claude-mythos-5` | 1M | 128K | $10 | $50 | Same as Fable 5; available **only** via Project Glasswing (security/defensive research program). |
+| Claude Mythos 5 | `claude-mythos-5` | 1M | 128K | $10 | $50 | Same as Fable 5 with dual-use safeguards lifted for approved organizations — Project Glasswing partners (cyber) plus a trusted-access program for biology; a systematic application route is planned. |
 | Claude Opus 4.8 | `claude-opus-4-8` | 1M | 128K | $5 | $25 | Flagship Opus — default for most demanding work; state-of-the-art autonomous agents, knowledge work, memory. |
 | Claude Opus 4.7 | `claude-opus-4-7` | 1M | 128K | $5 | $25 | Previous-gen Opus; strong agentic + vision + memory. |
 | Claude Opus 4.6 | `claude-opus-4-6` | 1M | 128K | $5 | $25 | Older Opus; adaptive thinking, 128K output. |
@@ -12650,7 +12980,7 @@ The consumer/prosumer product at [claude.ai](https://claude.ai) (plus native mac
 | **Skills** | On-demand task expertise (e.g. xlsx/pptx/docx/pdf authoring) loaded when relevant. |
 | **Code execution / Analysis** | Sandboxed Python for data analysis, chart generation, file creation. |
 
-Editions: Free, Pro, Max, **Team**, and **Enterprise** (SSO, audit, expanded context, admin controls). Vertical offerings: **[Claude for Education](https://www.anthropic.com/news/introducing-claude-for-education)** (Socratic "Learning mode", Canvas LMS), **[Claude for Life Sciences](https://www.anthropic.com/news/claude-for-life-sciences)** (Benchling/PubMed/10x connectors).
+Editions: Free, Pro, Max, **Team**, and **Enterprise** (SSO, audit, expanded context, admin controls). Vertical offerings: **[Claude for Education](https://www.anthropic.com/news/introducing-claude-for-education)** (Socratic "Learning mode", Canvas LMS), **[Claude for Life Sciences](https://www.anthropic.com/news/claude-for-life-sciences)** (Benchling/PubMed/10x connectors), and **[Claude Science](https://www.anthropic.com/news)** (launched June 30, 2026 — an agentic scientific-research platform for biology/chemistry: 60+ scientific-database connectors, protein-structure prediction, and research-workflow automation).
 
 ### 2b. Claude in the browser
 
