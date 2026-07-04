@@ -1,34 +1,58 @@
 <script>
   import { onMount } from 'svelte';
-  import { loadSrs, saveSrs } from '@/lib/store.js';
+  import { loadSrs, saveSrs, loadMeta, saveMeta } from '@/lib/store.js';
   import { t } from '@/lib/ui.js';
   import { md } from '@/lib/md.js';
 
-  let { cards = [], lang = 'en' } = $props();
+  let { cards = [], lang = 'en', newPerDay = 10 } = $props();
   const primary = lang === 'zh-tw' ? 'zh' : 'en';
   const secondary = primary === 'en' ? 'zh' : 'en';
   const DAY = 86400000;
 
   const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const decks = [...new Set(cards.map((c) => c.tag))].sort();
 
   let srs = $state({});
   let queue = $state([]);
   let pos = $state(0);
   let flipped = $state(false);
   let ready = $state(false);
+  let deck = $state('all');
+  let newToday = $state(0);
+
+  const todayKey = () => new Date().toISOString().slice(0, 10);
+  function loadNewCount() {
+    const m = loadMeta();
+    return m.srsDay === todayKey() ? m.srsNewCount || 0 : 0;
+  }
+  function bumpNewCount() {
+    const day = todayKey();
+    const m = loadMeta();
+    const count = (m.srsDay === day ? m.srsNewCount || 0 : 0) + 1;
+    saveMeta({ ...m, srsDay: day, srsNewCount: count });
+    newToday = count;
+  }
 
   onMount(() => {
     srs = loadSrs();
+    newToday = loadNewCount();
     rebuild();
     ready = true;
   });
 
   function rebuild() {
     const now = Date.now();
-    queue = cards.filter((c) => {
+    const pool = deck === 'all' ? cards : cards.filter((c) => c.tag === deck);
+    const dueReview = [];
+    const fresh = [];
+    for (const c of pool) {
       const s = srs[slug(c.term)];
-      return !s || s.due <= now;
-    }).map((c) => slug(c.term));
+      if (!s) fresh.push(slug(c.term));
+      else if (s.due <= now) dueReview.push(slug(c.term));
+    }
+    // Reviews are never capped; brand-new cards enter at most `newPerDay` per day.
+    const allowance = Math.max(0, newPerDay - newToday);
+    queue = [...dueReview, ...fresh.slice(0, allowance)];
     pos = 0;
     flipped = false;
   }
@@ -45,6 +69,7 @@
     const c = current;
     if (!c) return;
     const cid = slug(c.term);
+    const wasNew = !srs[cid];
     const now = Date.now();
     const s = { ease: 2.3, interval: 0, reps: 0, ...(srs[cid] || {}) };
 
@@ -67,6 +92,7 @@
     s.due = now + (kind === 'again' ? 0 : s.interval * DAY);
     srs = { ...srs, [cid]: s };
     saveSrs(srs);
+    if (wasNew) bumpNewCount();
     flipped = false;
 
     // remove current; for "again", re-queue at the end of the session
@@ -80,13 +106,23 @@
     if (typeof confirm !== 'undefined' && !confirm(msg)) return;
     srs = {};
     saveSrs({});
+    saveMeta({ ...loadMeta(), srsDay: todayKey(), srsNewCount: 0 });
+    newToday = 0;
     rebuild();
   }
 </script>
 
 <div class="cards-wrap">
   <div class="bar">
+    <label class="deck-pick">
+      {t(lang, 'deck')}:
+      <select bind:value={deck} onchange={() => rebuild()}>
+        <option value="all">{t(lang, 'allDecks')}</option>
+        {#each decks as d}<option value={d}>{d}</option>{/each}
+      </select>
+    </label>
     <span class="due">{t(lang, 'dueToday')}: <b>{remaining}</b></span>
+    <span class="newcount">{t(lang, 'newToday')}: {newToday}/{newPerDay}</span>
     <span class="spacer"></span>
     <button class="ghost danger" onclick={reset}>{t(lang, 'resetCards')}</button>
   </div>
@@ -133,6 +169,8 @@
   .bar {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
+    gap: 0.7rem;
     margin-bottom: 0.8rem;
   }
   .spacer {
@@ -140,6 +178,22 @@
   }
   .due b {
     color: var(--sl-color-accent-high);
+  }
+  .deck-pick {
+    font-size: 0.85rem;
+    color: var(--sl-color-gray-2);
+  }
+  .deck-pick select {
+    margin-inline-start: 0.3rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.4rem;
+    border: 1px solid var(--sl-color-gray-5);
+    background: var(--sl-color-bg);
+    color: var(--sl-color-text);
+  }
+  .newcount {
+    font-size: 0.8rem;
+    color: var(--sl-color-gray-3);
   }
   .ghost {
     padding: 0.35rem 0.7rem;

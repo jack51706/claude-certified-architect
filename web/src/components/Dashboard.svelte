@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { loadProgress, loadExams } from '@/lib/store.js';
+  import { loadProgress, loadExams, exportAll, importAll, resetAll } from '@/lib/store.js';
   import { t } from '@/lib/ui.js';
 
   let { questions = [], lang = 'en' } = $props();
@@ -51,6 +51,37 @@
     if (acc >= 60) return '#d97706';
     return '#dc2626';
   }
+
+  let fileInput = $state(null);
+
+  function doExport() {
+    const blob = new Blob([JSON.stringify(exportAll(), null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cca-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function doImport(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      importAll(JSON.parse(await f.text()));
+      location.reload();
+    } catch {
+      if (typeof alert !== 'undefined') alert(t(lang, 'importBad'));
+    } finally {
+      e.target.value = '';
+    }
+  }
+
+  function doReset() {
+    if (typeof confirm !== 'undefined' && !confirm(t(lang, 'resetAllConfirm'))) return;
+    resetAll();
+    location.reload();
+  }
 </script>
 
 <div class="dash">
@@ -99,6 +130,17 @@
 
     <p class="cta"><a href={practiceHref}>{t(lang, 'practice')} →</a></p>
   {/if}
+
+  <div class="data">
+    <h3>{t(lang, 'dataSection')}</h3>
+    <p class="hint">{t(lang, 'dataHint')}</p>
+    <div class="data-actions">
+      <button class="ghost" onclick={doExport}>{t(lang, 'exportData')}</button>
+      <button class="ghost" onclick={() => fileInput?.click()}>{t(lang, 'importData')}</button>
+      <button class="ghost danger" onclick={doReset}>{t(lang, 'resetAllData')}</button>
+      <input type="file" accept="application/json,.json" bind:this={fileInput} onchange={doImport} hidden />
+    </div>
+  </div>
 </div>
 
 <style>
@@ -180,6 +222,31 @@
   }
   .cta {
     margin-top: 1.2rem;
+  }
+  .data {
+    margin-top: 2rem;
+    border-top: 1px solid var(--sl-color-gray-6);
+    padding-top: 1rem;
+  }
+  .hint {
+    color: var(--sl-color-gray-3);
+    font-size: 0.85em;
+  }
+  .data-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+  .ghost {
+    padding: 0.4rem 0.8rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--sl-color-gray-5);
+    background: var(--sl-color-bg);
+    color: var(--sl-color-text);
+    cursor: pointer;
+  }
+  .ghost.danger {
+    color: #b91c1c;
   }
   @media (max-width: 30rem) {
     .row {

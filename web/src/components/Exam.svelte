@@ -4,7 +4,7 @@
   import { t } from '@/lib/ui.js';
   import { md } from '@/lib/md.js';
 
-  let { questions = [], lang = 'en', scenarioCount = 4, questionCount = 40, minutes = 60 } = $props();
+  let { questions = [], lang = 'en', scenarioCount = 4, questionCount = 60, minutes = 90 } = $props();
 
   const primary = lang === 'zh-tw' ? 'zh' : 'en';
   const secondary = primary === 'en' ? 'zh' : 'en';
@@ -16,7 +16,10 @@
   let showSecondary = $state(true);
   let secondsLeft = $state(0);
   let history = $state([]);
+  let viewingPast = $state(false);
   let interval = null;
+
+  const qByN = $derived(new Map(questions.map((q) => [q.n, q])));
 
   $effect(() => {
     history = loadExams();
@@ -38,6 +41,7 @@
     examQs = pool.slice(0, Math.min(questionCount, pool.length));
     chosen = {};
     idx = 0;
+    viewingPast = false;
     phase = 'running';
     secondsLeft = minutes * 60;
     clearInterval(interval);
@@ -74,9 +78,38 @@
       if (chosen[q.n] === q.correct) byScenario[k].c += 1;
     }
     result = { total, correct, scaled, passed, byScenario: Object.values(byScenario) };
-    history = saveExam({ ts: Date.now(), scaled, correct, total, passed });
+    // Persist the full attempt (question order + answers) so it stays reviewable later.
+    history = saveExam({
+      ts: Date.now(),
+      scaled,
+      correct,
+      total,
+      passed,
+      byScenario: result.byScenario,
+      qns: examQs.map((q) => q.n),
+      answers: { ...chosen },
+    });
     phase = 'result';
     idx = 0;
+  }
+
+  function reviewPast(h) {
+    if (!h.qns || !h.answers) return;
+    const qs = h.qns.map((n) => qByN.get(n)).filter(Boolean);
+    if (!qs.length) return;
+    clearInterval(interval);
+    examQs = qs;
+    chosen = { ...h.answers };
+    result = { total: h.total, correct: h.correct, scaled: h.scaled, passed: h.passed, byScenario: h.byScenario || [] };
+    viewingPast = true;
+    phase = 'result';
+    idx = 0;
+  }
+
+  function backToIntro() {
+    viewingPast = false;
+    result = null;
+    phase = 'intro';
   }
 
   function retake() {
@@ -130,6 +163,9 @@
                 <span>{h.correct}/{h.total}</span>
                 <span class="muted">{dateStr(h.ts)}</span>
                 <span class="tag {h.passed ? 'pass' : 'fail'}">{h.passed ? t(lang, 'passed') : t(lang, 'failed')}</span>
+                {#if h.qns && h.answers}
+                  <button class="ghost mini-btn" onclick={() => reviewPast(h)}>{t(lang, 'reviewAttempt')}</button>
+                {/if}
               </li>
             {/each}
           </ul>
@@ -185,6 +221,9 @@
     </article>
   {:else if phase === 'result' && result}
     <div class="result">
+      {#if viewingPast}
+        <p class="pastnote">{t(lang, 'viewingPast')}</p>
+      {/if}
       <div class="score-hero {result.passed ? 'pass' : 'fail'}">
         <div class="big">{result.scaled}</div>
         <div class="sub">/ 1000 · {result.passed ? t(lang, 'passed') : t(lang, 'failed')}</div>
@@ -202,6 +241,9 @@
       </div>
 
       <div class="result-actions">
+        {#if viewingPast}
+          <button class="ghost" onclick={backToIntro}>{t(lang, 'backToStart')}</button>
+        {/if}
         <button class="primary" onclick={retake}>{t(lang, 'retake')}</button>
       </div>
 
@@ -485,6 +527,17 @@
   }
   .result-actions {
     margin: 1rem 0 2rem;
+    display: flex;
+    gap: 0.6rem;
+  }
+  .mini-btn {
+    padding: 0.15rem 0.6rem;
+    font-size: 0.75rem;
+  }
+  .pastnote {
+    color: var(--sl-color-gray-3);
+    font-size: 0.85rem;
+    margin-bottom: 0.6rem;
   }
   .review details {
     border: 1px solid var(--sl-color-gray-6);

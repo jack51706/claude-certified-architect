@@ -23,7 +23,7 @@ export const UI = {
     // exam
     startExam: 'Start mock exam',
     examIntro:
-      'The real exam draws 4 of 8 scenarios at random and scores 100–1000 (pass: 720). This mock mirrors that: a timed set with a scaled score.',
+      'The real exam: 60 questions drawn from 4 of 8 scenarios, scored 100–1000 (pass: 720). This mock mirrors that: a timed set with a scaled score.',
     questionsLabel: 'questions',
     minutes: 'min',
     submit: 'Submit exam',
@@ -36,6 +36,9 @@ export const UI = {
     retake: 'Retake',
     byScenario: 'By scenario',
     history: 'Your past attempts',
+    reviewAttempt: 'Review',
+    viewingPast: 'Reviewing a past attempt',
+    backToStart: '← Back',
     // flashcards
     flip: 'Flip',
     again: 'Again',
@@ -47,6 +50,9 @@ export const UI = {
     allDone: 'All caught up — no cards due. 🎉',
     resetCards: 'Reset cards',
     showAnswer: 'Show answer',
+    deck: 'Deck',
+    allDecks: 'All decks',
+    newToday: 'New today',
     // dashboard
     overallAccuracy: 'Overall accuracy',
     answeredOf: 'answered of',
@@ -59,6 +65,14 @@ export const UI = {
     search: 'Search terms…',
     term: 'Term',
     noTerms: 'No matching terms.',
+    // data backup
+    dataSection: 'Your data',
+    exportData: 'Export backup',
+    importData: 'Import backup',
+    resetAllData: 'Reset everything',
+    resetAllConfirm: 'Delete ALL saved progress, exam history, and flashcard state on this device?',
+    importBad: 'Not a valid backup file.',
+    dataHint: 'Progress is stored in this browser only — export a backup to move it to another device.',
   },
   'zh-tw': {
     // quiz
@@ -81,7 +95,7 @@ export const UI = {
     // exam
     startExam: '開始模擬考',
     examIntro:
-      '正式考試從 8 個情境隨機抽 4 個,以 100–1000 計分(及格 720)。此模擬考比照辦理:計時作答並換算分數。',
+      '正式考試:從 8 個情境隨機抽 4 個、共 60 題,以 100–1000 計分(及格 720)。此模擬考比照辦理:計時作答並換算分數。',
     questionsLabel: '題',
     minutes: '分鐘',
     submit: '交卷',
@@ -94,6 +108,9 @@ export const UI = {
     retake: '再考一次',
     byScenario: '依情境',
     history: '你的歷次紀錄',
+    reviewAttempt: '檢視',
+    viewingPast: '正在檢視歷史考卷',
+    backToStart: '← 返回',
     // flashcards
     flip: '翻面',
     again: '重來',
@@ -105,6 +122,9 @@ export const UI = {
     allDone: '全部複習完畢 —— 今天沒有待複習的卡片。🎉',
     resetCards: '重設字卡',
     showAnswer: '顯示答案',
+    deck: '牌組',
+    allDecks: '全部牌組',
+    newToday: '今日新卡',
     // dashboard
     overallAccuracy: '整體正確率',
     answeredOf: '已作答 /',
@@ -117,6 +137,14 @@ export const UI = {
     search: '搜尋術語…',
     term: '術語',
     noTerms: '沒有符合的術語。',
+    // data backup
+    dataSection: '你的資料',
+    exportData: '匯出備份',
+    importData: '匯入備份',
+    resetAllData: '全部重置',
+    resetAllConfirm: '刪除此裝置上所有已儲存的進度、考試紀錄與字卡狀態?',
+    importBad: '不是有效的備份檔。',
+    dataHint: '進度只儲存在這個瀏覽器 —— 匯出備份即可搬到其他裝置。',
   },
 };
 

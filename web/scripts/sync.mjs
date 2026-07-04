@@ -87,12 +87,14 @@ function generateContent() {
   const [en, zh] = parsed;
 
   if (en.sections.length !== zh.sections.length) {
-    console.warn(
-      `[sync] WARNING: section count mismatch — en=${en.sections.length}, zh-tw=${zh.sections.length}. ` +
-        `Pairing by order up to the shorter list; check guide parity.`
+    // Sections are paired by order — a count drift would silently mispair every
+    // page after the divergence point, so fail the build instead.
+    throw new Error(
+      `[sync] section count mismatch — en=${en.sections.length}, zh-tw=${zh.sections.length}. ` +
+        `guide_en.MD and guide_zh-tw.md must keep the same top-level sections; fix guide parity before building.`
     );
   }
-  const count = Math.min(en.sections.length, zh.sections.length);
+  const count = en.sections.length;
 
   for (const { lang } of parsed) cleanDir(lang.outDir);
 
@@ -194,15 +196,29 @@ function extractQuestions(md) {
 function generateQuiz() {
   const en = extractQuestions(read('guide_en.MD'));
   const zh = extractQuestions(read('guide_zh-tw.md'));
-  if (en.length !== zh.length) {
-    console.warn(`[sync] WARNING: question count mismatch — en=${en.length}, zh-tw=${zh.length}.`);
+  // Questions are paired by index and keyed by EN's numbering — any drift or
+  // parse failure would ship a silently broken quiz, so fail the build loudly.
+  if (en.length === 0) {
+    throw new Error('[sync] extracted 0 questions — the Practice Test sections failed to parse; check the question format.');
   }
-  const count = Math.min(en.length, zh.length);
+  if (en.length !== zh.length) {
+    throw new Error(
+      `[sync] question count mismatch — en=${en.length}, zh-tw=${zh.length}. Fix guide parity before building.`
+    );
+  }
+  const count = en.length;
+  const problems = [];
   const merged = [];
   for (let i = 0; i < count; i++) {
     const e = en[i];
     const z = zh[i];
     const zhByLetter = Object.fromEntries(z.options.map((o) => [o.letter, o.text]));
+    if (!e.correct) problems.push(`Q${e.n} (en): no **[…]** correct-answer marker found`);
+    if (!e.question) problems.push(`Q${e.n} (en): empty question prompt`);
+    if (!z.question) problems.push(`Q${e.n} (zh-tw): empty question prompt`);
+    for (const o of e.options) {
+      if (!zhByLetter[o.letter]) problems.push(`Q${e.n} (zh-tw): missing option ${o.letter}`);
+    }
     merged.push({
       n: e.n,
       scenario: { en: e.scenario, zh: z.scenario },
@@ -212,6 +228,9 @@ function generateQuiz() {
       correct: e.correct,
       explanation: { en: e.explanation, zh: z.explanation },
     });
+  }
+  if (problems.length) {
+    throw new Error(`[sync] question integrity problems:\n  ${problems.join('\n  ')}`);
   }
   const dataDir = path.join(WEB, 'src/data');
   fs.mkdirSync(dataDir, { recursive: true });
