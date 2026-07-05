@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://jack51706.github.io/claude-certified-architect/sitemap-index.xml

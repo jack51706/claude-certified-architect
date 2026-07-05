@@ -19,6 +19,15 @@ export default defineConfig({
     mermaid({ theme: 'default', autoTheme: true }),
     starlight({
       title: 'Claude Architect Academy',
+      favicon: '/favicon.svg',
+      head: [
+        {
+          // Offline support: runtime-caching service worker (see public/sw.js).
+          // https: check skips registration during http://localhost dev.
+          tag: 'script',
+          content: `if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('${BASE.endsWith('/') ? BASE : BASE + '/'}sw.js');`,
+        },
+      ],
       defaultLocale: 'root',
       locales: {
         root: { label: 'English', lang: 'en' },
