@@ -21,6 +21,9 @@ https://claude.ai/code/onboarding?magic=github-app-setup), then ask Claude Code:
 Only ONE instance of this routine may exist across all machines/accounts — a duplicate
 double-updates the guides. Check https://claude.ai/code/routines before creating.
 
+> **Active instance:** `trig_01N3VR5Wnqg7jvZg73oqMn2C` (created 2026-07-06; first run
+> 2026-07-06 09:06 Asia/Taipei). If you delete/recreate it, update this line.
+
 ## Agent prompt (verbatim)
 
 ```text
