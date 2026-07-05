@@ -18,6 +18,7 @@ Three artifact layers, by source-of-truth precedence:
 - **PDFs are build outputs.** Commits titled `Update guide PDFs [skip ci]` are made by GitHub Actions. Do not edit `pdf/*` or include PDF changes in content PRs.
 - **Inconsistent file extensions:** `guide_en.MD`, `guide_ar.MD`, `guide_ru.MD` are uppercase `.MD`; the rest are lowercase `.md`. The CI glob uses `shopt -s nullglob nocaseglob` so both match — preserve each file's existing case, don't "normalize" it.
 - **`.claude/` is gitignored** (see `.gitignore`).
+- **Content automation:** a weekly cloud routine keeps the guides current — canonical spec (schedule, prompt, recreate steps) in `.github/content-watch-routine.md`. Only one instance may exist across machines. Its pushes land as `content: weekly update — X` commits by `Claude <noreply@anthropic.com>`; always fetch+rebase before pushing.
 
 ## Guide structure (every `guide_<lang>` mirrors this)
 
