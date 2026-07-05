@@ -10764,6 +10764,152 @@ sequenceDiagram
 
 > **超出基礎認證考試範圍。** 考試不會要你比較模型,但生產會 —— 每天、每次請求。掌握這道階梯、向上失敗的路由器,與分層協調者,你就把模型選擇從一場猜測,變成系統中一個工程化、可衡量、且能持續最佳化的部分。
 
+# 第 29 章:部署與企業整合
+
+> *參考 —— 超出考綱。* 文件:[平台可用性](https://platform.claude.com/docs) · [Workload Identity Federation](https://platform.claude.com/docs/en/manage-claude/workload-identity-federation) · [Enterprise-Managed Authorization](https://modelcontextprotocol.io/extensions/auth/enterprise-managed-authorization)
+
+在此之前的一切,談的都是代理*內部*發生的事 —— 迴圈、工具、上下文。生產環境會問兩個考試從不問的問題:**這東西跑在哪裡**,以及**跑在那裡時,它是誰?** 哪個雲端平台供應模型、一整隊無人值守的工作負載如何在不留一抽屜 API key 的情況下驗證身分、誰決定組織的代理可以碰哪些 MCP 伺服器,以及憑證放在哪裡才不會被提示注入偷走。答案本指南都有 —— 附錄裡的一張對等性表格、一列 WIF、§25.3 的一則 EMA 條目、第 24 章的 vault —— 但很分散。本章把它們組裝成一套決策框架。
+
+讀完你應能做到:
+
+- **選擇部署平台**(§29.1)—— 第一方 API、Claude Platform on AWS、Bedrock、Vertex 或 Foundry,由功能對等性與法遵決定,而非慣性。
+- **淘汰靜態 API key**(§29.2)—— 用工作負載身分聯合(WIF)取代所有無人值守工作負載的 `sk-ant-…` 密鑰。
+- **在組織層級治理 MCP**(§29.3)—— 以 managed MCP 固定核准的伺服器目錄,以 EMA 集中授權。
+- **讓密鑰遠離上下文視窗**(§29.4)—— egress 注入:模型從未持有的東西,它就永遠洩漏不了。
+
+§29.5 把這些組裝成一套參考企業架構,§29.6 濃縮規則。
+
+## 29.1 選擇部署平台
+
+有五個平台面供應 Claude,而且它們**不可互換** —— 差異是架構層級的,不是外觀上的。完整比較在附錄的雲端供應商表格;這裡重要的是決策流程:
+
+```mermaid
+flowchart TD
+    A[Claude 必須跑在哪裡?] --> B{架構需要伺服器端工具、<br/>Batches、Files API<br/>或 Managed Agents?}
+    B -->|需要| C{計費/採購方式?}
+    C -->|Anthropic 直接| D[第一方 API]
+    C -->|AWS Marketplace + IAM| E[Claude Platform on AWS<br/>同日完整對等,SigV4]
+    B -->|不需要 —— 推理+工具使用即可| F{法遵或雲端承諾?}
+    F -->|FedRAMP High / DoD IL4-5| G[Amazon Bedrock]
+    F -->|GCP 陣營| H[Google Vertex AI]
+    F -->|Azure 陣營| I[Microsoft Foundry<br/>多數功能 beta]
+```
+
+承重的事實是:**第一方 API 與 Claude Platform on AWS 是完整介面;Bedrock 與 Vertex 是模型推理+工具使用。** Bedrock/Vertex 上沒有 Batches、沒有 Files API、沒有程式執行、沒有 web fetch、沒有 Managed Agents —— 你得自帶迴圈,並在一個裸模型周圍自建基礎設施。當 FedRAMP High 或雲端承諾有此要求時,這是划算的交換,但必須在*設計架構之前*做,而不是之後。
+
+**經典的失敗**是先按第一方功能設計 —— 一條以 Batches 為基礎的夜間管線、Files API 的文件重用、一支 Managed Agents 艦隊 —— 然後在「Bedrock 遷移」期間才發現那些介面在那裡都不存在。這時的移植等於重新設計架構。先查[可用性表格](https://platform.claude.com/docs),並把「用哪個平台」當作一個有指定負責人的需求決策,就像選資料庫一樣。
+
+## 29.2 工作負載身分:讓靜態 API key 退役
+
+靜態的 `sk-ant-…` key 在筆電上沒問題,在艦隊裡是隱患。規模化後它有四個結構性問題:必須有人**產生並輪替**它;它會**外洩**(日誌、映像、儲存庫),而且誰拿到都能繼續用;共用它的每個呼叫者看起來都是**同一個身分**,無法按工作負載歸因用量或界定權限;撤銷是**全有或全無** —— 廢掉 key 等於同時廢掉每一個使用者。
+
+**工作負載身分聯合(WIF)**徹底移除長存密鑰。工作負載用它*自己*的平台 —— AWS、GCP、Microsoft Entra ID、GitHub Actions、Kubernetes、SPIFFE 或 Okta —— 簽發的短效 OIDC JWT 證明自己是誰,並在 `POST /v1/oauth/token` 換取一個受範圍限制、僅數分鐘有效、以**服務帳號**身分運作的 Anthropic token:
+
+```mermaid
+sequenceDiagram
+    participant W as 工作負載(CI 作業/服務)
+    participant IdP as 它的身分提供者(OIDC)
+    participant T as Anthropic /v1/oauth/token
+    participant API as Claude API
+    W->>IdP: 請求身分 token
+    IdP-->>W: 短效 OIDC JWT
+    W->>T: 以 JWT 換取存取 token
+    T-->>W: 受範圍限制的 Anthropic token(數分鐘)
+    W->>API: 以該 token 進行一般 API 呼叫
+```
+
+```python
+# 1. 工作負載所在的平台簽發它的身分(任何地方都不儲存密鑰)。
+jwt = ci_platform.request_oidc_token(audience="https://api.anthropic.com")
+
+# 2. 換取受範圍限制的 Anthropic token —— 數分鐘有效、服務帳號語意。
+#    (精確的交換參數:見 WIF 文件。)
+token = exchange_at_oauth_endpoint(jwt)
+
+# 3. 像 API key 一樣使用 —— 所有端點、各 SDK 與 Claude Code 都接受。
+client = Anthropic(auth_token=token)
+```
+
+這在結構上買到了什麼:**沒有東西需要產生、輪替或會外洩** —— 被截獲的 token 幾分鐘內就死亡;**身分綁定的存取** —— 權限與撤銷都活在*你的* IdP(移除該工作負載的角色,它的存取立即處處消失);以及**按工作負載歸因** —— 用量、限額與稽核軌跡以服務帳號為單位,而非一把匿名的共用 key。
+
+**陷阱。** token 依設計數分鐘就過期 —— 在 TTL 前重新換取,別為整個作業快取一個。筆電上的人類仍使用 API key;把那些 key 界定為低權限,而不是假裝 WIF 涵蓋了他們。絕不記錄換得的 token。並抗拒「以防萬一留一把靜態備援 key」 —— 那會悄悄把 WIF 要消滅的長存密鑰又帶回來。
+
+## 29.3 在企業規模治理 MCP
+
+跑 MCP 代理的組織有兩個不同的治理問題,對應兩個不同的機制:
+
+**哪些伺服器可以存在 —— 目錄。** **Managed MCP**(§26.5)讓組織透過 `managed-mcp.json` 固定核准的伺服器集合,像任何設定一樣散布(外掛是自然的載體 —— §26.5)。開發者不自行拼湊伺服器清單;平台團隊出貨一份。
+
+**誰可以使用它們 —— 授權。** **企業託管授權(EMA)** —— 自 2026 年 6 月 18 日起為*穩定版* MCP 擴充 —— 把 MCP 授權搬進企業身分提供者。管理員為組織啟用某伺服器一次;使用者與工作負載便依既有的 IdP 群組與角色取得存取權。沒有逐人的 OAuth 同意畫面,而且撤銷集中又即時:把某人移出 IdP 群組,他對該伺服器的存取立即處處消失。Okta 是首發 IdP;Asana、Atlassian、Canva、Figma、Linear 與 Supabase 在首批支援的伺服器之列。
+
+對比那些你可能忍不住想用的替代機制:
+
+| 機制 | 它實際上是什麼 | 作為治理為何失敗 |
+|---|---|---|
+| CLAUDE.md 裡的伺服器清單 | 提示文字 | 勸告性 —— 模型*通常*遵守;沒有任何東西強制 |
+| 防火牆封鎖 | 網路控制 | 擋得住流量,但授予不了權限、不認識身分、不管理同意的生命週期 |
+| 逐使用者 OAuth 同意 | 真授權 | 無法規模化、沒有集中視圖,撤銷是逐人逐伺服器的考古工作 |
+| **managed MCP + EMA** | **設定 + 身分** | 確定性的目錄、群組化的存取、即時的集中撤銷、稽核軌跡 |
+
+這是第 13 章的原則換上企業的衣服:**當一項禁令重要時,它活在設定與身分裡,不在措辭裡。**
+
+## 29.4 執行期的密鑰:egress 注入
+
+第 24 章在 Managed Agents 的脈絡中介紹了這個模式;它值得被表述為一條通則:**模型的上下文視窗絕不能包含憑證。** 凡在上下文裡的東西都可能被輸出 —— 被提示注入的 PR 誘出、被回聲進日誌、被摘要進逐字稿。修法是結構性的,不是行為性的:
+
+```mermaid
+flowchart LR
+    M[模型上下文<br/>永不持有密鑰] --> T[工具呼叫]
+    T --> G[egress 邊界<br/>vault 注入憑證]
+    G --> S[(外部服務)]
+```
+
+- **Vault(Managed Agents):** 密鑰只在 egress 被替換 —— 被指示 `echo $GITHUB_TOKEN` 的代理印不出任何有用的東西,因為那個 token 從未存在於它的世界裡(§24.5)。
+- **MCP 伺服器自持憑證:** 伺服器在伺服器端向它的後端服務驗證;模型看到的是工具,永遠不是 key(§4.2 —— 這也是問題 82「把 API key 放進 CLAUDE.md」錯誤的原因)。
+- **自架迴圈:** 憑證放在*工具程序*的環境裡,由你的執行環境注入,絕不內插進提示或工具結果。
+- **WIF(§29.2)**連平台憑證本身都縮小成一個綁定於你所控身分、數分鐘即逝的 token。
+
+**測試是機械性的:** 跑一場提示注入演練,嘗試印出代理可能觸及的每一個憑證,並斷言逐字稿中一個都沒有出現。若密鑰有辦法出現在逐字稿裡,它終究會出現。
+
+## 29.5 參考企業架構
+
+組裝起來,各部件長這樣 —— 以一支夜間安全審查艦隊為貫穿範例:
+
+```mermaid
+flowchart TD
+    subgraph ID[身分層]
+      IdP[Okta / GitHub OIDC]
+    end
+    IdP -- "WIF:JWT → 數分鐘 token" --> Run[代理工作負載<br/>claude -p / Agent SDK / Managed Agents]
+    IdP -- "EMA:依群組授權" --> MCP[核准的 MCP 伺服器<br/>由 managed-mcp.json 固定]
+    Run --> MCP
+    Run --> API[Claude API<br/>§29.1 選定的平台]
+    MCP -- "vault / egress 注入" --> Ext[(內部系統)]
+    Run -- "PreToolUse deny 規則 + hooks" --> Guard[確定性護欄]
+    Run -- "SessionEnd 稽核 hook" --> SIEM[(稽核軌跡 / SIEM)]
+```
+
+夜間作業按排程啟動;runner 經 **WIF** 驗證身分(CI 裡任何地方都不存在靜態 key);它只能存取組織固定下來的 MCP 伺服器,而且只因為它的服務帳號位在正確的 **EMA** 群組;那些伺服器需要的 GitHub token 由 **vault 在 egress 注入**,所以被審查的 PR 釣不到它;「絕不推上 main」是一條 **deny 規則加一個 `PreToolUse` hook**(§13.4、§26.7),不是提示裡的一句話;**`SessionEnd` hook** 送出稽核軌跡。模型平台則是 §29.1 選出的那一個 —— 上面這張架構不因此而變。
+
+### 驗證
+
+- **key 盤點測試:** grep CI 設定與密鑰儲存;斷言無人值守工作負載已無任何 `sk-ant-` key 殘留。
+- **撤銷測試:** 移除工作負載的 IdP 群組成員資格;斷言它的下一次 token 交換失敗、MCP 存取消失。
+- **外洩演練:** 提交一個嘗試回印所有可及憑證的提示注入輸入;斷言任何逐字稿或日誌中都沒有出現。
+- **對等性測試:** 列出你的架構呼叫的平台功能(Batches?Files?程式執行?),並斷言每一項都存在於你選定的平台上。
+
+## 29.6 工程重點 —— 關鍵整理
+
+| 概念 | 要記住的 |
+|---|---|
+| 平台選擇 | 對等性決定一切:第一方 + Claude Platform on AWS 是完整介面;Bedrock/Vertex 是推理+工具使用 —— 在*設計架構之前*查可用性表格(§29.1)。 |
+| WIF | 在 `POST /v1/oauth/token` 以短效 OIDC JWT 換取數分鐘的受範圍 token —— 沒有東西要產生、輪替或會外洩;撤銷活在你的 IdP(§29.2)。 |
+| 目錄 vs 授權 | `managed-mcp.json` 固定**哪些**伺服器存在;EMA 決定**誰**能用 —— 依群組、可集中撤銷、有稽核(§29.3)。 |
+| 密鑰 | egress 注入:上下文視窗永不持有憑證,提示注入偷不到不存在的東西(§29.4)。 |
+| 原則 | 身分、授權與保密是**設定,不是提示文字** —— 與 deny 規則和 hooks 同一條定律(第 13 章、§26.6)。 |
+
+> **超出基礎認證考試範圍。** 考試止於代理的邊緣;生產從那裡開始。按對等性選平台、讓每個工作負載證明自己是誰、透過身分治理 MCP、讓密鑰徹底離開模型的世界 —— 你在第一到第三部分建好的那個代理,就成了企業真正跑得動的東西。
+
 # 考題範例與解析
 
 ## 問題 1(情境:客戶支援代理)

@@ -10764,6 +10764,152 @@ Notice the triage model did **not** try to solve the security report — it reco
 
 > **Beyond the foundations exam.** The exam won't ask you to compare models, but production will — every day, on every request. Master the ladder, the fail-upward router, and the tiered coordinator, and you turn model choice from a guess into an engineered, measurable, and continuously optimizable part of the system.
 
+# Chapter 29: Deployment & Enterprise Integration
+
+> *Reference — beyond the exam.* Docs: [platform availability](https://platform.claude.com/docs) · [Workload Identity Federation](https://platform.claude.com/docs/en/manage-claude/workload-identity-federation) · [Enterprise-Managed Authorization](https://modelcontextprotocol.io/extensions/auth/enterprise-managed-authorization)
+
+Everything before this point is about what happens *inside* the agent — the loop, the tools, the context. Production asks two questions the exam never does: **where does this run**, and **who is it when it runs there?** Which cloud surface serves the model, how a fleet of unattended workloads authenticates without a drawer full of API keys, who decides which MCP servers an organization's agents may touch, and where credentials live so a prompt injection cannot steal them. The answers exist in this guide — a parity table in the appendix, a WIF row, an EMA bullet in §25.3, vaults in Chapter 24 — but scattered. This chapter assembles them into one decision framework.
+
+By the end you should be able to:
+
+- **Choose a deployment surface** (§29.1) — first-party API, Claude Platform on AWS, Bedrock, Vertex, or Foundry, decided by feature parity and compliance, not habit.
+- **Retire static API keys** (§29.2) — replace `sk-ant-…` secrets with Workload Identity Federation for every unattended workload.
+- **Govern MCP org-wide** (§29.3) — pin the approved server catalog with managed MCP and centralize authorization with EMA.
+- **Keep secrets out of the context window** (§29.4) — egress injection, so the model can never leak what it never held.
+
+§29.5 assembles these into a reference enterprise architecture, and §29.6 distills the rules.
+
+## 29.1 Choosing a Deployment Surface
+
+Five surfaces serve Claude, and they are **not interchangeable** — the differences are architectural, not cosmetic. The full comparison lives in the appendix's cloud-provider table; what matters here is the decision procedure:
+
+```mermaid
+flowchart TD
+    A[Where must Claude run?] --> B{Architecture needs server tools,<br/>Batches, Files API,<br/>or Managed Agents?}
+    B -->|yes| C{Billing / procurement?}
+    C -->|Anthropic direct| D[First-party API]
+    C -->|AWS Marketplace + IAM| E[Claude Platform on AWS<br/>same-day full parity, SigV4]
+    B -->|no — inference + tool use is enough| F{Compliance or cloud commitment?}
+    F -->|FedRAMP High / DoD IL4-5| G[Amazon Bedrock]
+    F -->|GCP estate| H[Google Vertex AI]
+    F -->|Azure estate| I[Microsoft Foundry<br/>most features beta]
+```
+
+The load-bearing fact: **the first-party API and Claude Platform on AWS are full-surface; Bedrock and Vertex are model-inference + tool-use.** No Batches, no Files API, no code execution, no web fetch, no Managed Agents on Bedrock/Vertex — you bring your own loop and your own infrastructure around a bare model. That is a fine trade when FedRAMP High or a cloud commitment requires it, but it must be made *before* you architect, not after.
+
+**The classic failure** is designing on first-party features — a Batches-based nightly pipeline, Files-API document reuse, a Managed Agents fleet — and then discovering during "the Bedrock migration" that none of those surfaces exist there. Porting is then a re-architecture. Check the [availability table](https://platform.claude.com/docs) first, and treat "which surface" as a requirements decision with a named owner, exactly like a database choice.
+
+## 29.2 Workload Identity: Retiring the Static API Key
+
+A static `sk-ant-…` key is fine on a laptop and a liability in a fleet. At scale it has four structural problems: someone must **mint and rotate** it; it can **leak** (logs, images, repos) and keeps working for whoever holds it; every caller sharing it looks like the **same identity**, so you can't attribute usage or scope permissions per workload; and revocation is **all-or-nothing** — killing the key kills every consumer at once.
+
+**Workload Identity Federation (WIF)** removes the standing secret entirely. The workload proves who it is with a short-lived OIDC JWT issued by its *own* platform — AWS, GCP, Microsoft Entra ID, GitHub Actions, Kubernetes, SPIFFE, or Okta — and exchanges it at `POST /v1/oauth/token` for a scoped, minutes-long Anthropic token that acts as a **service account**:
+
+```mermaid
+sequenceDiagram
+    participant W as Workload (CI job / service)
+    participant IdP as Its identity provider (OIDC)
+    participant T as Anthropic /v1/oauth/token
+    participant API as Claude API
+    W->>IdP: request identity token
+    IdP-->>W: short-lived OIDC JWT
+    W->>T: exchange JWT for an access token
+    T-->>W: scoped Anthropic token (minutes-long)
+    W->>API: normal API calls with that token
+```
+
+```python
+# 1. The platform the workload runs on issues its identity (no secret stored anywhere).
+jwt = ci_platform.request_oidc_token(audience="https://api.anthropic.com")
+
+# 2. Exchange it for a scoped Anthropic token — minutes-long, service-account semantics.
+#    (Exact exchange parameters: see the WIF docs.)
+token = exchange_at_oauth_endpoint(jwt)
+
+# 3. Use it exactly like an API key — every endpoint, the SDKs, and Claude Code accept it.
+client = Anthropic(auth_token=token)
+```
+
+What this buys, structurally: **nothing to mint, rotate, or leak** — a captured token dies in minutes; **identity-bound access** — permissions and revocation live in *your* IdP (remove the workload's role and its access is gone everywhere, instantly); and **per-workload attribution** — usage, limits, and audit trails per service account instead of one anonymous shared key.
+
+**Pitfalls.** Tokens expire in minutes by design — refresh before TTL rather than caching one for the job's lifetime. Humans on laptops still use API keys; keep those scoped and low-privilege rather than pretending WIF covers them. Never log the exchanged token. And resist the "fallback static key just in case" — it silently reintroduces the exact standing secret WIF exists to eliminate.
+
+## 29.3 Governing MCP at Enterprise Scale
+
+An organization running agents against MCP has two distinct governance questions, and they have two distinct mechanisms:
+
+**Which servers exist at all — the catalog.** **Managed MCP** (§26.5) lets the org pin an approved server set via `managed-mcp.json`, distributed like any other configuration (a plugin is the natural vehicle — §26.5). Developers don't assemble their own server lists; the platform team ships one.
+
+**Who may use them — the authorization.** **Enterprise-Managed Authorization (EMA)** — a *stable* MCP extension since June 18, 2026 — moves MCP authorization into the corporate identity provider. An admin enables a server for the organization once; users and workloads then get access according to their existing IdP groups and roles. No per-user OAuth consent screens, and revocation is central and immediate: remove someone from the IdP group, and their access to that server disappears everywhere. Okta is the launch IdP; Asana, Atlassian, Canva, Figma, Linear, and Supabase are among the first supported servers.
+
+Contrast the mechanisms you might be tempted to use instead:
+
+| Mechanism | What it actually is | Why it fails as governance |
+|---|---|---|
+| Server list in CLAUDE.md | Prompt text | Advisory — the model *usually* complies; nothing enforces it |
+| Firewall blocks | Network control | Stops traffic, but grants nothing, knows no identities, manages no consent lifecycle |
+| Per-user OAuth consents | Real authorization | Doesn't scale, no central view, revocation is per-user-per-server archaeology |
+| **managed MCP + EMA** | **Configuration + identity** | Deterministic catalog, group-based access, instant central revocation, audit trail |
+
+This is the Chapter 13 principle wearing enterprise clothes: **when a prohibition matters, it lives in configuration and identity, not in wording.**
+
+## 29.4 Secrets at Runtime: Egress Injection
+
+Chapter 24 introduced the pattern in the Managed Agents context; it deserves stating as a general law: **the model's context window must never contain a credential.** Anything in context can be emitted — coaxed out by a prompt-injected PR, echoed into a log, summarized into a transcript. The fix is structural, not behavioral:
+
+```mermaid
+flowchart LR
+    M[Model context<br/>never holds secrets] --> T[Tool call]
+    T --> G[Egress boundary<br/>vault injects the credential]
+    G --> S[(External service)]
+```
+
+- **Vaults (Managed Agents):** the secret is substituted only at egress — an agent told to `echo $GITHUB_TOKEN` prints nothing useful, because the token was never in its world (§24.5).
+- **MCP servers hold their own credentials:** the server authenticates to its backend service server-side; the model sees tools, never keys (§4.2 — the same reason Q82's "API key in CLAUDE.md" is wrong).
+- **Self-hosted loops:** credentials live in the *tool process's* environment, injected by your runtime, never interpolated into prompts or tool results.
+- **WIF (§29.2)** shrinks even the platform credential to a minutes-long token bound to an identity you control.
+
+**The test is mechanical:** run a prompt-injection drill that tries to print every credential the agent could plausibly reach, and assert the transcript contains none of them. If a secret can appear in a transcript, it will.
+
+## 29.5 The Reference Enterprise Architecture
+
+Assembled, the pieces look like this — a nightly security-review fleet as the running example:
+
+```mermaid
+flowchart TD
+    subgraph ID[Identity layer]
+      IdP[Okta / GitHub OIDC]
+    end
+    IdP -- "WIF: JWT → minutes-long token" --> Run[Agent workload<br/>claude -p / Agent SDK / Managed Agents]
+    IdP -- "EMA: group-based authorization" --> MCP[Approved MCP servers<br/>pinned via managed-mcp.json]
+    Run --> MCP
+    Run --> API[Claude API<br/>surface chosen in §29.1]
+    MCP -- "vault / egress injection" --> Ext[(Internal systems)]
+    Run -- "PreToolUse deny rules + hooks" --> Guard[Deterministic guardrails]
+    Run -- "SessionEnd audit hook" --> SIEM[(Audit trail / SIEM)]
+```
+
+The nightly job starts on a schedule; the runner authenticates via **WIF** (no static key exists anywhere in CI); it may talk only to the MCP servers the org pinned, and only because its service account sits in the right **EMA** group; the GitHub token those servers need is **vault-injected at egress**, so the reviewed PRs can't phish it; "never push to main" is a **deny rule and a `PreToolUse` hook** (§13.4, §26.7), not a sentence in a prompt; and a **`SessionEnd` hook** ships the audit trail. The model surface is whichever §29.1 selected — the architecture above doesn't change.
+
+### Validation
+
+- **Key-inventory test:** grep the CI configuration and secret stores; assert zero `sk-ant-` keys remain for unattended workloads.
+- **Revocation test:** remove the workload's IdP group membership; assert its next token exchange fails and its MCP access is gone.
+- **Exfiltration drill:** submit a prompt-injected input that tries to echo every reachable credential; assert none appears in any transcript or log.
+- **Parity test:** list the platform features your architecture calls (Batches? Files? code execution?) and assert every one exists on the surface you chose.
+
+## 29.6 Engineering Focus — Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| Surface choice | Parity decides: first-party + Claude Platform on AWS are full-surface; Bedrock/Vertex are inference + tool use — check the availability table **before** architecting (§29.1). |
+| WIF | Exchange a short-lived OIDC JWT at `POST /v1/oauth/token` for a minutes-long scoped token — nothing to mint, rotate, or leak; revocation lives in your IdP (§29.2). |
+| Catalog vs authorization | `managed-mcp.json` pins **which** servers exist; EMA decides **who** may use them — group-based, centrally revocable, audited (§29.3). |
+| Secrets | Egress injection: the context window never holds a credential, so prompt injection can't steal what isn't there (§29.4). |
+| The principle | Identity, authorization, and secrecy are **configuration, not prompt text** — the same law as deny rules and hooks (Ch 13, §26.6). |
+
+> **Beyond the foundations exam.** The exam stops at the agent's edge; production starts there. Choose the surface by parity, make every workload prove who it is, govern MCP through identity, and keep secrets out of the model's world entirely — and the same agent you built in Parts I–III becomes something an enterprise can actually run.
+
 # Examples of Exam Questions with Explanations
 
 ## Question 1 (Scenario: Customer Support Agent)
