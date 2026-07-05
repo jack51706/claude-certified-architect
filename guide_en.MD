@@ -9618,7 +9618,7 @@ We deliberately do **not** repeat Chapter 4. Instead we go one layer down on eac
 - **Sampling** (§25.4) — the server requesting an LLM completion *from the client*, and why it inverts the usual trust direction.
 - **Hardening a production server** (§25.5) — tool poisoning, input validation, rate limits, and namespacing/discovery at scale.
 
-§25.6 then builds a complete remote **Knowledge-Base MCP server** — OAuth, a resource, a sampling-backed `summarize` tool, and a prompt — and §25.7 distills the engineering rules.
+§25.6 then builds a complete remote **Knowledge-Base MCP server** — OAuth, a resource, a sampling-backed `summarize` tool, and a prompt — §25.7 previews the next spec revision, and §25.8 distills the engineering rules.
 
 ## 25.1 The Three Primitives, Precisely
 
@@ -9913,7 +9913,24 @@ Notice the **server never held a model key** — it borrowed the host's model vi
 - Writing logs to `stdout` on a stdio build (corrupts the protocol) — they must go to `stderr` (§25.2).
 - Shipping `summarize_kb` as something only the model can reach when the reusable workflow should also be a user **prompt** (§25.1).
 
-## 25.7 Engineering Focus — Key Takeaways
+## 25.7 The Next Revision — the 2026-07-28 Spec (Preview)
+
+Everything above is the **current stable spec, `2025-11-25`** — what the exam and today's SDKs assume. But the protocol is about to take its largest step since launch. The **`2026-07-28` revision** is locked as a Release Candidate (frozen 2026-05-21, final publication **2026-07-28**), with beta SDKs already shipping. You will not be tested on it, but an architect standing up MCP infrastructure in H2 2026 has to know where the ground is moving. Four changes matter.
+
+**A stateless protocol core.** The `initialize` handshake and the per-connection session model are *gone*. Instead of exchanging protocol version, client info, and capabilities once at connect time, every request now carries them in `_meta` fields. The payoff is deployment, not features: **any request can land on any server instance**, so the sticky routing and shared session store that §25.2's `Mcp-Session-Id` forced on you dissolve at the protocol layer. A remote MCP server becomes an ordinary horizontally-scaled HTTP service — the same architectural win the Messages API already has (§1.2). (A stateful session model still exists for servers that genuinely need affinity; it is simply no longer the default the whole protocol is built around.)
+
+**An Extensions framework.** Optional capabilities move *out* of the core spec into independently-versioned **extensions**, each identified by a reverse-DNS id, living in its own `ext-*` repository with delegated maintainers. Client and server negotiate them through an `extensions` map at discovery — opt-in, à la carte. The core stays small and stable while the ecosystem evolves on its own clock — the structural fix for "every useful idea bloats the base protocol."
+
+**Tasks and MCP Apps ride that framework.** **Tasks** (long-running work) graduates from an experimental core feature to an extension with a cleaner lifecycle: the server *creates* the task and the client *drives* it via `tasks/get` / `tasks/update` / `tasks/cancel` — the standard answer to "this tool call takes ten minutes." **MCP Apps** lets a server ship an interactive HTML UI rendered in a **sandboxed iframe** that talks back over JSON-RPC with a full audit trail — server-rendered UI without handing the page arbitrary reach.
+
+**Authorization hardened toward OAuth/OIDC.** The OAuth 2.1 story of §25.3 tightens: mandatory `iss` validation (**RFC 9207**, closing an authorization-code-injection gap), an `application_type` declaration in Dynamic Client Registration, and W3C **Trace Context** propagation in `_meta` (SEP-414) so one trace follows a call host → client → server → downstream. Paired with it is the spec's first **formal deprecation policy**: features move Active → Deprecated → Removed with a **minimum 12-month window** at each stage — so the "SSE is deprecated" churn of §25.2 now runs on predictable rules.
+
+**Pitfalls.**
+- Treating the RC as shippable production truth. Until **2026-07-28** the authoritative spec is `2025-11-25`; build to it, and pin your SDK — a beta SDK tracking the RC can change under you.
+- Assuming the stateless core *forbids* sessions. It doesn't; it demotes them from default to opt-in, so a server that truly needs affinity can still ask for it.
+- Reaching for an extension's id or shape from memory. Extensions version independently of the core — confirm the reverse-DNS id and its current version against its `ext-*` repo, not the core changelog.
+
+## 25.8 Engineering Focus — Key Takeaways
 
 | Concept | What production engineering requires |
 |---|---|
@@ -9926,6 +9943,7 @@ Notice the **server never held a model key** — it borrowed the host's model vi
 | Sampling | The **server** asks the **client's** model to complete; keeps the server key-less/model-agnostic; gated by host **human approval**; degrade gracefully if absent (§25.4). |
 | Hardening | Tool descriptions/results are an injection vector; validate inputs; enforce guards **in code** (hints aren't security); rate-limit and bound size (§25.5). |
 | Discovery at scale | `mcp__<server>__<tool>` namespacing; **MCP tool search** loads tools lazily; keep tool lists small — tool count is a budget (§25.5). |
+| Spec direction | `2025-11-25` is current; the `2026-07-28` RC makes the core **stateless** (any request → any instance), moves optional features to independently-versioned **Extensions** (Tasks, MCP Apps), and hardens OAuth (RFC 9207 `iss`; a 12-month deprecation policy) (§25.7). |
 
 > **Beyond the exam, essential in practice.** Chapter 4 lets you *use* MCP; this chapter lets you *operate* it. If you can stand up the Knowledge-Base server above — Streamable HTTP with OAuth 2.1, audience-checked tokens, a URI-template resource, a sampling-backed tool that degrades gracefully, a user prompt, and code-enforced scope — you can build an MCP server a company can safely depend on.
 
