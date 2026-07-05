@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { loadSrs, saveSrs, loadMeta, saveMeta } from '@/lib/store.js';
+  import { loadSrs, saveSrs, loadMeta, saveMeta, dayKey, touchActivity } from '@/lib/store.js';
   import { t } from '@/lib/ui.js';
   import { md } from '@/lib/md.js';
 
@@ -20,13 +20,12 @@
   let deck = $state('all');
   let newToday = $state(0);
 
-  const todayKey = () => new Date().toISOString().slice(0, 10);
   function loadNewCount() {
     const m = loadMeta();
-    return m.srsDay === todayKey() ? m.srsNewCount || 0 : 0;
+    return m.srsDay === dayKey() ? m.srsNewCount || 0 : 0;
   }
   function bumpNewCount() {
-    const day = todayKey();
+    const day = dayKey();
     const m = loadMeta();
     const count = (m.srsDay === day ? m.srsNewCount || 0 : 0) + 1;
     saveMeta({ ...m, srsDay: day, srsNewCount: count });
@@ -93,6 +92,7 @@
     srs = { ...srs, [cid]: s };
     saveSrs(srs);
     if (wasNew) bumpNewCount();
+    touchActivity();
     flipped = false;
 
     // remove current; for "again", re-queue at the end of the session
@@ -106,7 +106,7 @@
     if (typeof confirm !== 'undefined' && !confirm(msg)) return;
     srs = {};
     saveSrs({});
-    saveMeta({ ...loadMeta(), srsDay: todayKey(), srsNewCount: 0 });
+    saveMeta({ ...loadMeta(), srsDay: dayKey(), srsNewCount: 0 });
     newToday = 0;
     rebuild();
   }

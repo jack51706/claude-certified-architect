@@ -6,6 +6,10 @@ export const UI = {
     // quiz
     allScenarios: 'All scenarios',
     onlyIncorrect: 'Only incorrect',
+    onlyBookmarked: 'Only bookmarked',
+    shuffleLabel: 'Shuffle',
+    bookmark: 'Bookmark',
+    keyHint: '←/→ navigate · 1–4 answer · B bookmark',
     showSecondary: 'Show 中文',
     hideSecondary: 'Hide 中文',
     question: 'Question',
@@ -61,6 +65,10 @@ export const UI = {
     weakest: 'Focus here',
     practice: 'Practice',
     noData: 'No practice data yet — answer some questions first.',
+    scoreTrend: 'Mock-exam score trend',
+    streakLabel: 'Day streak',
+    cardsDue: 'Cards due',
+    cardsLearned: 'learned',
     // glossary
     search: 'Search terms…',
     term: 'Term',
@@ -78,6 +86,10 @@ export const UI = {
     // quiz
     allScenarios: '所有情境',
     onlyIncorrect: '只看答錯',
+    onlyBookmarked: '只看書籤',
+    shuffleLabel: '隨機順序',
+    bookmark: '書籤',
+    keyHint: '←/→ 切換 · 1–4 作答 · B 書籤',
     showSecondary: '顯示 English',
     hideSecondary: '隱藏 English',
     question: '問題',
@@ -133,6 +145,10 @@ export const UI = {
     weakest: '優先加強',
     practice: '練習',
     noData: '尚無練習資料 —— 先去作答一些題目吧。',
+    scoreTrend: '模擬考成績趨勢',
+    streakLabel: '連續學習天數',
+    cardsDue: '字卡待複習',
+    cardsLearned: '已學習',
     // glossary
     search: '搜尋術語…',
     term: '術語',

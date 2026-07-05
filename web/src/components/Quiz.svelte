@@ -1,7 +1,8 @@
 <script>
   import { onMount } from 'svelte';
-  import { loadProgress, saveAnswer, clearProgress } from '@/lib/store.js';
+  import { loadProgress, saveAnswer, clearProgress, loadBookmarks, toggleBookmark } from '@/lib/store.js';
   import { t } from '@/lib/ui.js';
+  import { md } from '@/lib/md.js';
 
   let { questions = [], lang = 'en' } = $props();
 
@@ -9,13 +10,17 @@
   const secondary = primary === 'en' ? 'zh' : 'en';
 
   let answers = $state({});
+  let bookmarks = $state({});
   let scenarioFilter = $state('all');
   let onlyIncorrect = $state(false);
+  let onlyBookmarked = $state(false);
+  let shuffleSeed = $state(0);
   let showSecondary = $state(true);
   let idx = $state(0);
 
   onMount(() => {
     answers = { ...loadProgress() };
+    bookmarks = { ...loadBookmarks() };
   });
 
   const scenarioList = $derived.by(() => {
@@ -29,29 +34,61 @@
       const okScenario = scenarioFilter === 'all' || q.scenario.en === scenarioFilter;
       const a = answers[q.n];
       const okWrong = !onlyIncorrect || (a && !a.correct);
-      return okScenario && okWrong;
+      const okBm = !onlyBookmarked || bookmarks[q.n];
+      return okScenario && okWrong && okBm;
     })
+  );
+
+  // Deterministic seeded order so re-derivation (e.g. after answering) doesn't reshuffle.
+  function seedHash(x) {
+    x = ((x >>> 16) ^ x) * 0x45d9f3b;
+    x = ((x >>> 16) ^ x) * 0x45d9f3b;
+    return (x >>> 16) ^ x;
+  }
+  const displayList = $derived(
+    shuffleSeed ? [...filtered].sort((a, b) => seedHash(a.n ^ shuffleSeed) - seedHash(b.n ^ shuffleSeed)) : filtered
   );
 
   // Keep idx valid as the filter changes.
   $effect(() => {
-    const max = Math.max(0, filtered.length - 1);
+    const max = Math.max(0, displayList.length - 1);
     if (idx > max) idx = max;
   });
 
-  const current = $derived(filtered[idx]);
+  const current = $derived(displayList[idx]);
   const answeredCount = $derived(Object.keys(answers).length);
   const correctCount = $derived(Object.values(answers).filter((a) => a.correct).length);
   const accuracy = $derived(answeredCount ? Math.round((correctCount / answeredCount) * 100) : 0);
 
   function choose(q, letter) {
+    if (answers[q.n]) return; // locked once answered — reset progress to retry
     const correct = letter === q.correct;
     answers = { ...answers, [q.n]: { chosen: letter, correct, ts: Date.now() } };
     saveAnswer(q.n, letter, correct);
   }
 
+  function toggleBm(n) {
+    bookmarks = { ...toggleBookmark(n) };
+  }
+
+  function onKey(e) {
+    const el = e.target;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === 'ArrowLeft') go(-1);
+    else if (e.key === 'ArrowRight') go(1);
+    else if (current) {
+      if (e.key >= '1' && e.key <= '4') {
+        const opt = current.options[Number(e.key) - 1];
+        if (opt) choose(current, opt.letter);
+      } else if (e.key === 'b' || e.key === 'B') {
+        toggleBm(current.n);
+      }
+    }
+  }
+
   function go(delta) {
-    idx = Math.min(Math.max(0, idx + delta), filtered.length - 1);
+    idx = Math.min(Math.max(0, idx + delta), displayList.length - 1);
   }
 
   function jump(i) {
@@ -68,15 +105,6 @@
   function setScenario(e) {
     scenarioFilter = e.currentTarget.value;
     idx = 0;
-  }
-
-  function esc(s) {
-    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-  function md(s) {
-    return esc(s)
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   }
 
   function chipClass(q) {
@@ -107,6 +135,23 @@
       {t(lang, 'onlyIncorrect')}
     </label>
 
+    <label class="check">
+      <input type="checkbox" bind:checked={onlyBookmarked} />
+      {t(lang, 'onlyBookmarked')}
+    </label>
+
+    <label class="check">
+      <input
+        type="checkbox"
+        checked={shuffleSeed !== 0}
+        onchange={(e) => {
+          shuffleSeed = e.currentTarget.checked ? ((Math.random() * 2 ** 31) | 0) || 1 : 0;
+          idx = 0;
+        }}
+      />
+      {t(lang, 'shuffleLabel')}
+    </label>
+
     <button class="ghost" onclick={() => (showSecondary = !showSecondary)}>
       {showSecondary ? t(lang, 'hideSecondary') : t(lang, 'showSecondary')}
     </button>
@@ -118,11 +163,11 @@
     <button class="ghost danger" onclick={reset}>{t(lang, 'resetProgress')}</button>
   </div>
 
-  {#if filtered.length === 0}
+  {#if displayList.length === 0}
     <p class="empty">{t(lang, 'noMatch')}</p>
   {:else if current}
     <div class="nav-grid">
-      {#each filtered as q, i}
+      {#each displayList as q, i}
         <button class={chipClass(q) + (i === idx ? ' active' : '')} onclick={() => jump(i)} title={`#${q.n}`}>
           {q.n}
         </button>
@@ -132,7 +177,17 @@
     <article class="card">
       <header class="card-head">
         <span class="badge">{current.scenario[primary]}</span>
-        <span class="qnum">{t(lang, 'question')} {current.n} · {idx + 1}/{filtered.length}</span>
+        <span class="spacer"></span>
+        <button
+          class={'bm' + (bookmarks[current.n] ? ' on' : '')}
+          title={t(lang, 'bookmark')}
+          aria-label={t(lang, 'bookmark')}
+          aria-pressed={!!bookmarks[current.n]}
+          onclick={() => toggleBm(current.n)}
+        >
+          {bookmarks[current.n] ? '★' : '☆'}
+        </button>
+        <span class="qnum">{t(lang, 'question')} {current.n} · {idx + 1}/{displayList.length}</span>
       </header>
 
       <div class="situation">{@html md(current.situation[primary])}</div>
@@ -170,11 +225,14 @@
 
       <footer class="card-foot">
         <button class="ghost" disabled={idx === 0} onclick={() => go(-1)}>{t(lang, 'prev')}</button>
-        <button class="ghost" disabled={idx >= filtered.length - 1} onclick={() => go(1)}>{t(lang, 'next')}</button>
+        <span class="keyhint">{t(lang, 'keyHint')}</span>
+        <button class="ghost" disabled={idx >= displayList.length - 1} onclick={() => go(1)}>{t(lang, 'next')}</button>
       </footer>
     </article>
   {/if}
 </div>
+
+<svelte:window onkeydown={onKey} />
 
 <style>
   .quiz {
@@ -297,6 +355,28 @@
   .qnum {
     color: var(--sl-color-gray-3);
     font-size: var(--sl-text-xs);
+  }
+  .bm {
+    border: none;
+    background: transparent;
+    color: var(--sl-color-gray-3);
+    font-size: 1.15rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 0.2rem;
+  }
+  .bm.on {
+    color: #d97706;
+  }
+  .keyhint {
+    align-self: center;
+    color: var(--sl-color-gray-4);
+    font-size: 0.7rem;
+  }
+  @media (max-width: 40rem) {
+    .keyhint {
+      display: none;
+    }
   }
   .situation {
     border: 1px solid var(--sl-color-gray-6);
