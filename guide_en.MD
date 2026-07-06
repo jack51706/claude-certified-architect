@@ -13171,14 +13171,34 @@ Anthropic's agentic coding tool — runs in the terminal, IDEs, and the cloud; n
 | **Workflow** | Planning mode, `/compact`, `/memory`, `/goal`, session fork/resume, permission gating, todo tracking. |
 | **Config** | `settings.json` (permissions, env, hooks), effort/model selection, MCP config. |
 
-### 2d. Developer Platform / API
+### 2d. Claude Cowork
+
+**[Claude Cowork](https://www.anthropic.com/product/claude-cowork)** brings Claude Code's agentic engine to *knowledge work* — it runs inside **Claude Desktop** (no terminal) and completes multi-step tasks end-to-end for non-developers: researchers, analysts, ops, legal, and finance teams who live in documents, data, and files. Same architecture as Claude Code (gather context → act → verify, with sub-agent fan-out), repackaged for people who don't write code.
+
+- **Local file access** — reads from and writes to your local files, folders, and desktop apps, synthesizing across sources without you coordinating each step.
+- **Sub-agent coordination** — breaks a task into parallel workstreams, the desktop cousin of §26.2's orchestration.
+- **Professional outputs** — Excel workbooks with working formulas, PowerPoint decks, and other artifacts, not just chat text.
+- **Availability** — all paid plans, via the Claude desktop app. [Docs](https://claude.com/docs/cowork/overview).
+
+> **Architect's takeaway:** the agentic loop is *not* coding-specific. Cowork is the same loop Claude Code runs, pointed at spreadsheets and reports instead of a repo — the clearest signal that "agent" is a general execution pattern, not a developer-only feature.
+
+### 2e. Claude Tag
+
+**[Claude Tag](https://www.anthropic.com/news/introducing-claude-tag)** is Claude as a **shared team member**, starting in **Slack**. Tag `@Claude` in a channel with a request in plain language; it breaks the work into stages, executes them with its connected tools, and replies in a thread with what it produced.
+
+- **Multiplayer by design** — one Claude per channel that *everyone* shares: anyone can see what it is doing and pick up where a teammate left off (unlike a private 1:1 chat).
+- **Memory & context** — remembers relevant information from the channels it is in and can plan future tasks.
+- **Ambient mode** — when enabled, proactively surfaces information it thinks you will need from across its channels and connected tools.
+- **Agent identity** — Tag rides the emerging *agent-identity access model*: the agent has its own team-wide identity and permissions rather than borrowing a person's. At Anthropic, ~65% of the product team's code now ships through their internal Claude Tag. [Docs](https://claude.com/docs/claude-tag/overview).
+
+### 2f. Developer Platform / API
 
 Everything runs through one endpoint: **`POST /v1/messages`**. Tools and output constraints are features of this one endpoint, not separate APIs. [Platform docs](https://platform.claude.com/docs) · [Console](https://console.anthropic.com).
 
 - **SDKs:** Python, TypeScript, Java, Go, Ruby, C#, PHP (+ `ant` CLI). Supporting endpoints: **Batches**, **Files**, **Token Counting**, **Models**, **Skills**.
 - **Surfaces by tier:** single LLM call → workflow (API + tool use) → custom agent (your loop) → **Managed Agents** (Anthropic runs the loop + hosts the sandbox). See §4.
 
-### 2e. Cloud providers (parity notes)
+### 2g. Cloud providers (parity notes)
 
 | Provider | Model IDs | Notes |
 |---|---|---|

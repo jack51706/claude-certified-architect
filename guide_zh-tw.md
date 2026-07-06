@@ -13171,14 +13171,34 @@ Anthropic 的代理式編碼工具——可在終端機、IDE 與雲端執行；
 | **工作流程** | 規劃模式、`/compact`、`/memory`、`/goal`、工作階段分叉/續接、權限把關、待辦追蹤。 |
 | **設定** | `settings.json`（權限、環境、hooks）、努力度/模型選擇、MCP 設定。 |
 
-### 2d. 開發者平台 / API
+### 2d. Claude Cowork
+
+**[Claude Cowork](https://www.anthropic.com/product/claude-cowork)** 把 Claude Code 的代理式引擎帶進**知識工作**——它在 **Claude Desktop** 中執行（不需終端機），為非開發者端到端完成多步驟任務：成天與文件、資料與檔案為伍的研究人員、分析師、營運、法務與財務團隊。架構與 Claude Code 相同（蒐集脈絡 → 行動 → 驗證，並以子代理扇出），只是重新包裝給不寫程式的人。
+
+- **本機檔案存取**——讀寫你的本機檔案、資料夾與桌面應用程式，跨來源綜整資訊，無需你逐步協調。
+- **子代理協調**——將任務拆成平行工作流，是 §26.2 編排的桌面版親戚。
+- **專業產出**——含可運作公式的 Excel 活頁簿、PowerPoint 簡報等產物，而非僅是聊天文字。
+- **供應範圍**——所有付費方案，透過 Claude 桌面應用程式。[文件](https://claude.com/docs/cowork/overview)。
+
+> **架構師重點：**代理式迴圈**並非**編碼專屬。Cowork 就是 Claude Code 執行的同一個迴圈，只是對準試算表與報告而非程式碼儲存庫——這最能說明「代理」是一種通用的執行模式，而非開發者專屬功能。
+
+### 2e. Claude Tag
+
+**[Claude Tag](https://www.anthropic.com/news/introducing-claude-tag)** 讓 Claude 成為**共享的團隊成員**，起點在 **Slack**。在頻道中以自然語言 `@Claude` 提出請求；它會把工作拆成數個階段，以其連接的工具逐一執行，再於討論串中回覆產出的內容。
+
+- **天生多人協作**——每個頻道一個 Claude，由**所有人**共享：任何人都能看到它在做什麼，並接續同事未完成的部分（不同於私人一對一對話）。
+- **記憶與脈絡**——記住其所在頻道的相關資訊，並能規劃未來的任務。
+- **環境感知（ambient）模式**——啟用後，會主動從其頻道與連接工具中，浮現它認為你會需要的資訊。
+- **代理身分**——Tag 搭上了新興的*代理身分存取模型*：代理擁有自己的團隊層級身分與權限，而非借用某個人的身分。在 Anthropic，產品團隊約 65% 的程式碼如今透過其內部的 Claude Tag 產出。[文件](https://claude.com/docs/claude-tag/overview)。
+
+### 2f. 開發者平台 / API
 
 一切都透過單一端點：**`POST /v1/messages`**。工具與輸出約束是此單一端點的功能，並非各自獨立的 API。[平台文件](https://platform.claude.com/docs) · [Console](https://console.anthropic.com)。
 
 - **SDK：** Python、TypeScript、Java、Go、Ruby、C#、PHP（＋ `ant` CLI）。支援端點：**Batches**、**Files**、**Token Counting**、**Models**、**Skills**。
 - **依層級分介面：** 單次 LLM 呼叫 → 工作流程（API ＋工具使用）→ 自訂代理（你自己的迴圈）→ **Managed Agents**（Anthropic 執行迴圈並託管沙箱）。見 §4。
 
-### 2e. 雲端供應商（對等性說明）
+### 2g. 雲端供應商（對等性說明）
 
 | 供應商 | 模型 ID | 說明 |
 |---|---|---|

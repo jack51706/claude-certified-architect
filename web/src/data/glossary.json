@@ -235,5 +235,11 @@
     "def_zh": "以自有身分供應商(AWS、GCP、Entra ID、GitHub Actions、Kubernetes、SPIFFE、Okta)簽發的短期 OIDC token 驗證 Claude API,取代靜態 API key。該 token 在 POST /v1/oauth/token 換取一個以服務帳號身分運作、受範圍限制的 Anthropic token——沒有需要輪替或可能外洩的長期密鑰。" },
   { "term": "Claude Science", "zh": "Claude Science", "tag": "Platform",
     "def_en": "Anthropic's agentic scientific-research platform (launched 2026-06-30): 60+ scientific-database connectors, protein-structure prediction, and automated biology/chemistry research workflows.",
-    "def_zh": "Anthropic 的代理式科學研究平台(2026-06-30 推出):60+ 科學資料庫連接器、蛋白質結構預測,以及自動化的生物/化學研究工作流程。" }
+    "def_zh": "Anthropic 的代理式科學研究平台(2026-06-30 推出):60+ 科學資料庫連接器、蛋白質結構預測,以及自動化的生物/化學研究工作流程。" },
+  { "term": "Claude Cowork", "zh": "Claude Cowork", "tag": "Platform",
+    "def_en": "Anthropic's agentic AI for knowledge work: Claude Code's agent architecture running inside Claude Desktop (no terminal) for non-developers. Reads and writes local files, coordinates sub-agents into parallel workstreams, and produces artifacts like Excel workbooks and PowerPoint decks. Available on all paid plans.",
+    "def_zh": "Anthropic 面向知識工作的代理式 AI:把 Claude Code 的代理架構搬進 Claude Desktop(不需終端機),供非開發者使用。可讀寫本機檔案、將子代理協調成平行工作流,並產出 Excel 活頁簿、PowerPoint 簡報等產物。所有付費方案皆可使用。" },
+  { "term": "Claude Tag", "zh": "Claude Tag", "tag": "Platform",
+    "def_en": "Claude as a shared team member, starting in Slack: tag @Claude in a channel to delegate a task and it works through stages with its connected tools, replying in-thread. Multiplayer (one Claude per channel that everyone shares), keeps channel memory, and can run an ambient mode that proactively surfaces information. Uses an agent-identity access model — the agent has its own team-wide identity rather than borrowing a person's.",
+    "def_zh": "讓 Claude 成為共享的團隊成員,起點在 Slack:在頻道中 @Claude 委派任務,它會以連接的工具分階段完成,並在討論串中回覆。多人協作(每個頻道一個由所有人共享的 Claude)、保有頻道記憶,並可啟用主動浮現資訊的環境感知(ambient)模式。採用代理身分存取模型——代理擁有自己的團隊層級身分,而非借用某個人的身分。" }
 ]
