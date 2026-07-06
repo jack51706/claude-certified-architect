@@ -9688,6 +9688,8 @@ flowchart TD
 
 > **陷阱:**把*有狀態*的遠端伺服器擺在天真的負載平衡器後。若 `Mcp-Session-Id` 沒被固定到持有該工作階段狀態的那個實例,下一個請求落到冷節點上,工作階段就斷了。要嘛讓伺服器無狀態,要嘛採用工作階段親和性(session affinity)。
 
+**連到位於你私有網路內的伺服器 — MCP tunnels。**Streamable HTTP 假設伺服器有一個公開可達的 URL。當 MCP 伺服器位於私有網路內時,企業級的安全做法是 **MCP tunnels**(研究預覽):你在自己網路內執行一組 tunnel 堆疊,它建立**僅對外(outbound-only)**的連線,讓 Claude 能連到該伺服器,而**無須開放對內防火牆連接埠、把服務暴露到公開網際網路,或把 Anthropic 的 IP 範圍加入允許清單**。每個私有伺服器會取得一個位於你 tunnel 網域底下的主機名稱,你把它傳給 Managed Agents 或 Messages API 的 MCP 連接器,用法與其他遠端伺服器 URL 完全相同 — 只有 `url` 是 tunnel 特有的。每個請求都有三層彼此獨立的保護:對外通往傳輸邊緣的 **mTLS**(並驗證 IP)、由只有你持有的憑證終結的**內層 TLS**(因此傳輸供應商無法讀取負載內容),以及每個伺服器自身的 **OAuth**。管理透過 Tunnels API 進行,使用 `anthropic-beta: mcp-tunnels-2026-06-22` 標頭與 `workspace:manage_tunnels` WIF 範圍。來源:[MCP tunnels](https://platform.claude.com/docs/en/agents-and-tools/mcp-tunnels/overview)。
+
 ## 25.3 遠端伺服器的授權(OAuth 2.1)
 
 這是第 4 章點名卻沒打開的主題。`stdio` 伺服器信任它的環境(環境變數憑證,§4.3)。**遠端**伺服器則暴露在網路上,必須回答*「這個呼叫者是誰、能做什麼?」* —— MCP 的答案是 **OAuth 2.1**,而規格對用戶端如何*探索*該去哪驗證有明確規定。
