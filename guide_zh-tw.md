@@ -1799,6 +1799,8 @@ argument-hint: "要分析的目錄路徑"
 
 優先序較高的檔案會覆寫較低檔案中的同一個鍵。要記住的模式是:**把 `.claude/settings.json` 提交為團隊契約;把個人微調放進 `.claude/settings.local.json`(git-ignored),這樣它們就不會洩漏進共享設定。**
 
+**企業層級:伺服器託管設定(凌駕上述三者)。** 對 Claude for Teams/Enterprise,組織 **Owner** 可從 claude.ai 主控台(**Admin Settings → Claude Code → Managed settings**)推送第四層、最高優先序的設定——無需裝置管理(MDM)基礎設施;用戶端會在驗證時取得,並每小時重新輪詢一次。**這個託管層凌駕於所有本機檔案*甚至命令列旗標*之上——開發者所設定的任何東西都無法覆寫它。** 它承載與 `settings.json` 相同的鍵——`permissions.deny` 清單、`disableBypassPermissionsMode`、`allowManagedPermissionRulesOnly`(把權限鎖定為僅限託管集合)、環境變數與 hooks——因此下方的護欄會變成**組織範圍的政策**,而非逐儲存庫的設定。一項搭配的管理控制項可設定**組織層級(或逐角色)的預設模型**:`/model` 選擇器的 *Default* 列便會解析為它,並標示為 *Org default*——但這一項是 `--model` 與 `ANTHROPIC_MODEL` 仍可覆寫的*軟*預設,而非鎖定(需要 Claude Code **v2.1.196+**)。在 Bedrock/Vertex/Foundry 上,由於無法透過伺服器遞送,改由自架的 **Claude apps gateway** 執行等效的遞送。**考試注意:** 託管設定是*用戶端*控制,而非安全邊界——經修改的執行檔、較舊的用戶端,或第三方供應商都能繞過它。來源:[server-managed settings](https://code.claude.com/docs/en/server-managed-settings)、[model configuration](https://code.claude.com/docs/en/model-config)。
+
 **權限:逐工具的 allow / ask / deny。** 權限住在 `settings.json` 裡,可管控個別工具、甚至工具的引數:
 
 ```json
