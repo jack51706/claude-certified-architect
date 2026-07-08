@@ -13128,6 +13128,7 @@ flowchart TD
 - **使用精確 ID，切勿用帶日期後綴的變體**（例如 `claude-opus-4-8`，而非 `claude-opus-4-8-20xxxxxx`）。來源：[模型總覽](https://platform.claude.com/docs/en/about-claude/models/overview)、[定價](https://platform.claude.com/docs/en/pricing)。
 - **即時查詢：** Models API 回傳每個模型的上下文視窗（`max_input_tokens`）、輸出上限（`max_tokens`）與 `capabilities` 樹——`GET /v1/models/{id}`。
 - **思考與努力度依層級而異：** Fable 5 / Opus 4.8 / 4.7 拒絕 `budget_tokens`——請改用 `thinking: {type:"adaptive"}` ＋ `output_config.effort`（`low`→`max`，4.7/4.8 另有 `xhigh`）。舊款模型仍使用 `budget_tokens`。
+- **Sonnet 5 遷移須知：** Sonnet 5 採用較新的 tokenizer（Opus 4.7+ / Fable 5 一系）——同樣文字產生的 token 比 4.7 之前的模型**多約 30%**，因此估算成本或判斷是否放得下前，請先用 `count_tokens` 重新量測。自適應思考預設開啟；非預設值的 `temperature` / `top_p` / `top_k` 與手動 `budget_tokens` 思考都會回傳 **400**；且 Sonnet 5 **不提供 Priority Tier**。來源：[平台發行說明 —— 2026-06-30](https://platform.claude.com/docs/en/release-notes/api)。
 
 ---
 

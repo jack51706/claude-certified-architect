@@ -13128,6 +13128,7 @@ All current models share a 1M-token context window except Haiku. Prices are USD 
 - **Use exact IDs, never date-suffixed variants** (e.g. `claude-opus-4-8`, not `claude-opus-4-8-20xxxxxx`). Source: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview), [Pricing](https://platform.claude.com/docs/en/pricing).
 - **Live discovery:** the Models API returns context window (`max_input_tokens`), output cap (`max_tokens`), and a `capabilities` tree per model — `GET /v1/models/{id}`.
 - **Thinking & effort differ by tier:** Fable 5 / Opus 4.8 / 4.7 reject `budget_tokens` — use `thinking: {type:"adaptive"}` + `output_config.effort` (`low`→`max`, plus `xhigh` on 4.7/4.8). Legacy models still use `budget_tokens`.
+- **Sonnet 5 migration specifics:** Sonnet 5 ships on the newer tokenizer (Opus 4.7+ / Fable 5 lineage) — the same text yields **~30% more tokens** than pre-4.7 models, so re-measure with `count_tokens` before estimating cost or fit. Adaptive thinking is on by default; non-default `temperature` / `top_p` / `top_k` and manual `budget_tokens` thinking both return **400**; and **Priority Tier** is not offered on Sonnet 5. Source: [Platform release notes — June 30, 2026](https://platform.claude.com/docs/en/release-notes/api).
 
 ---
 
