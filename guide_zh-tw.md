@@ -9398,6 +9398,8 @@ session = client.beta.sessions.create(
 
 > **陷阱:**把每次請求的差異(一個客戶 ID、一個目標檔案)塞進*新的 agent*,而不是當成 **session 輸入**傳進去。每次執行的資料屬於 session 的輸入/訊息;只有*代理本質上是什麼*才屬於 agent。
 
+**唯一獲准的例外——per-session 覆寫(beta)。**你現在*可以*在不刷版本的前提下,為單一 session 更改部分設定:把 `agent` 傳成 `{type: "agent_with_overrides", id, …}`,並附上 `model`、`system`、`tools`、`mcp_servers` 或 `skills` 之中任意欄位。它用於一次性實驗——某一次執行試個較便宜的模型、或多給一個工具——**而非**塞每次請求資料的後門。規則很嚴格,值得記牢:覆寫是**整欄取代**(從不合併——`tools` 覆寫必須列出該 session 應有的*每一個*工具);**省略**某欄則從所引用的版本繼承;`null` / `[]` 則**清空**它——但有兩個例外:`model` 永遠不可清空(`model: null` → `400 agent_model_required`),而當生效的 `skills` 非空時 `tools` 不可清空,因為 skills 需要 `read` 工具。關鍵是:覆寫**不會**建立新版本、也不會變更 agent 資源,且回應中的 `agent` 仍帶著基底的 `id` / `version`——所以回報 #2 的「這是哪份定義跑的?」可追溯性依然成立,同一 agent 的其他 session 也不受影響。來源:[Override agent configuration for a session](https://platform.claude.com/docs/en/managed-agents/sessions)。
+
 ## 24.3 驅動一個 Session:Events、串流與 Webhooks
 
 一個託管 session 是**事件驅動**的。Anthropic 跑迴圈,並發出一條 **Server-Sent Events(SSE)** 串流,即時描述代理正在做什麼。
@@ -9431,6 +9433,8 @@ sequenceDiagram
     API-->>Dev: 恢復;用戶端依 event id 去重
     Loop-->>Dev: session.status_completed
 ```
+
+**即時 token 預覽——event deltas(選用)。**預設下 `agent.message` 是**緩衝**的:每個事件都要等產生它的那次模型請求*完成後*才抵達。若要在文字生成時就渲染,請**逐連線**選用:在 `GET /v1/sessions/{id}/events/stream` 加上 `event_deltas[]` 查詢參數(可接受值為 `agent.message` 與 `agent.thinking`;其他值回 400,且只有 session 層級的串流接受它——[多代理 thread](https://platform.claude.com/docs/en/managed-agents/multi-agent) 串流會拒絕)。被預覽的訊息會先發一個 `event_start`(宣告即將到來事件的 `id`),接著是攜帶增量文字的 `event_delta` 事件,以 `event_id` + `delta.index` 為鍵。**預覽是顯示輔助,不是紀錄**——緩衝的 `agent.message` 仍是權威來源,忽略預覽的用戶端仍會收到完整串流;而且(不同於 [Messages API 串流](https://platform.claude.com/docs/en/build-with-claude/streaming))沒有逐區塊的 start/stop 事件,增量型別是 `content_delta`,所以 Messages API 的累積器程式碼**無法**原封不動沿用。`agent.thinking` 的預覽只發 `event_start`;其內容仍在緩衝事件中抵達。來源:[Event deltas](https://platform.claude.com/docs/en/managed-agents/events-and-streaming#event-deltas)。
 
 **何時*不要*一直掛著串流:webhooks。**對長時間執行或射後不理的工作——夜間批次、scheduled deployment、可能跑好幾分鐘的代理——一直掛著 HTTP 串流既脆弱又浪費。Managed Agents 可以改在狀態變更時送出 **HMAC 簽章的 webhooks**。你驗證簽章,再去拉你需要的東西。**串流**用於你要即時渲染 token 的互動式 UI;**webhooks** 用於非同步、耐久、伺服器對伺服器的工作流。
 
