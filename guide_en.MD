@@ -34,7 +34,8 @@ The ideal candidate is a **solution architect** who designs and ships production
 | Number of questions | 60 |
 | Scoring | 100–1000 scale, passing score **720** |
 | Guessing penalty | None (answer every question!) |
-| Scenarios | 4 out of 8 possible (randomly selected) |
+| Time limit | 120 minutes (as consistently reported; not stated in the official guide) |
+| Scenarios | 4 randomly selected from the official set of **6** (see note below) |
 
 > **The certification family (July 2026):** this guide covers **Claude Certified Architect — Foundations** ($125, open to all Claude Partner Network members; CPN membership is free). Three sibling certifications are open for registration via the Anthropic Partner Academy: **Associate — Foundations** ($99) for client-facing and delivery practitioners who use Claude in their own work (prompting, evaluating output, workflow integration, responsible use); **Developer — Foundations** ($125) for engineers who build and ship production applications and agents on Claude (custom tools, MCP servers, model optimization, security); and **Architect — Professional** ($175) for experienced architects leading enterprise-scale deployments (solution and integration architecture, optimization at scale, governance, stakeholder leadership).
 
@@ -53,6 +54,8 @@ The ideal candidate is a **solution architect** who designs and ships production
 ---
 
 ## Exam Scenarios
+
+> **Note on the official list:** the official exam guide defines **six** scenarios (its titles differ slightly: "Customer Support Resolution Agent", "Developer Productivity with Claude"), and each sitting draws 4 of those 6. Scenarios 7 and 8 below are **additional practice areas** this guide adds on top of the official six — they exercise the same five domains and are worth studying, but they are not named in the official scenario list.
 
 ### Scenario 1: Customer Support Agent
 You build an agent to handle returns, billing disputes, and account issues using the Claude Agent SDK. The agent uses MCP tools (`get_customer`, `lookup_order`, `process_refund`, `escalate_to_human`). The target is 80%+ first-contact resolution with appropriate escalation.

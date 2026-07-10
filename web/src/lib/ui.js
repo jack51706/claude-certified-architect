@@ -27,7 +27,7 @@ export const UI = {
     // exam
     startExam: 'Start mock exam',
     examIntro:
-      'The real exam: 60 questions drawn from 4 of 8 scenarios, scored 100–1000 (pass: 720). This mock mirrors that: a timed set with a scaled score.',
+      'The real exam: 60 questions in 120 minutes, drawn from 4 of the 6 official scenarios, scored 100–1000 (pass: 720). This mock mirrors that, sampling across all practice scenarios.',
     questionsLabel: 'questions',
     minutes: 'min',
     submit: 'Submit exam',
@@ -107,7 +107,7 @@ export const UI = {
     // exam
     startExam: '開始模擬考',
     examIntro:
-      '正式考試:從 8 個情境隨機抽 4 個、共 60 題,以 100–1000 計分(及格 720)。此模擬考比照辦理:計時作答並換算分數。',
+      '正式考試:120 分鐘、60 題,從官方 6 個情境隨機抽 4 個,以 100–1000 計分(及格 720)。此模擬考比照辦理,並涵蓋所有練習情境。',
     questionsLabel: '題',
     minutes: '分鐘',
     submit: '交卷',

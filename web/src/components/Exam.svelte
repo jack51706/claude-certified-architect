@@ -4,7 +4,7 @@
   import { t } from '@/lib/ui.js';
   import { md } from '@/lib/md.js';
 
-  let { questions = [], lang = 'en', scenarioCount = 4, questionCount = 60, minutes = 90 } = $props();
+  let { questions = [], lang = 'en', scenarioCount = 4, questionCount = 60, minutes = 120 } = $props();
 
   const primary = lang === 'zh-tw' ? 'zh' : 'en';
   const secondary = primary === 'en' ? 'zh' : 'en';

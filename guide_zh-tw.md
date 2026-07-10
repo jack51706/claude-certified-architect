@@ -34,7 +34,8 @@
 | 題數 | 60 題 |
 | 計分 | 100–1000 級距,及格分數 **720** |
 | 猜題扣分 | 無(每一題都要作答!) |
-| 情境 | 8 個可能情境中選出 4 個(隨機選取) |
+| 時限 | 120 分鐘(多方一致回報;官方指南未明載) |
+| 情境 | 從官方 **6** 個情境隨機抽 4 個(見下方說明) |
 
 > **認證家族(2026 年 7 月):** 本指南對應 **Claude Certified Architect — Foundations**($125,全體 Claude Partner Network 成員皆可報考;CPN 會員資格免費)。另有三張認證已開放報名,報名管道為 Anthropic Partner Academy:**Associate — Foundations**($99),給在自身工作中使用 Claude 的客戶端與交付實務者(提示、評估輸出、工作流程整合、負責任使用);**Developer — Foundations**($125),給在 Claude 上建構並交付生產級應用與代理的工程師(自訂工具、MCP 伺服器、模型最佳化、安全);**Architect — Professional**($175),給主導企業級 Claude 部署的資深架構師(解決方案與整合架構、規模化最佳化、治理、利害關係人領導)。
 
@@ -53,6 +54,8 @@
 ---
 
 ## 考試情境
+
+> **關於官方清單的說明:** 官方考試指南定義的是**六**個情境(官方標題略有不同:「Customer Support Resolution Agent」、「Developer Productivity with Claude」),每場考試從這 6 個抽 4 個。下方的情境 7 與 8 是本指南在官方六個之外**額外增加的練習領域**——它們鍛鍊同樣的五大領域、值得研讀,但並不在官方情境清單中。
 
 ### 情境 1:客戶支援代理
 你使用 Claude Agent SDK 建構一個代理,處理退貨、帳務爭議與帳戶問題。該代理使用 MCP 工具(`get_customer`、`lookup_order`、`process_refund`、`escalate_to_human`)。目標是達到 80% 以上的首次接觸解決率,並在適當時機升級。
