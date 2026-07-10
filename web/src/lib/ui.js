@@ -27,7 +27,8 @@ export const UI = {
     // exam
     startExam: 'Start mock exam',
     examIntro:
-      'The real exam: 60 questions in 120 minutes, drawn from 4 of the 6 official scenarios, scored 100–1000 (pass: 720). This mock mirrors that, sampling across all practice scenarios.',
+      'Pick a certification and sit a full-length timed mock: official item count, 120 minutes, scored 100–1000 (pass 720). The CCAR-F mock mirrors the real exam’s random scenario draw.',
+    certPick: 'Certification',
     questionsLabel: 'questions',
     minutes: 'min',
     submit: 'Submit exam',
@@ -107,7 +108,8 @@ export const UI = {
     // exam
     startExam: '開始模擬考',
     examIntro:
-      '正式考試:120 分鐘、60 題,從官方 6 個情境隨機抽 4 個,以 100–1000 計分(及格 720)。此模擬考比照辦理,並涵蓋所有練習情境。',
+      '選擇證照,進行完整長度的計時模擬考:官方題數、120 分鐘,以 100–1000 計分(及格 720)。CCAR-F 模擬考比照正式考試的隨機情境抽選機制。',
+    certPick: '證照',
     questionsLabel: '題',
     minutes: '分鐘',
     submit: '交卷',

@@ -4,7 +4,24 @@
   import { t } from '@/lib/ui.js';
   import { md } from '@/lib/md.js';
 
-  let { questions = [], lang = 'en', scenarioCount = 4, questionCount = 60, minutes = 120 } = $props();
+  let { questions = [], lang = 'en' } = $props();
+
+  // Per-certification mock-exam configuration, mirroring the official exam guides.
+  // scenarios > 0 → draw that many scenario groups (CCAR-F's 4-of-6 mechanic);
+  // scenarios = 0 → the whole cert pool is one bank.
+  const CERT_CFG = {
+    'CCAR-F': { items: 60, minutes: 120, scenarios: 4 },
+    'CCAR-P': { items: 63, minutes: 120, scenarios: 0 },
+    'CCDV-F': { items: 53, minutes: 120, scenarios: 0 },
+    'CCAO-F': { items: 60, minutes: 120, scenarios: 0 },
+  };
+  const CERT_NAME = {
+    'CCAR-F': 'Architect — Foundations',
+    'CCAR-P': 'Architect — Professional',
+    'CCDV-F': 'Developer — Foundations',
+    'CCAO-F': 'Associate — Foundations',
+  };
+  let cert = $state('CCAR-F');
 
   const primary = lang === 'zh-tw' ? 'zh' : 'en';
   const secondary = primary === 'en' ? 'zh' : 'en';
@@ -20,8 +37,12 @@
   let interval = null;
 
   const qByN = $derived(new Map(questions.map((q) => [q.n, q])));
-  // The mock exam mirrors CCAR-F only; other certs' practice groups live in the question bank.
-  const pool = $derived(questions.filter((q) => (q.cert ?? 'CCAR-F') === 'CCAR-F'));
+  const certsAvailable = $derived(
+    Object.keys(CERT_CFG).filter((c) => questions.some((q) => (q.cert ?? 'CCAR-F') === c))
+  );
+  const cfg = $derived(CERT_CFG[cert]);
+  const pool = $derived(questions.filter((q) => (q.cert ?? 'CCAR-F') === cert));
+  const scenarioTotal = $derived(new Set(pool.map((q) => q.scenario.en)).size);
 
   $effect(() => {
     history = loadExams();
@@ -37,15 +58,20 @@
   }
 
   function start() {
-    const allScenarios = [...new Set(pool.map((q) => q.scenario.en))];
-    const picked = new Set(shuffle(allScenarios).slice(0, scenarioCount));
-    const drawn = shuffle(pool.filter((q) => picked.has(q.scenario.en)));
-    examQs = drawn.slice(0, Math.min(questionCount, drawn.length));
+    let drawn;
+    if (cfg.scenarios > 0) {
+      const allScenarios = [...new Set(pool.map((q) => q.scenario.en))];
+      const picked = new Set(shuffle(allScenarios).slice(0, cfg.scenarios));
+      drawn = shuffle(pool.filter((q) => picked.has(q.scenario.en)));
+    } else {
+      drawn = shuffle([...pool]);
+    }
+    examQs = drawn.slice(0, Math.min(cfg.items, drawn.length));
     chosen = {};
     idx = 0;
     viewingPast = false;
     phase = 'running';
-    secondsLeft = minutes * 60;
+    secondsLeft = cfg.minutes * 60;
     clearInterval(interval);
     interval = setInterval(() => {
       secondsLeft -= 1;
@@ -83,6 +109,7 @@
     // Persist the full attempt (question order + answers) so it stays reviewable later.
     history = saveExam({
       ts: Date.now(),
+      cert,
       scaled,
       correct,
       total,
@@ -147,10 +174,22 @@
   {#if phase === 'intro'}
     <div class="intro">
       <p>{t(lang, 'examIntro')}</p>
+
+      <label class="cert-pick">
+        {t(lang, 'certPick')}:
+        <select bind:value={cert}>
+          {#each certsAvailable as c}
+            <option value={c}>{c} · {CERT_NAME[c]}</option>
+          {/each}
+        </select>
+      </label>
+
       <ul class="facts">
-        <li><b>{scenarioCount}</b> / 8 {lang === 'zh-tw' ? '情境' : 'scenarios'}</li>
-        <li><b>{Math.min(questionCount, pool.length)}</b> {t(lang, 'questionsLabel')}</li>
-        <li><b>{minutes}</b> {t(lang, 'minutes')}</li>
+        {#if cfg.scenarios > 0}
+          <li><b>{cfg.scenarios}</b> / {scenarioTotal} {lang === 'zh-tw' ? '情境' : 'scenarios'}</li>
+        {/if}
+        <li><b>{Math.min(cfg.items, pool.length)}</b> {t(lang, 'questionsLabel')}</li>
+        <li><b>{cfg.minutes}</b> {t(lang, 'minutes')}</li>
         <li>{lang === 'zh-tw' ? '及格' : 'Pass'}: <b>720</b> / 1000</li>
       </ul>
       <button class="primary" onclick={start}>{t(lang, 'startExam')}</button>
@@ -161,6 +200,7 @@
           <ul>
             {#each [...history].reverse().slice(0, 8) as h}
               <li>
+                <span class="certtag">{h.cert ?? 'CCAR-F'}</span>
                 <span class="score {h.passed ? 'pass' : 'fail'}">{h.scaled}</span>
                 <span>{h.correct}/{h.total}</span>
                 <span class="muted">{dateStr(h.ts)}</span>
@@ -328,6 +368,30 @@
     list-style: none;
     padding: 0;
     margin: 1rem 0 1.4rem;
+  }
+  .cert-pick {
+    display: block;
+    margin: 0.8rem 0 0.2rem;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+  .cert-pick select {
+    margin-inline-start: 0.4rem;
+    padding: 0.35rem 0.6rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--sl-color-gray-5);
+    background: var(--sl-color-bg);
+    color: var(--sl-color-text);
+    font-weight: 600;
+  }
+  .certtag {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--sl-color-accent-high);
+    background: color-mix(in srgb, var(--sl-color-accent) 14%, transparent);
+    padding: 0.1rem 0.45rem;
+    border-radius: 1rem;
+    white-space: nowrap;
   }
   .intro .facts li {
     color: var(--sl-color-gray-2);
