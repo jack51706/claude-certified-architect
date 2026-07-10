@@ -241,5 +241,14 @@
     "def_zh": "Anthropic 面向知識工作的代理式 AI:把 Claude Code 的代理架構搬進 Claude Desktop(不需終端機),供非開發者使用。可讀寫本機檔案、將子代理協調成平行工作流,並產出 Excel 活頁簿、PowerPoint 簡報等產物。所有付費方案皆可使用。" },
   { "term": "Claude Tag", "zh": "Claude Tag", "tag": "Platform",
     "def_en": "Claude as a shared team member, starting in Slack: tag @Claude in a channel to delegate a task and it works through stages with its connected tools, replying in-thread. Multiplayer (one Claude per channel that everyone shares), keeps channel memory, and can run an ambient mode that proactively surfaces information. Uses an agent-identity access model — the agent has its own team-wide identity rather than borrowing a person's.",
-    "def_zh": "讓 Claude 成為共享的團隊成員,起點在 Slack:在頻道中 @Claude 委派任務,它會以連接的工具分階段完成,並在討論串中回覆。多人協作(每個頻道一個由所有人共享的 Claude)、保有頻道記憶,並可啟用主動浮現資訊的環境感知(ambient)模式。採用代理身分存取模型——代理擁有自己的團隊層級身分,而非借用某個人的身分。" }
+    "def_zh": "讓 Claude 成為共享的團隊成員,起點在 Slack:在頻道中 @Claude 委派任務,它會以連接的工具分階段完成,並在討論串中回覆。多人協作(每個頻道一個由所有人共享的 Claude)、保有頻道記憶,並可啟用主動浮現資訊的環境感知(ambient)模式。採用代理身分存取模型——代理擁有自己的團隊層級身分,而非借用某個人的身分。" },
+  { "term": "CCAR-P (Architect — Professional)", "zh": "CCAR-P(Architect — Professional)", "tag": "Platform",
+    "def_en": "The Claude Certified Architect — Professional exam (v1.0, July 2026): 63 multiple-choice/multiple-response items, 120 min, pass 720/1000, $175, credential valid 12 months (free on-time renewal). Seven domains — Integration (19%) is the heaviest. This guide's PART V covers the blueprint and delta topics.",
+    "def_zh": "Claude Certified Architect — Professional 考試(v1.0,2026 年 7 月):63 題單選/複選混合、120 分鐘、及格 720/1000、$175,證照效期 12 個月(準時續證免費)。七大領域——整合(19%)權重最高。本指南第五部分涵蓋考綱與增量主題。" },
+  { "term": "RAG (retrieval-augmented generation)", "zh": "檢索增強生成(RAG)", "tag": "Data",
+    "def_en": "Retrieve relevant chunks from an indexed corpus at query time and feed them to the model: ingest → chunk → embed → index → retrieve → (rerank) → generate. When answers turn confident-but-wrong after a data refresh with the model unchanged, suspect the retrieval layer first.",
+    "def_zh": "查詢時從已索引語料檢索相關片段餵給模型:攝取 → 分塊 → 嵌入 → 索引 → 檢索 → (重排) → 生成。資料更新後答案變得自信但錯誤、而模型沒變,先懷疑檢索層。" },
+  { "term": "Chunking", "zh": "分塊(chunking)", "tag": "Data",
+    "def_en": "Splitting documents into retrievable units for RAG — a trade-off, not a constant: fixed-size + overlap for uniform prose; structure-aware for contracts/tables; small-to-big and contextual retrieval to balance precision against coherence.",
+    "def_zh": "把文件切成 RAG 可檢索的單元——是取捨,不是常數:均質散文用固定大小+重疊;合約/表格用結構感知;要平衡精準與連貫時用 small-to-big 與上下文化檢索。" }
 ]

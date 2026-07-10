@@ -1,6 +1,6 @@
 # Claude Certified Architect — Foundations
 
-This repository contains study materials for the **Claude Certified Architect — Foundations** certification.
+This repository contains study materials for the **Claude Certified Architect — Foundations** certification, plus a dedicated preparation part (PART V) for **Claude Certified Architect — Professional (CCAR-P)**.
 
 ![alt text](image.png)
 
@@ -10,8 +10,8 @@ This repository contains study materials for the **Claude Certified Architect �
 
 ## Course Access
 
-- Certification is currently restricted to members of the Anthropic Partner Network and requires registration with a verified partner company email. Claude Partner Network: https://claude.com/partners
-- Free for the first 5,000 partner company employees. General availability will be $99.
+- Registration runs through the Anthropic Partner Academy and is open to all Claude Partner Network members (membership is free). Claude Partner Network: https://claude.com/partners
+- Exam fees (July 2026): Architect–Foundations **$125** · Associate–Foundations $99 · Developer–Foundations $125 · Architect–Professional $175.
 - To request access to the official course/exam portal, use this link: https://anthropic.skilljar.com/claude-certified-architect-foundations-access-request
 
 ## Interactive Learning Site

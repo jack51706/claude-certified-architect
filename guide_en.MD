@@ -37,7 +37,7 @@ The ideal candidate is a **solution architect** who designs and ships production
 | Time limit | 120 minutes (as consistently reported; not stated in the official guide) |
 | Scenarios | 4 randomly selected from the official set of **6** (see note below) |
 
-> **The certification family (July 2026):** this guide covers **Claude Certified Architect — Foundations** ($125, open to all Claude Partner Network members; CPN membership is free). Three sibling certifications are open for registration via the Anthropic Partner Academy: **Associate — Foundations** ($99) for client-facing and delivery practitioners who use Claude in their own work (prompting, evaluating output, workflow integration, responsible use); **Developer — Foundations** ($125) for engineers who build and ship production applications and agents on Claude (custom tools, MCP servers, model optimization, security); and **Architect — Professional** ($175) for experienced architects leading enterprise-scale deployments (solution and integration architecture, optimization at scale, governance, stakeholder leadership).
+> **The certification family (July 2026):** this guide covers **Claude Certified Architect — Foundations** ($125, open to all Claude Partner Network members; CPN membership is free). Three sibling certifications are open for registration via the Anthropic Partner Academy: **Associate — Foundations** ($99) for client-facing and delivery practitioners who use Claude in their own work (prompting, evaluating output, workflow integration, responsible use); **Developer — Foundations** ($125) for engineers who build and ship production applications and agents on Claude (custom tools, MCP servers, model optimization, security); and **Architect — Professional** ($175) for experienced architects leading enterprise-scale deployments (solution and integration architecture, optimization at scale, governance, stakeholder leadership). For Architect — Professional, this guide ships a dedicated preparation part — see **PART V** (Chapters 30–31).
 
 ---
 
@@ -10938,6 +10938,156 @@ The nightly job starts on a schedule; the runner authenticates via **WIF** (no s
 | The principle | Identity, authorization, and secrecy are **configuration, not prompt text** — the same law as deny rules and hooks (Ch 13, §26.6). |
 
 > **Beyond the foundations exam.** The exam stops at the agent's edge; production starts there. Choose the surface by parity, make every workload prove who it is, govern MCP through identity, and keep secrets out of the model's world entirely — and the same agent you built in Parts I–III becomes something an enterprise can actually run.
+
+# PART V: Claude Certified Architect — Professional (CCAR-P)
+
+> This part prepares you for the **next credential up**: Claude Certified Architect — Professional (exam code **CCAR-P**, v1.0 effective July 2026, $175). Everything here is based on the official CCAR-P exam guide. The good news: a large share of the Professional blueprint is already covered by Parts I–IV of this guide — Chapter 30 maps exactly which chapters carry over and where the genuine gaps are, and Chapter 31 fills those gaps. Note the exam's own content is under NDA; what follows teaches the *blueprint*, never real items.
+
+# Chapter 30: The CCAR-P Exam — Blueprint and Gap Map
+
+The Professional exam is a different beast from Foundations: broader (seven domains instead of five), more senior (architecture judgment, governance, and stakeholder leadership join the purely technical material), and mechanically different (63 items including **multiple-response**, not just single-answer multiple choice). This chapter gives you the facts, the blueprint, and — most usefully — a map from each Professional domain to the chapters of this guide that already prepare you for it.
+
+By the end you should be able to:
+
+- **Know the exam mechanics cold** (§30.1) — items, timing, scoring, retakes, and the 12-month validity cycle.
+- **Recite the seven domains and their weights** (§30.2) — and what each one actually tests.
+- **Study only your gaps** (§30.3) — the domain-by-chapter coverage map.
+- **Handle the format** (§30.4) — multiple-response technique and per-domain score triage.
+
+## 30.1 Exam Facts
+
+| Parameter | Value |
+|---|---|
+| Exam code | **CCAR-P** (v1.0, effective July 2026) |
+| Items | **63** — multiple-choice **and multiple-response** (each item states how many responses to select) |
+| Time limit | **120 minutes** |
+| Scoring | Scaled 100–1,000, pass **720**; criterion-referenced (you're measured against a fixed standard, not other candidates) |
+| Score report | Pass/fail + scaled score + **percent-correct per domain** |
+| Delivery | Proctored (online or Pearson VUE test center) |
+| Fee | **$175 USD** (partner-tier discounts may apply at checkout) |
+| Validity | **12 months** — renew on time with a **free, non-proctored** assessment on the Partner Academy; a lapsed credential means retaking the full exam at full fee |
+| Retakes | Waiting periods escalate: 14 days → 30 days → 90 days; max **4 attempts** per rolling 12 months; fee per attempt |
+| Prerequisites | None mandatory. Recommended: 3+ years systems architecture, 6+ months hands-on Claude (or comparable LLM systems) in production |
+
+The target profile is the **minimally qualified candidate (MQC)**: an architect who designs, implements, and governs Claude solutions in production — end-to-end systems including prompt/context engineering, **RAG**, API integration, orchestration, and evaluation frameworks, with working judgment about cost, latency, performance, safety, and maintainability trade-offs.
+
+## 30.2 The Seven Domains
+
+| # | Domain | Weight | What it tests (condensed) |
+|---|---|---|---|
+| 1 | Solution Design & Architecture | **17%** | Translating business problems into Claude solutions; end-to-end architectures (input → processing → output → feedback); choosing workflow vs agentic vs augmented-LLM patterns; multi-agent orchestration; decomposition; aligning to business value (efficiency, cost, SLAs) |
+| 2 | Claude Models, Prompting & Context Engineering | **13%** | Model selection by trade-off; system prompts, templates, guardrails; zero-/few-shot, chain-of-thought; context-window and token optimization; prompt reuse (caching, modular prompts, Skills) |
+| 3 | Integration | **19%** | Capability bloat & least privilege in tool/agent config; authn/authz gap analysis; accuracy–latency trade-offs; observability at scale; **RAG pipeline design (chunking, indexing, retrieval strategy)**; protocol selection (MCP vs API/CLI vs agent-to-agent); progressive discovery vs monolithic context |
+| 4 | Evaluation, Testing & Optimization | **16%** | Metrics (accuracy, latency, cost, safety, security); eval datasets and mixed-method test frameworks; A/B testing; diagnosing prompt failures/hallucinations/model mismatch; token/latency/cost optimization; logging & observability |
+| 5 | Governance, Safety & Risk Management | **14%** | Guardrails and safety controls; LLM risk/failure modes; human-in-the-loop strategies; regulatory compliance (**GDPR, HIPAA, FedRAMP**); ethical AI (bias, fairness, transparency) |
+| 6 | Stakeholder Communication & Lifecycle Management | **14%** | Structured discovery and requirements; communicating architecture decisions and trade-offs; feedback loops and SLA/expectation management; documentation and implementation guidance; lifecycle phases (discovery → design → handoff → monitoring → iteration) |
+| 7 | Developer Productivity & Operational Enablement | **7%** | Configuring Claude tooling for teams (e.g. Claude Code); AI-assisted developer workflows; debugging and operational support |
+
+Unlike Foundations, the Professional guide defines **no scenario set** — items are written directly against these objectives.
+
+## 30.3 The Gap Map: What This Guide Already Covers
+
+Study efficiency comes from knowing what *not* to re-study. Domain by domain:
+
+| Domain (weight) | Already covered here | Genuine gaps → study in Ch 31 |
+|---|---|---|
+| 1 Solution Design (17%) | Ch 8 (decomposition), Ch 14 (workflows vs agents), Ch 15 (harness), Domain-1 notes, Ch 3/§26.2 (orchestration) | Business-value framing; feedback-loop design (§31.4 touches lifecycle) |
+| 2 Models & Prompting (13%) | Ch 6 (prompting), Ch 17 (thinking/effort), Ch 18 (caching), Ch 21 (context), Ch 28 (model selection) | Little — this is Foundations++, refresh those chapters |
+| 3 Integration (19%) | Ch 2/Ch 25 (tools & MCP), Ch 20 (server tools), Ch 29 (auth/deployment), §26.5 (tool search = progressive discovery) | **RAG architecture** (§31.1), **protocol selection** (§31.2), capability-bloat analysis (§31.2) |
+| 4 Evaluation (16%) | Ch 27 (evals for agents), §28.4 (cost optimization), §15.2 (observability) | A/B testing discipline & mixed-method eval design (§31.1 sidebar + Ch 27 refresh) |
+| 5 Governance (14%) | Ch 9 (HITL/escalation), Ch 29 (enterprise controls), §13.4 (deterministic guardrails) | **Regulatory compliance mapping, ethical-AI practice** (§31.3) |
+| 6 Stakeholder & Lifecycle (14%) | — (this guide is technical) | **Entirely new — §31.4** |
+| 7 Dev Productivity (7%) | Ch 5, Ch 13, Ch 26 (Claude Code end-to-end) | Nothing significant |
+
+Read the map honestly: roughly **60–70% of the blueprint is Parts I–IV material at a more senior altitude**; the concentrated new study is RAG (inside the *heaviest* domain), compliance/ethics, and the stakeholder domain.
+
+## 30.4 Format Technique
+
+**Multiple-response items.** Each item tells you how many responses to select — treat every option as an independent true/false judged against the stem, then count. There is no partial-credit gamble to optimize; what kills candidates is anchoring on the first correct-looking pair and not testing the remaining options with equal skepticism.
+
+**Per-domain triage.** Your score report breaks out percent-correct per domain, and the weights are public — so prepare like an architect: multiply your self-assessed weakness by the domain weight. A shaky Domain 3 (19%) costs nearly three times a shaky Domain 7 (7%). If you fail a first attempt, the domain breakdown tells you exactly where the 14-day wait should be spent.
+
+**The clock.** 63 items in 120 minutes ≈ 1.9 minutes each. Multiple-response items run longer; bank time on the recall-style singles.
+
+**Renewal is part of the plan.** The credential lapses in 12 months, but on-time renewal is a free, non-proctored assessment — put the renewal window in your calendar the day you pass; a lapse converts a free checkpoint into a $175 full retake.
+
+# Chapter 31: Professional Delta Topics
+
+This chapter covers the blueprint areas Parts I–IV don't: RAG architecture, integration-protocol selection, regulatory and ethical governance, and the stakeholder/lifecycle discipline. Each section is written at exam altitude — the judgment layer, not a product manual.
+
+## 31.1 RAG Architecture for Architects
+
+Foundations deliberately excluded embeddings and vector databases; the Professional exam does not — Domain 3 names **RAG pipeline design, chunking, indexing, and retrieval strategy** explicitly.
+
+**The pipeline.** Ingest → **chunk** → embed → **index** → retrieve → (rerank) → assemble context → generate → (cite/verify). Every stage is a failure point, and exam items test whether you can pick the right design *per data shape and query pattern* — not recite the stages.
+
+**Chunking is a trade-off, not a constant.**
+- **Fixed-size with overlap** — the robust default for uniform prose; overlap (10–20%) prevents answers straddling a boundary.
+- **Structure-aware** (headings/sections/tables) — for documents whose semantics live in their structure: contracts, policies, API docs. A table split mid-row is destroyed information.
+- **Small-chunk retrieval + expanded context** ("small-to-big") — retrieve precisely with small chunks, then hand the model the surrounding section, balancing recall precision against context coherence.
+- **Contextual retrieval** — prepend each chunk with a short generated summary of what it is and where it sits before embedding; markedly improves retrieval on corpora where chunks are ambiguous out of context.
+
+**Match retrieval to the query pattern.** Semantic/embedding search for paraphrased natural-language questions; **keyword/BM25** (or hybrid) when queries contain exact identifiers — part numbers, error codes, statute names — that embeddings blur; **metadata filtering first** (date, product, jurisdiction) when the corpus is partitioned and queries imply the partition; hybrid + rerank when both recall and precision matter and latency allows.
+
+**The classic failure signature** (and it appears in the official sample set): a RAG system starts returning **confident but wrong** answers right after a document refresh, with model and latency unchanged. Diagnose the retrieval layer first — a broken re-index, stale chunks, or mismatched embedding versions is feeding the model bad context; the model is faithfully summarizing garbage. Generalize the lesson: *when generation quality drops and the model didn't change, suspect what you feed it, in ingestion order.*
+
+**Progressive discovery vs monolithic context.** The same budget discipline as §26.5's tool search, applied to data: stuffing the whole knowledge base into every prompt (monolithic) buys simplicity at permanent cost — inflated tokens, degraded attention, stale snapshots. Progressive discovery (retrieve just-in-time, load on demand) keeps the window solvent and the data fresh, at the cost of retrieval infrastructure that must itself be evaluated and monitored (§31.1 above; Ch 27 for the eval harness). At 1M-token windows the question doesn't disappear — it becomes *cost and attention* rather than *fit* (§28.4).
+
+## 31.2 Integration Protocol Selection and Least Privilege
+
+**Three integration mechanisms, one decision.** Domain 3 expects you to choose — and justify — between:
+
+| Mechanism | Right when | Watch out |
+|---|---|---|
+| **MCP** | The capability should be *discoverable and reusable* across agents/hosts; typed tools + resources; org-level governance (EMA, managed catalogs — Ch 29) | Server sprawl; per-server auth lifecycle |
+| **Direct API / CLI calls** (from code or `bash`) | One-off integration owned by a single system; latency-critical paths; batch/pipeline glue where tool discovery adds nothing | Opaque to the harness — permission gating and audit get harder (§13.4) |
+| **Agent-to-agent** | The other side owns *judgment*, not just data — delegation of a whole sub-problem to a peer system (A2A-style handoff) | Compounding error and cost; context handoff discipline (Ch 10, Ch 12) |
+
+The exam-grade heuristic: **capability that many callers should discover → MCP; plumbing one system owns → direct call; a whole responsibility with its own reasoning → another agent.**
+
+**Capability bloat is a security finding, not a style issue.** An agent configured with tools its role never needs (the refund *and* delete tools on a read-and-draft support agent) carries attack surface for free. The Professional answer is **removal**, not mitigation: logging is detective, confirmation prompts are compensating, a bigger model is irrelevant — *least privilege means the unnecessary capability is not there* (the same law as §13.4's deny-first and Ch 29's identity scoping). Expect items that hand you a tool list and a role description and ask what to cut.
+
+## 31.3 Governance, Compliance, and Responsible AI
+
+Chapter 29 gave you the *mechanisms* (WIF, EMA, vaults, deny rules); Domain 5 tests whether you can wire them to *obligations*.
+
+**Regulatory mapping — the architect's translation table.**
+- **GDPR** (EU personal data): lawful basis and purpose limitation for what enters prompts and logs; data-subject rights mean you must know **where prompt/completion logs live and how to delete them**; cross-border transfer constraints shape deployment-surface choice (§29.1); "PII never in context unless necessary, never in system prompts, masked in observability pipelines."
+- **HIPAA** (US health data): PHI requires a BAA-covered deployment path, minimum-necessary access (tool-level least privilege again), audit trails on every access — your SessionEnd/audit hooks (§26.7) stop being nice-to-have and become evidence.
+- **FedRAMP / public sector**: authorization boundary dictates the platform — this is exactly the Bedrock/IL4-5 row in the §29.1 decision tree; the *compliance regime chooses the deployment surface, then the architecture adapts*.
+
+**Ethical AI as testable engineering, not posture.** Bias/fairness: evaluate outcomes **per cohort**, not just in aggregate (Ch 27's eval harness, sliced); document known failure modes. Transparency: users know when they're talking to AI, and consequential decisions carry explanations a human can review. **Human-in-the-loop is a dial, not a binary** (Ch 9): sample-audit for low-stakes volume, approval gates for irreversible/regulated actions (§13.4 ask-tier, §29.4), full human ownership where law or ethics demands it. The exam pattern: given stakes + volume + reversibility, pick the HITL level and the *deterministic* enforcement point.
+
+**Risk management in one sentence:** enumerate failure modes (hallucination, injection, exfiltration, runaway cost — Ch 10, §29.4, task budgets §17), assign each a *structural* control, and make the control auditable. Prompt-text promises are not controls (§13.4 — the exam re-tests this law at enterprise scale).
+
+## 31.4 Stakeholder Communication and Lifecycle Management
+
+The 14% nobody studies for — because it isn't in the docs. It's the architect's *practice*:
+
+**Structured discovery.** Before any design: what business outcome, measured how (the future eval metric — Ch 27's "success criteria first" is the same discipline); what data, with what sensitivity (feeds §31.3); what latency/cost/SLA envelope; who approves what (feeds the HITL dial); what does failure cost. Discovery outputs become the eval set and the guardrail spec — that continuity is the exam's favorite thread.
+
+**Communicating trade-offs.** Architects don't present solutions; they present **decisions with alternatives**: option A meets the SLA at 3× cost, option B halves cost but needs a human review queue — recommendation, rationale, and what evidence would change it. Expect items where the correct answer is the honest trade-off framing, not the technically fanciest design.
+
+**SLAs and expectation management.** Commit to what you can measure (Ch 27 metrics), degrade gracefully (fallbacks, §28.3 routing), and renegotiate with data when reality moves — an SLA without a monitoring story is fiction.
+
+**Documentation and handoff.** The deliverable isn't a diagram, it's *operability*: architecture decision records (what and why, with the rejected alternatives), runbooks for the failure modes you enumerated in §31.3, and the eval/monitoring dashboards the operators inherit (§15.2). 
+
+**Lifecycle.** Discovery → design → build → **handoff → monitoring → iteration**: the loop closes back into discovery — production telemetry and eval drift feed the next requirements round. A Claude system is never "delivered"; models, prices, and blueprints move (the 12-month recertification exists for the same reason).
+
+## 31.5 Key Takeaways
+
+| Concept | What to remember |
+|---|---|
+| The blueprint | 7 domains; Integration is heaviest (19%); stakeholder + governance together = 28% — do not study only the technology (§30.2). |
+| The gap map | Parts I–IV already cover most of Domains 1, 2, 4, 7; concentrate on RAG, protocol choice, compliance/ethics, stakeholder practice (§30.3). |
+| RAG | Chunk to the document's structure, retrieve to the query's shape, and when quality drops after a data change — suspect retrieval first (§31.1). |
+| Protocol choice | Discoverable capability → MCP; owned plumbing → direct call; delegated judgment → another agent (§31.2). |
+| Least privilege | Remove unnecessary capability; don't log, confirm, or model-size your way around it (§31.2). |
+| Compliance | The regime picks the deployment surface and the logging/deletion story; controls must be structural and auditable (§31.3). |
+| Stakeholder craft | Discovery outputs = eval set + guardrail spec; present decisions with alternatives; SLAs need monitoring; handoff = operability (§31.4). |
+| Format | Multiple-response = independent true/false per option; triage study time by domain weight; calendar the free 12-month renewal (§30.1, §30.4). |
+
+> **Scope note.** This part teaches the published CCAR-P blueprint; the exam items themselves are NDA-protected. Pair these chapters with what the blueprint itself recommends: build and operate at least one end-to-end Claude solution — with RAG, evaluation, and observability — before you sit the exam.
 
 # Examples of Exam Questions with Explanations
 

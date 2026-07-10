@@ -1,2 +1,5 @@
 .DS_Store
 .claude/*
+
+# Official exam-guide PDFs dropped locally for reference (Anthropic's documents — do not commit)
+/Claude+Certified*.pdf
