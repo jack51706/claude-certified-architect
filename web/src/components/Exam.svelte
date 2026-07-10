@@ -20,6 +20,8 @@
   let interval = null;
 
   const qByN = $derived(new Map(questions.map((q) => [q.n, q])));
+  // The mock exam mirrors CCAR-F only; other certs' practice groups live in the question bank.
+  const pool = $derived(questions.filter((q) => (q.cert ?? 'CCAR-F') === 'CCAR-F'));
 
   $effect(() => {
     history = loadExams();
@@ -35,10 +37,10 @@
   }
 
   function start() {
-    const allScenarios = [...new Set(questions.map((q) => q.scenario.en))];
+    const allScenarios = [...new Set(pool.map((q) => q.scenario.en))];
     const picked = new Set(shuffle(allScenarios).slice(0, scenarioCount));
-    const pool = shuffle(questions.filter((q) => picked.has(q.scenario.en)));
-    examQs = pool.slice(0, Math.min(questionCount, pool.length));
+    const drawn = shuffle(pool.filter((q) => picked.has(q.scenario.en)));
+    examQs = drawn.slice(0, Math.min(questionCount, drawn.length));
     chosen = {};
     idx = 0;
     viewingPast = false;
@@ -147,7 +149,7 @@
       <p>{t(lang, 'examIntro')}</p>
       <ul class="facts">
         <li><b>{scenarioCount}</b> / 8 {lang === 'zh-tw' ? '情境' : 'scenarios'}</li>
-        <li><b>{Math.min(questionCount, questions.length)}</b> {t(lang, 'questionsLabel')}</li>
+        <li><b>{Math.min(questionCount, pool.length)}</b> {t(lang, 'questionsLabel')}</li>
         <li><b>{minutes}</b> {t(lang, 'minutes')}</li>
         <li>{lang === 'zh-tw' ? '及格' : 'Pass'}: <b>720</b> / 1000</li>
       </ul>

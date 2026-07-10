@@ -219,8 +219,14 @@ function generateQuiz() {
     for (const o of e.options) {
       if (!zhByLetter[o.letter]) problems.push(`Q${e.n} (zh-tw): missing option ${o.letter}`);
     }
+    // Which certification a question belongs to, derived from its scenario label.
+    // CCAR-F questions use the eight practice-scenario names; the other certs'
+    // groups are prefixed with their exam code (e.g. "CCAR-P — ..."). The mock
+    // exam only samples cert === 'CCAR-F'.
+    const certMatch = e.scenario.match(/^(CCAR-P|CCDV-F|CCAO-F)\b/);
     merged.push({
       n: e.n,
+      cert: certMatch ? certMatch[1] : 'CCAR-F',
       scenario: { en: e.scenario, zh: z.scenario },
       situation: { en: e.situation, zh: z.situation },
       question: { en: e.question, zh: z.question },
