@@ -30,14 +30,18 @@ The ideal candidate is a **solution architect** who designs and ships production
 
 | Parameter | Value |
 |---|---|
-| Question type | Multiple choice (1 correct out of 4) |
-| Number of questions | 60 |
-| Scoring | 100–1000 scale, passing score **720** |
+| Exam code | **CCAR-F** |
+| Item format | Multiple-choice **and multiple-response** (each item states how many responses to select) |
+| Number of items | 60 |
+| Time limit | 120 minutes |
+| Scoring | Scaled 100–1,000, passing score **720**; the score report also shows percent-correct per domain |
 | Guessing penalty | None (answer every question!) |
-| Time limit | 120 minutes (as consistently reported; not stated in the official guide) |
 | Scenarios | 4 randomly selected from the official set of **6** (see note below) |
+| Fee / validity | $125 · credential valid **12 months** (on-time renewal is a free assessment on the Partner Academy) |
 
-> **The certification family (July 2026):** this guide covers **Claude Certified Architect — Foundations** ($125, open to all Claude Partner Network members; CPN membership is free). Three sibling certifications are open for registration via the Anthropic Partner Academy: **Associate — Foundations** ($99) for client-facing and delivery practitioners who use Claude in their own work (prompting, evaluating output, workflow integration, responsible use); **Developer — Foundations** ($125) for engineers who build and ship production applications and agents on Claude (custom tools, MCP servers, model optimization, security); and **Architect — Professional** ($175) for experienced architects leading enterprise-scale deployments (solution and integration architecture, optimization at scale, governance, stakeholder leadership). For Architect — Professional, this guide ships a dedicated preparation part — see **PART V** (Chapters 30–31).
+> This guide's practice bank (121 questions) is single-answer by design; the real exam mixes in multiple-response items — §30.4's answering technique applies to those.
+
+> **The certification family (July 2026):** this guide covers **Claude Certified Architect — Foundations** ($125, open to all Claude Partner Network members; CPN membership is free). Three sibling certifications are open for registration via the Anthropic Partner Academy: **Associate — Foundations** ($99) for client-facing and delivery practitioners who use Claude in their own work (prompting, evaluating output, workflow integration, responsible use); **Developer — Foundations** ($125) for engineers who build and ship production applications and agents on Claude (custom tools, MCP servers, model optimization, security); and **Architect — Professional** ($175) for experienced architects leading enterprise-scale deployments (solution and integration architecture, optimization at scale, governance, stakeholder leadership). For Architect — Professional, this guide ships a dedicated preparation part — see **PART V** (Chapters 30–31); blueprint and gap-map chapters for Developer (CCDV-F) and Associate (CCAO-F) live in **PART VI** (Chapters 32–33).
 
 ---
 
@@ -11088,6 +11092,86 @@ The 14% nobody studies for — because it isn't in the docs. It's the architect'
 | Format | Multiple-response = independent true/false per option; triage study time by domain weight; calendar the free 12-month renewal (§30.1, §30.4). |
 
 > **Scope note.** This part teaches the published CCAR-P blueprint; the exam items themselves are NDA-protected. Pair these chapters with what the blueprint itself recommends: build and operate at least one end-to-end Claude solution — with RAG, evaluation, and observability — before you sit the exam.
+
+# PART VI: The Other Foundations Exams (CCDV-F / CCAO-F)
+
+> The certification family has two more Foundations credentials: **Developer — Foundations (CCDV-F)** for engineers who ship on Claude, and **Associate — Foundations (CCAO-F)** for practitioners who work *with* Claude rather than build on it. This part gives each one the same treatment as Part V: the official blueprint, and an honest map of how far this guide takes you. All facts are from the official exam guides (v1.0, July 2026); exam items are NDA-protected.
+
+# Chapter 32: Developer — Foundations (CCDV-F) — Blueprint and Gap Map
+
+The Developer exam shares an engineering audience with the Architect exams, but its shape is very different: **eight domains**, a third of the exam in a single domain (Applications and Integration, 33.1%), and Claude Code — the Architect exam's second-heaviest topic — weighted at just **3.1%**. Read the blueprint before assuming Architect prep transfers one-to-one.
+
+## 32.1 Exam Facts
+
+| Parameter | Value |
+|---|---|
+| Exam code | **CCDV-F** (v1.0, effective July 2026) |
+| Items | **53** — multiple-choice and multiple-response (each item states how many to select) |
+| Time limit | 120 minutes |
+| Scoring | Scaled 100–1,000, pass **720**; per-domain percent-correct on the score report |
+| Delivery | Proctored (online or test center) |
+| Fee / validity | **$125** · 12 months (free on-time renewal) |
+| No scenarios | Unlike CCAR-F, items are written directly against skills, with published **skill-level sub-weights** |
+
+## 32.2 The Eight Domains
+
+| # | Domain | Weight | Highlights (from the published skill list) |
+|---|---|---|---|
+| 1 | Agents and Workflows | **14.7%** | Workflow-vs-agent decision criteria; supervisor hierarchies and subagents; Agent SDK, custom loops/harnesses, managed vs self-hosted deployment, hooks; agent patterns **and third-party frameworks (Strands, LangGraph, PydanticAI)** |
+| 2 | Applications and Integration | **33.1%** | Requirements and systems lifecycle; **Claude API mechanics** (messages, tools, streaming, vision, thinking, caching, third-party vendors, batch vs realtime); software-engineering foundations (REST, JSON, async, version control, refactoring); application design across interfaces (Claude Code, Desktop, claude.ai, API, SDKs); configuration management (CLAUDE.md, settings.json, model pinning, prompt versioning) |
+| 3 | Claude Code | **3.1%** | Core components (Rules, Skills, Commands, Agents, Memory), session management, slash commands, headless/streaming/auto modes, CLAUDE.md hierarchy |
+| 4 | Eval, Testing, and Debugging | **2.6%** | Error-type identification, recovery selection, trace analysis, isolating integration-layer vs model-output failures |
+| 5 | Model Selection and Optimization | **16.8%** | LLM fundamentals (tokens, sampling, non-determinism); fast mode / extended & adaptive thinking / effort; Opus-Sonnet-Haiku trade-offs and breaking changes across releases; token budgeting, cost modeling, caching |
+| 6 | Prompt and Context Engineering | **11.0%** | Context-drift/bloat prevention (tool-output pruning, compaction), context isolation via subagents; prompt principles and iteration; structured output, defensive parsing, **skepticism toward confident output** |
+| 7 | Security and Safety | **8.1%** | Prompt injection and jailbreak defense, untrusted input, PII and data-leakage prevention; guardrail layering and least privilege; hooks as safety controls; secrets/key management and identity |
+| 8 | Tools and MCPs | **10.6%** | Tool design and schemas, MCP servers and integration |
+
+## 32.3 The Gap Map: What This Guide Already Covers
+
+| Domain (weight) | Already covered here | Genuine gaps |
+|---|---|---|
+| 1 Agents (14.7%) | Ch 3, 8, 14–16 (patterns/harness), Ch 23 (SDK), Ch 24 (managed vs self-hosted), §3.5/§26 (hooks) | **Third-party frameworks** — know what Strands / LangGraph / PydanticAI *are* and when an abstraction framework earns its keep |
+| 2 Applications (33.1%) | Ch 1 (API mechanics), Ch 7 (batch vs realtime), Ch 17–18 (thinking/caching), Ch 22 (vision/files), appendix §2 (interfaces) | **Assumed software-engineering background** (REST/JSON/async/SDLC — the exam tests it directly); streaming/websocket mechanics beyond this guide's coverage; prompt/config **versioning** discipline |
+| 3 Claude Code (3.1%) | Ch 5, 13, 26 — far deeper than the exam needs | None |
+| 4 Eval/Debug (2.6%) | Ch 10 (error handling), Ch 27 (evals) | None significant |
+| 5 Models (16.8%) | Ch 17, 28; §18.3 (cost) | LLM fundamentals below this guide's floor (tokens/sampling basics) — skim any LLM primer if new |
+| 6 Prompt/Context (11.0%) | Ch 6, 21; Ch 19 (structured output) | None significant |
+| 7 Security (8.1%) | §13.4, §29.2–29.4, §31.3 | **Prompt-injection/jailbreak defense as a topic of its own** — study untrusted-input handling patterns explicitly |
+| 8 Tools/MCP (10.6%) | Ch 2, 4, 25 | None |
+
+**The flavor difference:** CCAR-F asks "*which architecture and why*"; CCDV-F asks "*how does the platform actually behave when you build on it*" — API mechanics, engineering hygiene, and cost/model mechanics dominate. An architect who has genuinely shipped will find Domains 3–8 familiar; the study time goes to Domain 2's breadth and Domain 1's framework-awareness.
+
+# Chapter 33: Associate — Foundations (CCAO-F) — Blueprint and Orientation
+
+The Associate exam certifies a different job: using Claude *itself* — the apps, Projects, artifacts, connectors — competently and responsibly in one's own work. It is not an engineering exam, and this engineering-oriented guide is deliberately **not** a full preparation for it. This chapter gives you the blueprint and points at what transfers.
+
+## 33.1 Exam Facts
+
+| Parameter | Value |
+|---|---|
+| Exam code | **CCAO-F** (v1.0, effective July 2026) |
+| Items | **60** — multiple-choice and multiple-response |
+| Time limit | 120 minutes |
+| Scoring | Scaled 100–1,000, pass **720**; per-domain percent-correct reported |
+| Fee / validity | **$99** · 12 months (free on-time renewal) |
+
+## 33.2 The Seven Domains
+
+| # | Domain | Weight | What it tests |
+|---|---|---|---|
+| 1 | Prompting and Task Execution | 14% | Effective prompts for business/technical tasks; decomposition; iteration; adapting strategy by task type |
+| 2 | Output Evaluation and Validation | **21%** | Spotting hallucinations, inconsistencies, bias; fact-checking; knowing when human review is required; editing and format selection (artifacts, inline, structured) |
+| 3 | Product and Model Selection | 12% | Claude product features (Projects, research mode, chat, artifacts); Haiku/Sonnet/Opus trade-offs; context and memory management at the app level |
+| 4 | Workflow Integration and Solution Design | 16% | Applying Claude to requirements, research, planning; integrating into existing workflows; communicating value and limitations |
+| 5 | Configuration and Knowledge Management | 12% | Projects with instructions and knowledge; connectors (Google Drive, Gmail); maintaining configurations |
+| 6 | Governance, Risk, and Responsible Use | 15% | Appropriate vs inappropriate use; data sensitivity and privacy; organizational AI policy; ethics |
+| 7 | Troubleshooting and Optimization | 10% | Diagnosing underperforming prompts; adjusting from feedback; workflow efficiency |
+
+## 33.3 Who It's For, and What Transfers From This Guide
+
+Take CCAO-F if your work is *with* Claude — delivery, analysis, client-facing practice — rather than building systems on the API. The heaviest domain is **output evaluation (21%)**: the discipline of verifying, sourcing, and knowing when to escalate to human review. That mindset is exactly this guide's Ch 9 (escalation) and Ch 12 (provenance) material, at user altitude.
+
+What transfers from this guide: the **Claude Application Map appendix** (§2a — Projects, artifacts, connectors, Skills in the apps) is the closest thing here to CCAO-F study material; Ch 6's prompting principles apply directly; Ch 28's model trade-offs cover Domain 3's model half; and §31.3's responsible-AI framing covers Domain 6 at a deeper level than the exam needs. What doesn't: the real preparation is **daily hands-on use of claude.ai** — build Projects with knowledge and instructions, work with artifacts and research mode, wire up a connector, and practice catching your own hallucinated citations. No book substitutes for that.
 
 # Examples of Exam Questions with Explanations
 

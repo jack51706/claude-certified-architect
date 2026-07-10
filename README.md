@@ -1,6 +1,6 @@
 # Claude Certified Architect — Foundations
 
-This repository contains study materials for the **Claude Certified Architect — Foundations** certification, plus a dedicated preparation part (PART V) for **Claude Certified Architect — Professional (CCAR-P)**.
+This repository contains study materials for the **Claude Certified Architect — Foundations** certification, plus preparation parts for the rest of the certification family: **Architect — Professional (CCAR-P)** in PART V, and blueprint/gap-map chapters for **Developer — Foundations (CCDV-F)** and **Associate — Foundations (CCAO-F)** in PART VI.
 
 ![alt text](image.png)
 

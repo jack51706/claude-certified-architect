@@ -250,5 +250,11 @@
     "def_zh": "查詢時從已索引語料檢索相關片段餵給模型:攝取 → 分塊 → 嵌入 → 索引 → 檢索 → (重排) → 生成。資料更新後答案變得自信但錯誤、而模型沒變,先懷疑檢索層。" },
   { "term": "Chunking", "zh": "分塊(chunking)", "tag": "Data",
     "def_en": "Splitting documents into retrievable units for RAG — a trade-off, not a constant: fixed-size + overlap for uniform prose; structure-aware for contracts/tables; small-to-big and contextual retrieval to balance precision against coherence.",
-    "def_zh": "把文件切成 RAG 可檢索的單元——是取捨,不是常數:均質散文用固定大小+重疊;合約/表格用結構感知;要平衡精準與連貫時用 small-to-big 與上下文化檢索。" }
+    "def_zh": "把文件切成 RAG 可檢索的單元——是取捨,不是常數:均質散文用固定大小+重疊;合約/表格用結構感知;要平衡精準與連貫時用 small-to-big 與上下文化檢索。" },
+  { "term": "CCDV-F (Developer — Foundations)", "zh": "CCDV-F(Developer — Foundations)", "tag": "Platform",
+    "def_en": "The Claude Certified Developer — Foundations exam (v1.0, July 2026): 53 MC/MR items, 120 min, pass 720/1000, $125, valid 12 months. Eight domains — Applications & Integration alone is 33.1%; Claude Code just 3.1%. See Chapter 32.",
+    "def_zh": "Claude Certified Developer — Foundations 考試(v1.0,2026 年 7 月):53 題單選/複選、120 分鐘、及格 720/1000、$125,效期 12 個月。八大領域——僅「應用與整合」就佔 33.1%;Claude Code 只有 3.1%。見第 32 章。" },
+  { "term": "CCAO-F (Associate — Foundations)", "zh": "CCAO-F(Associate — Foundations)", "tag": "Platform",
+    "def_en": "The Claude Certified Associate — Foundations exam (v1.0, July 2026): 60 MC/MR items, 120 min, pass 720/1000, $99, valid 12 months. Seven domains for practitioners using the Claude apps; Output Evaluation & Validation (21%) is the heaviest. See Chapter 33.",
+    "def_zh": "Claude Certified Associate — Foundations 考試(v1.0,2026 年 7 月):60 題單選/複選、120 分鐘、及格 720/1000、$99,效期 12 個月。七大領域,面向使用 Claude 應用程式的實務者;「輸出評估與驗證」(21%)權重最高。見第 33 章。" }
 ]
