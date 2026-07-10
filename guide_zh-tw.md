@@ -36,7 +36,7 @@
 | 猜題扣分 | 無(每一題都要作答!) |
 | 情境 | 8 個可能情境中選出 4 個(隨機選取) |
 
-> **認證藍圖:** Foundations 是入門級認證——Anthropic 已確認 2026 年稍晚將推出更多認證級別(銷售、開發者,以及進階架構師)。
+> **認證家族(2026 年 7 月):** 本指南對應 **Claude Certified Architect — Foundations**($125,全體 Claude Partner Network 成員皆可報考;CPN 會員資格免費)。另有三張認證已開放報名,報名管道為 Anthropic Partner Academy:**Associate — Foundations**($99),給在自身工作中使用 Claude 的客戶端與交付實務者(提示、評估輸出、工作流程整合、負責任使用);**Developer — Foundations**($125),給在 Claude 上建構並交付生產級應用與代理的工程師(自訂工具、MCP 伺服器、模型最佳化、安全);**Architect — Professional**($175),給主導企業級 Claude 部署的資深架構師(解決方案與整合架構、規模化最佳化、治理、利害關係人領導)。
 
 ---
 

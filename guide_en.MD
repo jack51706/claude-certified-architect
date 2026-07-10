@@ -36,7 +36,7 @@ The ideal candidate is a **solution architect** who designs and ships production
 | Guessing penalty | None (answer every question!) |
 | Scenarios | 4 out of 8 possible (randomly selected) |
 
-> **Certification roadmap:** Foundations is the entry credential — Anthropic has confirmed additional certification tiers (for sellers, developers, and an advanced architect level) arriving later in 2026.
+> **The certification family (July 2026):** this guide covers **Claude Certified Architect — Foundations** ($125, open to all Claude Partner Network members; CPN membership is free). Three sibling certifications are open for registration via the Anthropic Partner Academy: **Associate — Foundations** ($99) for client-facing and delivery practitioners who use Claude in their own work (prompting, evaluating output, workflow integration, responsible use); **Developer — Foundations** ($125) for engineers who build and ship production applications and agents on Claude (custom tools, MCP servers, model optimization, security); and **Architect — Professional** ($175) for experienced architects leading enterprise-scale deployments (solution and integration architecture, optimization at scale, governance, stakeholder leadership).
 
 ---
 
