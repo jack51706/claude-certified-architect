@@ -10871,6 +10871,8 @@ What this buys, structurally: **nothing to mint, rotate, or leak** — a capture
 
 **Pitfalls.** Tokens expire in minutes by design — refresh before TTL rather than caching one for the job's lifetime. Humans on laptops still use API keys; keep those scoped and low-privilege rather than pretending WIF covers them. Never log the exchanged token. And resist the "fallback static key just in case" — it silently reintroduces the exact standing secret WIF exists to eliminate.
 
+**Bounding the keys you still have.** For the static keys WIF doesn't replace — human developers, third-party tools that can't speak OIDC — you can now set an **expiration** when you create an API key or an Admin API key in the Console: a preset, a custom duration, or **Never**. Anthropic emails the creator before a key with a lifetime of at least 7 days expires, existing keys are unaffected, and the Admin API reports each key's **`expires_at`** so you can audit and sweep stale credentials programmatically. A self-expiring static key is not WIF, but it is strictly better than one that lives forever: make a bounded expiry the default at creation and reserve **Never** for the rare key you genuinely cannot rotate.
+
 ## 29.3 Governing MCP at Enterprise Scale
 
 An organization running agents against MCP has two distinct governance questions, and they have two distinct mechanisms:

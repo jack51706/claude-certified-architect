@@ -262,5 +262,8 @@
     "def_zh": "用於除錯提示快取落空的公開測試版 API 輔助:送出 cache-diagnosis-2026-04-07 beta 標頭與 diagnostics.previous_message_id(前一回合回應的 id),API 會回傳 cache_miss_reason,指出目前前綴與該回合在何處分岔。取代肉眼比對兩份算繪提示找無聲失效因子;純屬診斷——少了這個標頭,快取行為完全不變。" },
   { "term": "fallbackModel", "zh": "fallbackModel(後備模型)", "tag": "Claude Code",
     "def_en": "Claude Code setting that lists up to three models tried in order when the primary is overloaded or unavailable, so an unattended run degrades to the next tier instead of failing. Orthogonal to permission mode (which governs actions, not model availability); subagents and context compaction inherit the session's extended-thinking config, so a fallback keeps the reasoning budget you set.",
-    "def_zh": "Claude Code 的設定,列出最多三個模型,在主模型過載或不可用時依序嘗試,讓無人值守的運行降級到下一層級而非失敗。與權限模式正交(權限管動作,不管模型可用性);子代理與上下文壓縮會繼承工作階段的延伸思考設定,所以後備模型保留你設定的推理預算。" }
+    "def_zh": "Claude Code 的設定,列出最多三個模型,在主模型過載或不可用時依序嘗試,讓無人值守的運行降級到下一層級而非失敗。與權限模式正交(權限管動作,不管模型可用性);子代理與上下文壓縮會繼承工作階段的延伸思考設定,所以後備模型保留你設定的推理預算。" },
+  { "term": "API key expiration", "zh": "API key 過期", "tag": "API",
+    "def_en": "Console option to set an expiration (preset, custom duration, or Never) when creating an API key or Admin API key. Anthropic emails the creator before a key with a lifetime of at least 7 days expires; existing keys are unaffected; the Admin API reports each key's expires_at for programmatic audit. Credential hygiene for the static keys WIF doesn't replace — not a substitute for workload identity, but strictly better than a key that lives forever.",
+    "def_zh": "在 Console 建立 API key 或 Admin API key 時設定過期時間(預設、自訂時長或永不過期)的選項。對於效期至少 7 天的 key,Anthropic 會在過期前寄信通知建立者;既有 key 不受影響;Admin API 會回報每把 key 的 expires_at 供程式化稽核。這是為 WIF 無法取代的靜態 key 做的憑證衛生——不是工作負載身分的替代品,但嚴格勝過永遠存活的 key。" }
 ]
