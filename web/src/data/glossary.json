@@ -256,5 +256,8 @@
     "def_zh": "Claude Certified Developer — Foundations 考試(v1.0,2026 年 7 月):53 題單選/複選、120 分鐘、及格 720/1000、$125,效期 12 個月。八大領域——僅「應用與整合」就佔 33.1%;Claude Code 只有 3.1%。見第 32 章。" },
   { "term": "CCAO-F (Associate — Foundations)", "zh": "CCAO-F(Associate — Foundations)", "tag": "Platform",
     "def_en": "The Claude Certified Associate — Foundations exam (v1.0, July 2026): 60 MC/MR items, 120 min, pass 720/1000, $99, valid 12 months. Seven domains for practitioners using the Claude apps; Output Evaluation & Validation (21%) is the heaviest. See Chapter 33.",
-    "def_zh": "Claude Certified Associate — Foundations 考試(v1.0,2026 年 7 月):60 題單選/複選、120 分鐘、及格 720/1000、$99,效期 12 個月。七大領域,面向使用 Claude 應用程式的實務者;「輸出評估與驗證」(21%)權重最高。見第 33 章。" }
+    "def_zh": "Claude Certified Associate — Foundations 考試(v1.0,2026 年 7 月):60 題單選/複選、120 分鐘、及格 720/1000、$99,效期 12 個月。七大領域,面向使用 Claude 應用程式的實務者;「輸出評估與驗證」(21%)權重最高。見第 33 章。" },
+  { "term": "Cache diagnostics", "zh": "快取診斷", "tag": "Prompt",
+    "def_en": "Public-beta API aid for debugging prompt-cache misses: send the cache-diagnosis-2026-04-07 beta header and diagnostics.previous_message_id (the prior response's id), and the API returns a cache_miss_reason naming where the current prefix diverged from that turn. Replaces eyeballing two rendered prompts for a silent invalidator; a diagnostic only — caching behaviour is unchanged when the header is absent.",
+    "def_zh": "用於除錯提示快取落空的公開測試版 API 輔助:送出 cache-diagnosis-2026-04-07 beta 標頭與 diagnostics.previous_message_id(前一回合回應的 id),API 會回傳 cache_miss_reason,指出目前前綴與該回合在何處分岔。取代肉眼比對兩份算繪提示找無聲失效因子;純屬診斷——少了這個標頭,快取行為完全不變。" }
 ]

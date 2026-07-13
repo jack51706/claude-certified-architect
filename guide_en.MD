@@ -7586,6 +7586,8 @@ A broken cache fails *silently*: no error, just a bill that quietly stays at ful
 
 So you *can* flip `tool_choice` per request or toggle `thinking` without losing the expensive tools+system cache. The two changes to guard with your life are **tool-set edits** and **model switches** mid-conversation — both throw away the entire cache.
 
+**Cache diagnostics (public beta)** turns that manual prefix-diffing into an API-native answer. Add the `cache-diagnosis-2026-04-07` beta header and pass `diagnostics.previous_message_id` (the `id` of the prior turn's response) on a Messages request; the API replies with a `cache_miss_reason` that says **where** the current prompt's prefix diverged from that previous turn. Instead of eyeballing two rendered prompts to hunt the `datetime.now()` that poisoned the prefix, you are told which tier broke and why — the fast path from "`cache_read_input_tokens` is 0 *again*" to the actual byte that changed. Reach for it while debugging a cache that *should* hit but keeps missing; leave it off in steady-state production, where the `usage` counters above are all the signal you need. It is a diagnostic, not a runtime dependency — nothing about your caching behaviour changes when the header is absent.
+
 ## 18.5 Caching for Agents: The Stable Prefix
 
 An agent is the ideal caching workload because it has exactly the structure caching rewards: a **large, stable prefix** (a long system prompt plus a fixed tool catalog) followed by a growing conversation. The strategy:
@@ -15885,6 +15887,20 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 - D) Automate the whole report and remove the human pass entirely, saving the most time.
 
 **Why C:** A recurring deliverable deserves a stable, documented pipeline: standardized prompt templates with placeholders turn monthly rediscovery into reuse, make output consistent, and give you an asset to improve incrementally — that is where a day shrinks toward two hours. (A) optimizes typing speed while keeping the rediscovery cost. (B) collapses a multi-part document into one mega-prompt, making failures harder to localize than staged steps. (D) deletes the review that catches inconsistencies — efficiency gains that remove quality controls are regressions.
+
+---
+## Question 298 (Scenario: Structured Data Extraction)
+
+**Situation:** Your extraction service sends a 40-page policy document plus a large fixed system prompt as a cached prefix on every request, but `cache_read_input_tokens` is 0 on nearly every call and your bill reflects full-price input. The prefix *looks* identical across requests when you spot-check it, and you cannot find the invalidator by eye.
+
+**What is the most direct way to locate the divergence?**
+
+- A) Raise the `cache_control` TTL to 1 hour so the cache survives longer between requests.
+- B) Add a second `cache_control` breakpoint further down the prompt to widen the cached region.
+- C) Send the requests with the `cache-diagnosis-2026-04-07` beta header and `diagnostics.previous_message_id` set to the prior response, then read the returned `cache_miss_reason`. **[CORRECT]**
+- D) Switch to a cheaper model so the wasted full-price tokens cost less.
+
+**Why C:** The symptom — a prefix that *should* match but reads 0 cache tokens — is a silent invalidator, and cache diagnostics is purpose-built to name it: `diagnostics.previous_message_id` makes the API report `cache_miss_reason`, telling you which tier diverged and where, instead of diffing rendered prompts by hand. (A) a longer TTL cannot help a prefix that never matches in the first place. (B) more breakpoints cache more of a prefix that is already missing — it widens the miss, not fixes it. (D) a cheaper model hides the cost but leaves the byte-level divergence, and every silent invalidator behind it, untouched.
 
 ---
 # Practical Exercises
