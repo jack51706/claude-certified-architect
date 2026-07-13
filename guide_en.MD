@@ -10028,7 +10028,7 @@ flowchart TD
 
 **Mode 2 — Agent teams (a lead holds the plan).** A designated *lead* agent maintains a **shared task list**; worker agents claim items, do them, and report status — the lead coordinates against the *list*, not against every worker's raw transcript. Best for several semi-independent tracks that share state (e.g., front-end + back-end + tests for one feature). *Cost:* you must design the task-list protocol; coordination overhead is real.
 
-**Mode 3 — Dynamic workflows + `ultracode` (a script holds the plan).** Claude *writes a JavaScript orchestration script* that fans out **dozens to hundreds** of background subagents, with caps of **16 concurrent / 1,000 total**. Crucially, **only each worker's final answer returns to the main context** — intermediate reasoning stays in the worker. `/effort ultracode` turns on auto-orchestration so Claude reaches for this mode itself. Best for large, embarrassingly-parallel work (migrate 400 files, triage 1,000 findings). *Cost:* it's a program — bugs in the orchestration script are bugs in your run, and debugging 200 parallel workers is its own discipline.
+**Mode 3 — Dynamic workflows + `ultracode` (a script holds the plan).** Claude *writes a JavaScript orchestration script* that fans out **dozens to hundreds** of background subagents, with caps of **16 concurrent / 1,000 total**. Crucially, **only each worker's final answer returns to the main context** — intermediate reasoning stays in the worker. Subagents now run in the **background by default** — the lead session keeps working and is notified as each finishes rather than blocking on it — and a worker can **spawn its own subagents up to 5 levels deep**, with the runtime tracking and enforcing that depth so a runaway recursion can't fan out without bound. That nesting is what lets one top-level task decompose into a layered *tree* (survey → per-area workers → per-file workers) instead of one flat batch. `/effort ultracode` turns on auto-orchestration so Claude reaches for this mode itself. Best for large, embarrassingly-parallel work (migrate 400 files, triage 1,000 findings). *Cost:* it's a program — bugs in the orchestration script are bugs in your run, and debugging 200 parallel workers is its own discipline.
 
 **The exam-style discriminator.** Match the mode to *context economics*: if a sub-result must inform the next decision → subagents (Mode 1). If parallel tracks share evolving state → a team (Mode 2). If units are independent and you only need their *outputs* aggregated → a workflow (Mode 3). The classic mistake is running 300 independent file edits as turn-by-turn subagents and blowing the context window, when a workflow would have kept only 300 short results.
 
@@ -10105,6 +10105,8 @@ Unattended execution is where production diverges hardest from interactive use.
 `auto` is the meaningful 2026 addition: instead of all-or-nothing, a classifier judges each action's risk, so an unattended run can proceed on safe steps and still hold the line on dangerous ones. **The pitfall is reaching for `bypassPermissions` in CI for convenience** — that removes every guardrail; `auto` or `dontAsk` plus deterministic hooks (§26.5) is the defensible posture.
 
 **Scheduling and remote.** Cloud **routines** run Claude Code on a **cron schedule** (nightly triage, weekly dependency checks); **channels** push external events into a running session (a CI failure, a new issue) so an agent reacts to the outside world; and **remote control** lets you steer or check a session from another device. Together they extend the engine from "I'm typing now" to "it runs on a schedule and responds to events."
+
+**Resilience: fallback models.** An unattended run is only as available as its model. The **`fallbackModel`** setting configures **up to three** models tried **in order** when the primary is overloaded or unavailable, so a nightly job degrades to the next tier instead of failing outright — the resilient-model-chain analogue of the retry logic you already wrap around transient tool errors. Subagents and context compaction now also **inherit the session's extended-thinking configuration**, so a fallback model or a spawned worker keeps the reasoning budget you set rather than silently resetting it. Pair a fallback chain with `auto`/`dontAsk` permissions and deterministic hooks and an unattended run survives *both* a risky action and a busy primary model — the two failure modes that most often kill a scheduled job.
 
 ## 26.7 End-to-End Case Study: Autonomous Monorepo Dependency Migration
 
@@ -15901,6 +15903,20 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 - D) Switch to a cheaper model so the wasted full-price tokens cost less.
 
 **Why C:** The symptom — a prefix that *should* match but reads 0 cache tokens — is a silent invalidator, and cache diagnostics is purpose-built to name it: `diagnostics.previous_message_id` makes the API report `cache_miss_reason`, telling you which tier diverged and where, instead of diffing rendered prompts by hand. (A) a longer TTL cannot help a prefix that never matches in the first place. (B) more breakpoints cache more of a prefix that is already missing — it widens the miss, not fixes it. (D) a cheaper model hides the cost but leaves the byte-level divergence, and every silent invalidator behind it, untouched.
+
+---
+## Question 299 (Scenario: Claude Code for Continuous Integration)
+
+**Situation:** A nightly, unattended Claude Code job migrates code across a large monorepo and opens a PR. Twice this month the entire run failed at 2 a.m. because the primary model was temporarily overloaded, and no human was awake to retry. You want the job to keep running through a transient model outage without lowering your permission guardrails.
+
+**What is the right change?**
+
+- A) Switch the job to `bypassPermissions` so it never stops for anything, including model errors.
+- B) Configure `fallbackModel` with an ordered list of up to three models so the run degrades to the next tier when the primary is overloaded. **[CORRECT]**
+- C) Wrap the whole job in a shell loop that re-invokes `claude -p` from scratch every time it exits non-zero.
+- D) Move the job earlier in the evening when the API is less busy.
+
+**Why B:** `fallbackModel` is built for exactly this — an ordered chain of alternates tried when the primary is overloaded or unavailable, so the run continues on a lower tier instead of dying, and it touches nothing about permissions, so your guardrails stay intact. (A) confuses two orthogonal axes: permission mode governs *which actions* run unattended, not model availability, and dropping to `bypassPermissions` removes safety without fixing outages. (C) a blind restart loop re-does completed work and can stack duplicate PRs; it has no notion of "the model was busy." (D) guessing at quiet hours is not resilience — the next busy night fails the same way.
 
 ---
 # Practical Exercises
