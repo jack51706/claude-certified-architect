@@ -10946,6 +10946,24 @@ The nightly job starts on a schedule; the runner authenticates via **WIF** (no s
 | Catalog vs authorization | `managed-mcp.json` pins **which** servers exist; EMA decides **who** may use them — group-based, centrally revocable, audited (§29.3). |
 | Secrets | Egress injection: the context window never holds a credential, so prompt injection can't steal what isn't there (§29.4). |
 | The principle | Identity, authorization, and secrecy are **configuration, not prompt text** — the same law as deny rules and hooks (Ch 13, §26.6). |
+| Member governance | Claude Enterprise manages members, invites, groups, and roles through the Admin API (beta); it assigns only `user`/`managed`, custom roles are read-only, and SSO/SCIM-managed writes return 400 — the IdP stays the source of truth (§29.7). |
+
+## 29.7 Governing Human Members: the Enterprise Admin API
+
+§29.2 answered *who a workload is*; this section answers *who a person is* — the other half of enterprise identity. **Claude Enterprise** (claude.ai) organizations can now manage their people through the same **Admin API** (`/v1/organizations/…`) that Claude Console uses for workspaces and keys — in beta, and enabled for every Enterprise organization. Five resources sit on one surface:
+
+- **Members and invites** — list members (or look one up by email), change a member's role, remove a member; send, track, and withdraw invites. **No beta header.**
+- **Groups and group members** — create, rename, delete groups and manage their membership. Groups bind members to custom roles — the `rbac` in the paths, role-based access control.
+- **Custom roles** — **read-only**: the API catalogs each role and the permissions it grants, but roles are authored in claude.ai settings, not here.
+
+Group and custom-role calls require the `anthropic-beta: ce-user-management-2026-07-13` header (member and invite calls don't). Scopes are granular — `read:members`/`write:members`, `read:rbac_groups`/`write:rbac_groups` — and a single **`read:org_audit`** key can call *every* `GET` on the surface: exactly the least-privilege key a security-audit integration should carry.
+
+**The load-bearing constraints — and this is the exam-shaped part:**
+
+- **The API assigns only `user` and `managed` roles.** The administrative roles (`owner`, `membership_admin`, `primary_owner`) are set in claude.ai settings, and their holders cannot be modified or removed through the API — a service account cannot promote itself.
+- **The identity provider wins.** When the org provisions people through SSO/SCIM, the API *reads* everything but *writes nothing the IdP owns*: invite creation, role changes, and member removals return **400** for JIT/SCIM-managed identities. The fix is to deprovision in Okta/Entra, not to fight the API — the same EMA principle from §29.3 (identity is the source of truth), now applied to human membership. SCIM-provisioned groups are likewise read-only.
+
+Architecturally this closes the loop WIF opened: workloads authenticate as short-lived service accounts (§29.2), humans are provisioned and offboarded through the IdP, and the Admin API gives you a *programmatic, auditable* view of both — an offboarding job that removes a departing member (or, under SCIM, confirms the IdP already did) and an audit job that walks every group's membership against the HR roster. **The pitfall is treating the API as the source of truth when your IdP is:** on an SSO/SCIM org, build the automation *in* the identity provider and use the `read:org_audit` key to verify, not to mutate.
 
 > **Beyond the foundations exam.** The exam stops at the agent's edge; production starts there. Choose the surface by parity, make every workload prove who it is, govern MCP through identity, and keep secrets out of the model's world entirely — and the same agent you built in Parts I–III becomes something an enterprise can actually run.
 
@@ -15919,6 +15937,21 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 - D) Move the job earlier in the evening when the API is less busy.
 
 **Why B:** `fallbackModel` is built for exactly this — an ordered chain of alternates tried when the primary is overloaded or unavailable, so the run continues on a lower tier instead of dying, and it touches nothing about permissions, so your guardrails stay intact. (A) confuses two orthogonal axes: permission mode governs *which actions* run unattended, not model availability, and dropping to `bypassPermissions` removes safety without fixing outages. (C) a blind restart loop re-does completed work and can stack duplicate PRs; it has no notion of "the model was busy." (D) guessing at quiet hours is not resilience — the next busy night fails the same way.
+
+---
+
+## Question 300 (Scenario: Developer Productivity Tools)
+
+**Situation:** Your platform team runs a **Claude Enterprise** (claude.ai) organization whose members are provisioned from Okta via SCIM. You're asked to build an automated offboarding tool: when HR marks someone as departed, their Claude access must be revoked and the removal must be auditable. You reach for the Enterprise user-management **Admin API** and plan to have the tool call `DELETE /v1/organizations/users/{id}`.
+
+**What is the correct architecture?**
+
+- A) Make `DELETE /v1/organizations/users/{id}` the source of truth for offboarding; the Admin API removes SCIM-provisioned members directly.
+- B) Deprovision the user in Okta, which owns membership under SCIM; the Admin API's `DELETE` returns 400 for SCIM-managed members, so use the API only to read/verify — a `read:org_audit` key can call every `GET` for the audit trail. **[CORRECT]**
+- C) Have the tool `POST /v1/organizations/users/{id}` to grant its service account the `primary_owner` role so it can force-remove anyone.
+- D) Skip member management and just rotate the organization's API keys to lock the person out.
+
+**Why B:** On an SSO/SCIM organization the identity provider is the source of truth for membership, so the Admin API *reads* everything but *writes nothing the IdP owns* — invite creation, role changes, and member removals return 400 for SCIM-managed identities. The correct offboarding path is to deprovision in Okta and use the API's read side (ideally a least-privilege `read:org_audit` key) to confirm and audit. (A) inverts the ownership: the `DELETE` fails with 400 there. (C) the API assigns only `user` and `managed` roles; administrative roles like `primary_owner` are set in claude.ai settings and can't be granted through the API. (D) API keys are workload credentials, not human membership — rotating them neither removes the person nor touches their claude.ai access. This is the human-identity counterpart to WIF (§29.2): govern people through the IdP, and let the Admin API give you the programmatic, auditable view (§29.7).
 
 ---
 # Practical Exercises
