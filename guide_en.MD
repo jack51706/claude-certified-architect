@@ -7198,7 +7198,7 @@ The crash costs **one file of rework at most** (file 42, which had not been chec
 
 # PART IV: Complete Claude Platform Reference (Beyond the Foundations Exam)
 
-> **Scope note:** PART IV is a reference to the **full current Claude platform** (2026) for comprehensive mastery — the API, tools, SDKs, Managed Agents, MCP, and modern Claude Code. Most of it is **beyond the official Foundations syllabus** (some is even on the exam's explicit out-of-scope list); it is here so you can *learn all of Claude*, not only pass the exam. Each chapter cites official docs. Current models referenced: flagship **Claude Fable 5** (`claude-fable-5`); default Opus **Claude Opus 4.8** (`claude-opus-4-8`); plus **Sonnet 5** and **Haiku 4.5**.
+> **Scope note:** PART IV is a reference to the **full current Claude platform** (2026) for comprehensive mastery — the API, tools, SDKs, Managed Agents, MCP, and modern Claude Code. Most of it is **beyond the official Foundations syllabus** (some is even on the exam's explicit out-of-scope list); it is here so you can *learn all of Claude*, not only pass the exam. Each chapter cites official docs. Current models referenced: flagship **Claude Fable 5** (`claude-fable-5`); default Opus **Claude Opus 5** (`claude-opus-5`, launched 2026-07-24, superseding Opus 4.8); plus **Sonnet 5** and **Haiku 4.5**.
 
 ---
 
@@ -7230,7 +7230,7 @@ There are two generations of the thinking API, and mixing them is the most commo
 ```mermaid
 flowchart TD
     A[Request arrives] --> B{Model family?}
-    B -->|Opus 4.7 / 4.8 / Fable 5 / Sonnet 5| C[thinking type adaptive<br/>budget_tokens rejected with 400]
+    B -->|Opus 5 / 4.8 / 4.7 / Fable 5 / Sonnet 5| C[thinking type adaptive<br/>budget_tokens rejected with 400]
     B -->|Opus 4.6 / Sonnet 4.6| D[thinking type adaptive<br/>budget_tokens deprecated but works]
     B -->|Pre-4.6 models| E[thinking type enabled<br/>budget_tokens less than max_tokens]
     C --> F[Depth controlled by effort]
@@ -7240,7 +7240,9 @@ flowchart TD
 
 **Why this matters in production:** a fixed budget over-thinks easy requests and under-thinks hard ones — it cannot tell them apart. Adaptive thinking spends nothing on a trivial lookup and ramps up for a genuine multi-step problem, which is exactly the spend profile an agent wants across a heterogeneous workload.
 
-**The hard pitfall.** On Opus 4.7, Opus 4.8, Fable 5, and Sonnet 5, `thinking: {type: "enabled", budget_tokens: N}` is not merely discouraged — it returns a **400 error**. So do the sampling parameters `temperature`, `top_p`, and `top_k`. Code carried forward from an older model will fail outright, not degrade quietly. On Opus 4.6 and Sonnet 4.6 the budget still *works* but is deprecated (a transitional escape hatch only). On Fable 5 there is one extra twist: thinking is *always on*, so even an explicit `thinking: {type: "disabled"}` is a 400 — you omit the parameter entirely.
+**The hard pitfall.** On Opus 5, Opus 4.8, Opus 4.7, Fable 5, and Sonnet 5, `thinking: {type: "enabled", budget_tokens: N}` is not merely discouraged — it returns a **400 error**. So do the sampling parameters `temperature`, `top_p`, and `top_k`. Code carried forward from an older model will fail outright, not degrade quietly. On Opus 4.6 and Sonnet 4.6 the budget still *works* but is deprecated (a transitional escape hatch only). On Fable 5 there is one extra twist: thinking is *always on*, so even an explicit `thinking: {type: "disabled"}` is a 400 — you omit the parameter entirely.
+
+**Opus 5 raises the stakes on this.** On **Claude Opus 5** thinking is **on by default** (the same requests that ran without thinking on Opus 4.8 now think), so revisit `max_tokens` — it caps thinking *plus* response together. You *can* still disable thinking, but only at effort **`high` or below**: `thinking: {type: "disabled"}` with effort `xhigh` or `max` returns a **400 error** — a breaking change from Opus 4.8, where disabling thinking was independent of effort. To migrate code that disabled thinking at high effort, either keep thinking off and drop effort to `high`, or keep the effort and remove the `thinking` field. Anthropic warns that Opus 5 with thinking *disabled* may occasionally emit a tool call as plain text or leak internal XML tags — prefer keeping thinking on and controlling cost with a lower effort level instead. Source: [What's new in Claude Opus 5](https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5#behavior-changes).
 
 ## 17.2 The effort ladder
 
@@ -7522,7 +7524,7 @@ A breakpoint can sit on any content block — a `system` text block, a tool defi
 **Constraints that bite in practice:**
 
 - **Maximum 4 breakpoints per request.** Spend them on stability boundaries (see §18.5), not arbitrarily.
-- **Minimum cacheable prefix is model-dependent.** On Opus 4.8 / 4.7 / 4.6 it is **4096 tokens**; on Sonnet 4.6 it is 2048; on Sonnet 4.5 it is 1024. A prefix shorter than the minimum **silently won't cache** — no error, just `cache_creation_input_tokens: 0`. A 3K-token prompt caches on Sonnet 4.5 but not on Opus 4.8.
+- **Minimum cacheable prefix is model-dependent.** On Opus 4.8 / 4.7 / 4.6 it is **4096 tokens**; on Sonnet 4.6 it is 2048; on Sonnet 4.5 it is 1024. **Claude Opus 5 lowers it to 512 tokens** — prompts too short to cache on Opus 4.8 can now create cache entries with no code change ([What's new in Opus 5](https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5)). A prefix shorter than the minimum **silently won't cache** — no error, just `cache_creation_input_tokens: 0`. A 3K-token prompt caches on Sonnet 4.5 but not on Opus 4.8.
 - **20-block lookback window.** Each breakpoint walks backward *at most 20 content blocks* to find a prior cache entry. A single turn that appends more than 20 blocks — common in agentic loops with many `tool_use`/`tool_result` pairs — pushes the previous cache out of reach, and the next request silently misses. Fix: place an intermediate breakpoint roughly every 15 blocks in long turns.
 
 **Top-level auto-caching.** If you don't need fine-grained placement, pass `cache_control` at the top level of `messages.create()` and the API caches the last cacheable block automatically. This is the simplest option for a single large `system` prompt; reach for explicit per-block markers only when you need to cache several distinct spans (e.g. tools, then a session prefix, then a turn).
@@ -10540,13 +10542,15 @@ Four model families are in active service. They differ on three axes that matter
 | Model | API ID | Context | Max output | Input / Output ($/MTok) | Use for |
 |---|---|---|---|---|---|
 | **Claude Fable 5** | `claude-fable-5` | 1M | 128K | $10 / $50 | The hardest reasoning & long-horizon agentic work (flagship) |
-| **Claude Opus 4.8** | `claude-opus-4-8` | 1M | 128K | $5 / $25 | Default for complex/agentic tasks |
+| **Claude Opus 5** | `claude-opus-5` | 1M | 128K | $5 / $25 | Default for complex agentic coding & enterprise work; frontier intelligence at half Fable 5's cost |
 | **Claude Sonnet 5** | `claude-sonnet-5` | 1M | 128K | $3 / $15 | Best speed/intelligence balance; high-volume |
 | **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | Fast, cheap, simple/latency-critical tasks |
 
 > **Sonnet 5 is the current balanced tier**, succeeding Sonnet 4.6 (now a legacy model that is still callable via `claude-sonnet-4-6`). Sonnet 5 carries **introductory pricing of $2 / $10 per MTok through 2026-08-31**, after which standard **$3 / $15** applies. On Claude Sonnet 5 the `effort` parameter defaults to `high` on the Claude API and Claude Code. Source: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview), [Pricing](https://platform.claude.com/docs/en/about-claude/pricing).
 >
 > **Migrating from Sonnet 4.6 to Sonnet 5** — three API behaviors changed: [adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) is now **on by default**; manual extended thinking (`thinking: {type: "enabled", budget_tokens: N}`) is **removed and returns a 400 error**; and setting the sampling parameters `temperature` / `top_p` / `top_k` to non-default values **returns a 400 error**. [Priority Tier](https://platform.claude.com/docs/en/api/service-tiers) is **not available** on Sonnet 5 (otherwise it carries the same tools and platform features as Sonnet 4.6, with a 1M context window and 128K max output). Sonnet 5 also uses a **new tokenizer that produces roughly 30% more tokens for the same text**, so re-measure prompt size and cost with the [token counting API](https://platform.claude.com/docs/en/build-with-claude/token-counting) (`model="claude-sonnet-5"`) instead of reusing Sonnet 4.6 estimates. Source: [What's new in Claude Sonnet 5](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5).
+>
+> **Claude Opus 5 (launched 2026-07-24) is the new default Opus** — a step-change over Opus 4.8 at identical **$5 / $25** pricing, with a 1M-token context window (default *and* maximum), 128K max output, and **thinking on by default** (the model decides depth per turn; `effort` is the control). Anthropic's own guidance is to *start at Opus 5* for complex agentic coding and enterprise work, and reserve **Fable 5** for the highest-capability slice. Opus 4.8 remains callable (`claude-opus-4-8`) but is now a **legacy** model. Two behavior changes bite on migration: thinking is on by default (revisit `max_tokens`, which now caps thinking *plus* response together), and **disabling thinking is allowed only at effort `high` or below — `thinking: {type:"disabled"}` with `xhigh` or `max` returns a 400 error** (a breaking change from Opus 4.8, where the two were independent). Opus 5 also lowers the **minimum cacheable prefix to 512 tokens** and adds **mid-conversation tool changes** (beta header `mid-conversation-tool-changes-2026-07-01`, also on Fable 5 / Opus 4.8) and a **`"default"` server-side fallback mode** (`server-side-fallback-2026-07-01`). Source: [What's new in Claude Opus 5](https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5), [Platform release notes — July 24, 2026](https://platform.claude.com/docs/en/release-notes/api).
 
 Read this as a ladder, not a menu. Each rung roughly doubles price for a step up in capability, so the engineering question is never "what is the best model" — it is "what is the **cheapest** rung that clears this task's bar with margin to spare."
 
@@ -10554,7 +10558,7 @@ Read this as a ladder, not a menu. Each rung roughly doubles price for a step up
 
 - **Haiku 4.5** — the workhorse for high-volume, well-specified, latency-sensitive work: classification, extraction, routing, formatting, and *cheap subagents* in a larger system. Note the smaller envelope — 200K context, 64K output — which is plenty for these jobs but rules it out for whole-repository reasoning.
 - **Sonnet 5** — the default for production at scale. It carries the same 1M-context / 128K-output envelope as the flagships at a fraction of the price, which is why most user-facing agents and high-throughput pipelines should *start* here, not at Opus.
-- **Opus 4.8** — the flagship Opus, and the right default when the task is genuinely complex or agentic: multi-step planning, hard code, long-horizon autonomous loops, nuanced judgment. You pay ~1.7× Sonnet on output; you buy reliability on tasks Sonnet would only *sometimes* get right.
+- **Opus 5** — the flagship Opus, and the right default when the task is genuinely complex or agentic: multi-step planning, hard code, long-horizon autonomous loops, nuanced judgment. Thinking is on by default and **effort matters more here than on any prior Opus** — start at `high` and tune per route. You pay ~1.7× Sonnet on output; you buy frontier reliability at half Fable 5's price on tasks Sonnet would only *sometimes* get right.
 - **Fable 5** — the absolute ceiling, for the hardest reasoning and longest-horizon work. At $10/$50 it is twice Opus on output, so reserve it for the small slice of tasks where Opus measurably under-delivers; using it as a default is the single most common way to burn budget for no gain.
 
 **Why "intelligence per dollar" beats "most intelligent."** A model that is 10% more accurate but 2× the cost is a *bad* trade for a task the cheaper tier already passes at 99%; it is an *excellent* trade for a task the cheaper tier fails at 60%. The whole chapter is about locating that crossover for each workload rather than guessing.
@@ -10577,7 +10581,7 @@ flowchart TD
     C -->|no| E[Sonnet 5<br/>balanced default]
     B -->|yes| F{Does Sonnet pass<br/>your eval set?}
     F -->|yes| E
-    F -->|no| G[Opus 4.8<br/>flagship default]
+    F -->|no| G[Opus 5<br/>flagship default]
     G --> H{Still failing on the<br/>hardest cases?}
     H -->|yes| I[Fable 5<br/>absolute ceiling]
     H -->|no| G
@@ -10605,7 +10609,7 @@ flowchart TD
     U[User request] --> R[Router<br/>Haiku 4.5 classifier]
     R -->|simple FAQ| H[Haiku 4.5<br/>answer directly]
     R -->|standard task| S[Sonnet 5<br/>handle end to end]
-    R -->|complex or high stakes| O[Opus 4.8<br/>deep reasoning]
+    R -->|complex or high stakes| O[Opus 5<br/>deep reasoning]
     H --> Z[Response]
     S --> Z
     O --> Z
@@ -10616,11 +10620,11 @@ The router's job is *classification, not solving* — so it must be cheap and fa
 
 ### Pattern B — Tiered multi-agent: strong coordinator, cheap subagents
 
-This builds directly on the hub-and-spoke topology from Chapter 3, but assigns a *model per role*. The coordinator does the hard, irreversible reasoning — decomposition, validation, final synthesis — so it runs **Opus 4.8**. The subagents do narrow, well-specified work (fetch a page, extract fields, summarize one document), so they run **Haiku 4.5**. You concentrate spend where judgment lives and economize everywhere else.
+This builds directly on the hub-and-spoke topology from Chapter 3, but assigns a *model per role*. The coordinator does the hard, irreversible reasoning — decomposition, validation, final synthesis — so it runs **Opus 5**. The subagents do narrow, well-specified work (fetch a page, extract fields, summarize one document), so they run **Haiku 4.5**. You concentrate spend where judgment lives and economize everywhere else.
 
 ```mermaid
 flowchart TD
-    U[User request] --> C[Coordinator<br/>Opus 4.8 — plan and validate]
+    U[User request] --> C[Coordinator<br/>Opus 5 — plan and validate]
     C -->|Task: fetch| S1[Subagent<br/>Haiku 4.5]
     C -->|Task: extract| S2[Subagent<br/>Haiku 4.5]
     C -->|Task: summarize| S3[Subagent<br/>Haiku 4.5]
@@ -15954,6 +15958,21 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 **Why B:** On an SSO/SCIM organization the identity provider is the source of truth for membership, so the Admin API *reads* everything but *writes nothing the IdP owns* — invite creation, role changes, and member removals return 400 for SCIM-managed identities. The correct offboarding path is to deprovision in Okta and use the API's read side (ideally a least-privilege `read:org_audit` key) to confirm and audit. (A) inverts the ownership: the `DELETE` fails with 400 there. (C) the API assigns only `user` and `managed` roles; administrative roles like `primary_owner` are set in claude.ai settings and can't be granted through the API. (D) API keys are workload credentials, not human membership — rotating them neither removes the person nor touches their claude.ai access. This is the human-identity counterpart to WIF (§29.2): govern people through the IdP, and let the Admin API give you the programmatic, auditable view (§29.7).
 
 ---
+
+## Question 301 (Scenario: Agentic AI Tools)
+
+**Situation:** You're migrating a production agentic tool from `claude-opus-4-8` to `claude-opus-5`. The old code ran at effort `xhigh` with `thinking: {"type": "disabled"}` to hold latency down, and set `max_tokens: 8000`. After changing only the model ID, every request now fails with a 400 error.
+
+**Which change correctly migrates the tool to Claude Opus 5?**
+
+- A) Add `budget_tokens` to the `thinking` block so the model has an explicit reasoning budget at `xhigh`.
+- B) Keep thinking disabled but drop the effort to `high` (or below), or keep `xhigh` and remove the `thinking` field entirely — on Opus 5, `thinking: {"type": "disabled"}` is allowed only at effort `high` or lower. **[CORRECT]**
+- C) Lower `max_tokens` to 4000 so the response fits without thinking.
+- D) Set `temperature: 0` to make the disabled-thinking output deterministic.
+
+**Why B:** On Claude Opus 5 thinking is on by default, and disabling it is permitted only when effort is `high` or below; pairing `thinking: {"type": "disabled"}` with `xhigh` or `max` returns a 400 — a breaking change from Opus 4.8, where the two axes were independent. The fix is to reconcile them: keep thinking off and lower effort to `high`, or keep the high effort and let thinking run (drop the `thinking` field). Because thinking is now on by default, `max_tokens` caps thinking *plus* response, so revisit the old 8000 value while you're here. (A) `budget_tokens` is rejected with a 400 on every current Opus/Fable/Sonnet-5-tier model — manual budgets are gone. (C) shrinking `max_tokens` doesn't touch the illegal effort/thinking combination that raises the 400. (D) a non-default `temperature` is itself a 400 on these models and has nothing to do with the error.
+
+---
 # Practical Exercises
 
 Thirteen hands-on labs, organized as one track per certification. Reading builds recognition; only building builds the judgment the exams test. Each lab states its **time budget**, the **domains** it exercises, concrete **build steps**, and — the part that makes it a lab rather than a suggestion — **"Done when" acceptance criteria**: don't move on until every box holds. Do your target certification's track in order; Track A is the foundation for everything else. All labs run on an ordinary API key or Claude Code install; none needs special infrastructure. Reference solutions for every lab live in the next section — attempt first, then compare.
@@ -16841,15 +16860,17 @@ All current models share a 1M-token context window except Haiku. Prices are USD 
 |---|---|---|---|---|---|---|
 | Claude Fable 5 | `claude-fable-5` | 1M | 128K | $10 | $50 | Most capable widely-released model; hardest reasoning + long-horizon agentic work. Thinking always on; safety classifiers may refuse. |
 | Claude Mythos 5 | `claude-mythos-5` | 1M | 128K | $10 | $50 | Same as Fable 5 with dual-use safeguards lifted for approved organizations — Project Glasswing partners (cyber) plus a trusted-access program for biology; a systematic application route is planned. |
-| Claude Opus 4.8 | `claude-opus-4-8` | 1M | 128K | $5 | $25 | Flagship Opus — default for most demanding work; state-of-the-art autonomous agents, knowledge work, memory. |
-| Claude Opus 4.7 | `claude-opus-4-7` | 1M | 128K | $5 | $25 | Previous-gen Opus; strong agentic + vision + memory. |
+| Claude Opus 5 | `claude-opus-5` | 1M | 128K | $5 | $25 | Default Opus (launched 2026-07-24) — complex agentic coding & enterprise work; thinking on by default; frontier intelligence at half Fable 5's cost. |
+| Claude Opus 4.8 | `claude-opus-4-8` | 1M | 128K | $5 | $25 | Previous-gen Opus (now legacy, still callable); state-of-the-art autonomous agents, knowledge work, memory. |
+| Claude Opus 4.7 | `claude-opus-4-7` | 1M | 128K | $5 | $25 | Older Opus; strong agentic + vision + memory. |
 | Claude Opus 4.6 | `claude-opus-4-6` | 1M | 128K | $5 | $25 | Older Opus; adaptive thinking, 128K output. |
 | Claude Sonnet 5 | `claude-sonnet-5` | 1M | 128K | $3 | $15 | Best speed/intelligence balance for high-volume production. Introductory $2 / $10 through 2026-08-31. |
 | Claude Haiku 4.5 | `claude-haiku-4-5` | 200K | 64K | $1 | $5 | Fastest, cheapest; simple/latency-sensitive tasks and cheap subagents. |
 
 - **Use exact IDs, never date-suffixed variants** (e.g. `claude-opus-4-8`, not `claude-opus-4-8-20xxxxxx`). Source: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview), [Pricing](https://platform.claude.com/docs/en/pricing).
 - **Live discovery:** the Models API returns context window (`max_input_tokens`), output cap (`max_tokens`), and a `capabilities` tree per model — `GET /v1/models/{id}`.
-- **Thinking & effort differ by tier:** Fable 5 / Opus 4.8 / 4.7 reject `budget_tokens` — use `thinking: {type:"adaptive"}` + `output_config.effort` (`low`→`max`, plus `xhigh` on 4.7/4.8). Legacy models still use `budget_tokens`.
+- **Thinking & effort differ by tier:** Opus 5 / Fable 5 / Opus 4.8 / 4.7 reject `budget_tokens` — use `thinking: {type:"adaptive"}` + `output_config.effort` (`low`→`max`). Legacy models still use `budget_tokens`.
+- **Opus 5 specifics (launched 2026-07-24):** thinking is **on by default**; disabling it (`thinking:{type:"disabled"}`) is allowed **only at effort `high` or below** — `xhigh`/`max` return **400**. Minimum cacheable prefix drops to **512 tokens**; **mid-conversation tool changes** (`mid-conversation-tool-changes-2026-07-01`) and a **`"default"` server-side fallback mode** (`server-side-fallback-2026-07-01`) arrive with the launch. Same **$5 / $25** as Opus 4.8, which stays callable as a legacy model. Source: [What's new in Opus 5](https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5).
 - **Sonnet 5 migration specifics:** Sonnet 5 ships on the newer tokenizer (Opus 4.7+ / Fable 5 lineage) — the same text yields **~30% more tokens** than pre-4.7 models, so re-measure with `count_tokens` before estimating cost or fit. Adaptive thinking is on by default; non-default `temperature` / `top_p` / `top_k` and manual `budget_tokens` thinking both return **400**; and **Priority Tier** is not offered on Sonnet 5. Source: [Platform release notes — June 30, 2026](https://platform.claude.com/docs/en/release-notes/api).
 
 ---

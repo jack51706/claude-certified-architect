@@ -7198,7 +7198,7 @@ sequenceDiagram
 
 # 第四部分:Claude 平台完整參考(超出基礎考綱)
 
-> **範圍說明:** 第四部分是 **2026 年 Claude 平台完整功能** 的參考 —— API、工具、SDK、Managed Agents、MCP 與現代 Claude Code,供你**完整掌握 Claude**,而非只為通過考試。其中**大多超出官方 Foundations 考綱**(部分甚至在考試明列的範圍外清單上)。每章都附官方文件。引用的現役模型:旗艦 **Claude Fable 5**(`claude-fable-5`);預設 Opus **Claude Opus 4.8**(`claude-opus-4-8`);以及 **Sonnet 5**、**Haiku 4.5**。
+> **範圍說明:** 第四部分是 **2026 年 Claude 平台完整功能** 的參考 —— API、工具、SDK、Managed Agents、MCP 與現代 Claude Code,供你**完整掌握 Claude**,而非只為通過考試。其中**大多超出官方 Foundations 考綱**(部分甚至在考試明列的範圍外清單上)。每章都附官方文件。引用的現役模型:旗艦 **Claude Fable 5**(`claude-fable-5`);預設 Opus **Claude Opus 5**(`claude-opus-5`,2026-07-24 發布,接替 Opus 4.8);以及 **Sonnet 5**、**Haiku 4.5**。
 
 ---
 
@@ -7230,7 +7230,7 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     A[請求進來] --> B{模型家族?}
-    B -->|Opus 4.7 / 4.8 / Fable 5 / Sonnet 5| C[thinking type adaptive<br/>budget_tokens 會被回傳 400]
+    B -->|Opus 5 / 4.8 / 4.7 / Fable 5 / Sonnet 5| C[thinking type adaptive<br/>budget_tokens 會被回傳 400]
     B -->|Opus 4.6 / Sonnet 4.6| D[thinking type adaptive<br/>budget_tokens 已棄用但仍可用]
     B -->|4.6 之前的模型| E[thinking type enabled<br/>budget_tokens 須小於 max_tokens]
     C --> F[深度由 effort 控制]
@@ -7240,7 +7240,9 @@ flowchart TD
 
 **為何這在生產上很重要:** 固定預算會在簡單請求上想太多、在困難請求上想太少 —— 它無法分辨兩者。自適應思考在瑣碎查詢上不花一分力,遇到真正的多步驟問題才加碼,而這正是代理在異質工作負載上所要的花費分布。
 
-**硬性陷阱。** 在 Opus 4.7、Opus 4.8、Fable 5 與 Sonnet 5 上,`thinking: {type: "enabled", budget_tokens: N}` 不只是不被建議 —— 它會回傳 **400 錯誤**。取樣參數 `temperature`、`top_p`、`top_k` 同樣如此。從較舊模型沿用過來的程式碼會直接失敗,而非悄悄降級。在 Opus 4.6 與 Sonnet 4.6 上,預算仍*可用*但已棄用(僅作為過渡的逃生口)。Fable 5 還多一個轉折:思考*永遠開啟*,所以連明確的 `thinking: {type: "disabled"}` 也是 400 —— 你得完全省略這個參數。
+**硬性陷阱。** 在 Opus 5、Opus 4.8、Opus 4.7、Fable 5 與 Sonnet 5 上,`thinking: {type: "enabled", budget_tokens: N}` 不只是不被建議 —— 它會回傳 **400 錯誤**。取樣參數 `temperature`、`top_p`、`top_k` 同樣如此。從較舊模型沿用過來的程式碼會直接失敗,而非悄悄降級。在 Opus 4.6 與 Sonnet 4.6 上,預算仍*可用*但已棄用(僅作為過渡的逃生口)。Fable 5 還多一個轉折:思考*永遠開啟*,所以連明確的 `thinking: {type: "disabled"}` 也是 400 —— 你得完全省略這個參數。
+
+**Opus 5 把賭注抬得更高。** 在 **Claude Opus 5** 上思考**預設開啟**(在 Opus 4.8 上不思考就跑的同一批請求,現在會思考),所以請重新檢視 `max_tokens` —— 它同時涵蓋思考*加上*回應。你*仍可*停用思考,但只能在 effort **`high` 或以下**:`thinking: {type: "disabled"}` 搭配 effort `xhigh` 或 `max` 會回傳 **400 錯誤** —— 相對 Opus 4.8 是破壞性變更,當時停用思考與 effort 互不相干。要遷移在高 effort 停用思考的程式碼,要嘛讓思考維持關閉並把 effort 降到 `high`,要嘛保留 effort 並移除 `thinking` 欄位。Anthropic 提醒:Opus 5 在思考*停用*時,偶爾會把工具呼叫寫成純文字或洩漏內部 XML 標籤 —— 建議改為維持思考開啟,並以較低的 effort 控制成本。來源:[Claude Opus 5 的新功能](https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5#behavior-changes)。
 
 ## 17.2 Effort 階梯
 
@@ -7522,7 +7524,7 @@ flowchart TD
 **實務上會咬人的限制:**
 
 - **每請求最多 4 個中斷點。** 把它們花在穩定邊界上(見 §18.5),別任意揮霍。
-- **最小可快取前綴依模型而定。** 在 Opus 4.8 / 4.7 / 4.6 上是 **4096 token**;Sonnet 4.6 是 2048;Sonnet 4.5 是 1024。短於最小值的前綴**會無聲地不快取** —— 沒有錯誤,只是 `cache_creation_input_tokens: 0`。一個 3K token 的提示在 Sonnet 4.5 上會快取,在 Opus 4.8 上卻不會。
+- **最小可快取前綴依模型而定。** 在 Opus 4.8 / 4.7 / 4.6 上是 **4096 token**;Sonnet 4.6 是 2048;Sonnet 4.5 是 1024。**Claude Opus 5 把它降到 512 token** —— 在 Opus 4.8 上太短而無法快取的提示,現在無須改動程式碼即可建立快取項目([Opus 5 的新功能](https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5))。短於最小值的前綴**會無聲地不快取** —— 沒有錯誤,只是 `cache_creation_input_tokens: 0`。一個 3K token 的提示在 Sonnet 4.5 上會快取,在 Opus 4.8 上卻不會。
 - **20 區塊回看視窗。** 每個中斷點最多往回走**20 個內容區塊**來尋找先前的快取項。單一輪若附加超過 20 個區塊 —— 在帶有大量 `tool_use`/`tool_result` 配對的代理迴圈中很常見 —— 就會把先前的快取推到搆不著的範圍外,下一次請求便無聲地未命中。修法:在長的輪次中,大約每 15 個區塊放一個中間中斷點。
 
 **頂層自動快取。** 若你不需要細粒度的放置,在 `messages.create()` 的頂層傳入 `cache_control`,API 會自動快取最後一個可快取區塊。對於單一龐大的 `system` 提示,這是最簡單的選擇;只有當你需要快取數個不同區段(例如工具、然後一個會話前綴、再來一個輪次)時,才動用逐區塊的明確標記。
@@ -10540,13 +10542,15 @@ sequenceDiagram
 | 模型 | API ID | 上下文 | 最大輸出 | 輸入 / 輸出 ($/MTok) | 適用 |
 |---|---|---|---|---|---|
 | **Claude Fable 5** | `claude-fable-5` | 1M | 128K | $10 / $50 | 最難的推理與長程代理工作(旗艦) |
-| **Claude Opus 4.8** | `claude-opus-4-8` | 1M | 128K | $5 / $25 | 複雜/代理任務的預設 |
+| **Claude Opus 5** | `claude-opus-5` | 1M | 128K | $5 / $25 | 複雜代理程式設計與企業工作的預設;以 Fable 5 一半的成本提供前沿智慧 |
 | **Claude Sonnet 5** | `claude-sonnet-5` | 1M | 128K | $3 / $15 | 速度/智慧最佳平衡;大量使用 |
 | **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | 快速、便宜、簡單/延遲關鍵任務 |
 
 > **Sonnet 5 是目前的平衡層級**,接替 Sonnet 4.6(現為舊版模型,仍可透過 `claude-sonnet-4-6` 呼叫)。Sonnet 5 具有**導入期定價 $2 / $10 每 MTok,至 2026-08-31**,之後套用標準 **$3 / $15**。在 Claude Sonnet 5 上,`effort` 參數在 Claude API 與 Claude Code 預設為 `high`。來源:[模型總覽](https://platform.claude.com/docs/en/about-claude/models/overview)、[定價](https://platform.claude.com/docs/en/about-claude/pricing)。
 >
 > **從 Sonnet 4.6 遷移到 Sonnet 5** —— 有三項 API 行為改變:[自適應思考(adaptive thinking)](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)現在**預設開啟**;手動延伸思考(`thinking: {type: "enabled", budget_tokens: N}`)已**移除並回傳 400 錯誤**;將取樣參數 `temperature` / `top_p` / `top_k` 設為非預設值也會**回傳 400 錯誤**。Sonnet 5 **不支援** [Priority Tier](https://platform.claude.com/docs/en/api/service-tiers)(其餘工具與平台功能與 Sonnet 4.6 相同,具備 1M 上下文視窗與 128K 最大輸出)。Sonnet 5 另外採用**新的分詞器(tokenizer),相同文字會產生約多 30% 的 token**,因此請用 [token 計數 API](https://platform.claude.com/docs/en/build-with-claude/token-counting)(`model="claude-sonnet-5"`)重新量測提示長度與成本,不要沿用 Sonnet 4.6 的估算。來源:[Claude Sonnet 5 的新功能](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5)。
+>
+> **Claude Opus 5(2026-07-24 發布)是新的預設 Opus** —— 相對 Opus 4.8 是階躍式提升,定價維持 **$5 / $25**,具備 1M token 上下文視窗(預設*即*上限)、128K 最大輸出,且**思考預設開啟**(模型逐輪自行決定深度;以 `effort` 控制)。Anthropic 的官方建議是:複雜代理程式設計與企業工作*從 Opus 5 起步*,把 **Fable 5** 保留給需要最高能力的那一小片。Opus 4.8 仍可呼叫(`claude-opus-4-8`),但現為**舊版(legacy)**模型。遷移時有兩項行為改變會咬人:思考預設開啟(請重新檢視 `max_tokens`,它現在同時涵蓋思考*加上*回應),以及**只有在 effort `high` 或以下才允許停用思考 —— `thinking: {type:"disabled"}` 搭配 `xhigh` 或 `max` 會回傳 400 錯誤**(相對 Opus 4.8 是破壞性變更,當時兩者互不相干)。Opus 5 另外把**最小可快取前綴降到 512 token**,並新增**對話中途變更工具**(beta 標頭 `mid-conversation-tool-changes-2026-07-01`,Fable 5 / Opus 4.8 亦支援)與**`"default"` 伺服端後備模式**(`server-side-fallback-2026-07-01`)。來源:[Claude Opus 5 的新功能](https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5)、[平台發行說明 —— 2026 年 7 月 24 日](https://platform.claude.com/docs/en/release-notes/api)。
 
 把它讀成一道階梯,而非一份菜單。每往上一階,價格大致翻倍以換取能力的提升,所以工程問題從來不是「哪個模型最好」—— 而是「哪個是**最便宜**、且能以充裕餘裕通過這項任務門檻的階梯」。
 
@@ -10554,7 +10558,7 @@ sequenceDiagram
 
 - **Haiku 4.5** —— 高量、規格明確、延遲敏感工作的主力:分類、抽取、路由、格式化,以及大型系統中的*便宜子代理*。注意較小的範圍 —— 200K 上下文、64K 輸出 —— 對這些工作綽綽有餘,但因此無法勝任整個程式庫的推理。
 - **Sonnet 5** —— 規模化生產的預設。它以旗艦的同等範圍(1M 上下文 / 128K 輸出)只收一小部分價格,這正是為何大多數面向使用者的代理與高吞吐管線都應該從這裡*起步*,而非從 Opus。
-- **Opus 4.8** —— 旗艦 Opus,在任務確實複雜或具代理性時是正確的預設:多步規劃、困難程式碼、長程自主迴圈、細膩判斷。輸出價格約為 Sonnet 的 1.7 倍;你買到的是在 Sonnet 只能*有時*答對的任務上的可靠性。
+- **Opus 5** —— 旗艦 Opus,在任務確實複雜或具代理性時是正確的預設:多步規劃、困難程式碼、長程自主迴圈、細膩判斷。思考預設開啟,且 **effort 在這裡比任何先前的 Opus 都更關鍵** —— 從 `high` 起步再依路由調校。輸出價格約為 Sonnet 的 1.7 倍;你以 Fable 5 一半的價格,買到在 Sonnet 只能*有時*答對的任務上的前沿可靠性。
 - **Fable 5** —— 絕對天花板,用於最難的推理與最長程的工作。在 $10/$50,其輸出是 Opus 的兩倍,所以只保留給 Opus 明顯做不好的那一小片任務;把它當預設用,是燒預算卻毫無收穫最常見的單一方式。
 
 **為何「每美元的智慧」勝過「最聰明」。** 一個準確率高 10% 但成本翻倍的模型,對於更便宜層級已經以 99% 通過的任務是個*糟糕*的交易;對於更便宜層級以 60% 失敗的任務則是*極佳*的交易。整章談的就是為每個工作負載找到那個交叉點,而非用猜的。
@@ -10577,7 +10581,7 @@ flowchart TD
     C -->|否| E[Sonnet 5<br/>平衡預設]
     B -->|是| F{Sonnet 通過<br/>你的評測集嗎?}
     F -->|是| E
-    F -->|否| G[Opus 4.8<br/>旗艦預設]
+    F -->|否| G[Opus 5<br/>旗艦預設]
     G --> H{在最難的案例上<br/>仍然失敗?}
     H -->|是| I[Fable 5<br/>絕對天花板]
     H -->|否| G
@@ -10605,7 +10609,7 @@ flowchart TD
     U[使用者請求] --> R[路由器<br/>Haiku 4.5 分類器]
     R -->|簡單 FAQ| H[Haiku 4.5<br/>直接回答]
     R -->|標準任務| S[Sonnet 5<br/>端到端處理]
-    R -->|複雜或高風險| O[Opus 4.8<br/>深度推理]
+    R -->|複雜或高風險| O[Opus 5<br/>深度推理]
     H --> Z[回應]
     S --> Z
     O --> Z
@@ -10616,11 +10620,11 @@ flowchart TD
 
 ### 模式 B —— 分層多代理:強協調者、便宜子代理
 
-這直接建立在第 3 章的中心輻射式拓撲上,但為*每個角色指派一個模型*。協調者做困難、不可逆的推理 —— 分解、驗證、最終綜整 —— 所以它跑 **Opus 4.8**。子代理做範圍狹窄、規格明確的工作(抓一個頁面、抽取欄位、摘要一份文件),所以它們跑 **Haiku 4.5**。你把花費集中在判斷所在之處,在其他地方一律省。
+這直接建立在第 3 章的中心輻射式拓撲上,但為*每個角色指派一個模型*。協調者做困難、不可逆的推理 —— 分解、驗證、最終綜整 —— 所以它跑 **Opus 5**。子代理做範圍狹窄、規格明確的工作(抓一個頁面、抽取欄位、摘要一份文件),所以它們跑 **Haiku 4.5**。你把花費集中在判斷所在之處,在其他地方一律省。
 
 ```mermaid
 flowchart TD
-    U[使用者請求] --> C[協調者<br/>Opus 4.8 — 規劃與驗證]
+    U[使用者請求] --> C[協調者<br/>Opus 5 — 規劃與驗證]
     C -->|Task: 抓取| S1[子代理<br/>Haiku 4.5]
     C -->|Task: 抽取| S2[子代理<br/>Haiku 4.5]
     C -->|Task: 摘要| S3[子代理<br/>Haiku 4.5]
@@ -15947,6 +15951,21 @@ Associate 考試認證的是另一種工作:勝任且負責任地使用 Claude *
 **為何選 B:** 在 SSO/SCIM 的組織裡,身分供應商才是成員關係的真相來源,所以 Admin API *讀得到*一切,但*寫不動 IdP 擁有的東西*——對 SCIM 託管的身分,建立邀請、變更角色與移除成員都回傳 400。正確的離職路徑是在 Okta 裡取消供應,並用 API 的讀取面(最好是最小權限的 `read:org_audit` key)去確認與稽核。(A)把擁有權搞反了:那裡的 `DELETE` 會以 400 失敗。(C)API 只能指派 `user` 與 `managed` 角色;像 `primary_owner` 這類管理型角色是在 claude.ai 設定裡指派的,無法透過 API 授予。(D)API key 是工作負載憑證,不是真人成員關係——輪替它既不會移除那個人,也不會動到他的 claude.ai 存取。這是 WIF(§29.2)在真人身分上的對應:透過 IdP 治理人,讓 Admin API 給你可程式化、可稽核的視圖(§29.7)。
 
 ---
+
+## 問題 301(情境:代理式 AI 工具)
+
+**情境:** 你正把一個生產環境的代理式工具從 `claude-opus-4-8` 遷移到 `claude-opus-5`。舊程式碼以 effort `xhigh` 搭配 `thinking: {"type": "disabled"}` 執行以壓低延遲,並設 `max_tokens: 8000`。只改了模型 ID 之後,現在每個請求都以 400 錯誤失敗。
+
+**哪一項變更能正確地把工具遷移到 Claude Opus 5?**
+
+- A) 在 `thinking` 區塊加上 `budget_tokens`,讓模型在 `xhigh` 下有明確的推理預算。
+- B) 維持停用思考但把 effort 降到 `high`(或以下),或保留 `xhigh` 並完全移除 `thinking` 欄位 —— 在 Opus 5 上,`thinking: {"type": "disabled"}` 只允許在 effort `high` 或更低。 **[CORRECT]**
+- C) 把 `max_tokens` 降到 4000,讓回應在不思考的情況下放得下。
+- D) 設 `temperature: 0` 讓停用思考的輸出具確定性。
+
+**為何選 B:** 在 Claude Opus 5 上思考預設開啟,且只有在 effort 為 `high` 或以下時才允許停用;把 `thinking: {"type": "disabled"}` 與 `xhigh` 或 `max` 搭配會回傳 400 —— 相對 Opus 4.8 是破壞性變更,當時這兩條軸互不相干。修法是讓兩者相容:維持思考關閉並把 effort 降到 `high`,或保留高 effort 讓思考執行(移除 `thinking` 欄位)。由於思考現在預設開啟,`max_tokens` 同時涵蓋思考*加上*回應,所以順手重新檢視舊的 8000 值。(A)`budget_tokens` 在所有現役 Opus/Fable/Sonnet-5 層級模型上都會以 400 被拒 —— 手動預算已不復存在。(C)縮小 `max_tokens` 並未觸及觸發 400 的非法 effort/thinking 組合。(D)非預設的 `temperature` 在這些模型上本身就是 400,且與此錯誤無關。
+
+---
 # 實作練習
 
 十三個動手實驗,按證照分成四條軌道。閱讀只能建立辨識力;唯有動手建造,才能長出考試真正測的判斷力。每個實驗都標明**時間預算**、鍛鍊的**領域**、具體的**建造步驟**,以及讓它成為「實驗」而非「建議」的關鍵——**「完成標準(Done when)」**:每一條都成立之前,不要往下走。照順序做你目標證照的軌道;軌道 A 是其他一切的地基。所有實驗只需一把普通的 API key 或一套 Claude Code,不需要任何特殊基礎設施。每個實驗的參考解答就在下一章——先動手,再對照。
@@ -16833,15 +16852,17 @@ results = await asyncio.gather(*(call(client, r, "backfill") for r in reqs),
 |---|---|---|---|---|---|---|
 | Claude Fable 5 | `claude-fable-5` | 1M | 128K | $10 | $50 | 最強的廣泛發布模型；最艱難的推理＋長程代理工作。思考恆常開啟；安全分類器可能拒絕。 |
 | Claude Mythos 5 | `claude-mythos-5` | 1M | 128K | $10 | $50 | 與 Fable 5 相同，但對核准組織解除雙重用途防護——Project Glasswing 合作夥伴（資安）加上生物領域的信任存取計畫；並規劃更系統化的申請管道。 |
-| Claude Opus 4.8 | `claude-opus-4-8` | 1M | 128K | $5 | $25 | 旗艦 Opus——多數高要求工作的預設；頂尖的自主代理、知識工作與記憶能力。 |
-| Claude Opus 4.7 | `claude-opus-4-7` | 1M | 128K | $5 | $25 | 上一代 Opus；強大的代理＋視覺＋記憶。 |
+| Claude Opus 5 | `claude-opus-5` | 1M | 128K | $5 | $25 | 預設 Opus(2026-07-24 發布)——複雜代理程式設計與企業工作;思考預設開啟;以 Fable 5 一半的成本提供前沿智慧。 |
+| Claude Opus 4.8 | `claude-opus-4-8` | 1M | 128K | $5 | $25 | 上一代 Opus(現為舊版,仍可呼叫);頂尖的自主代理、知識工作與記憶能力。 |
+| Claude Opus 4.7 | `claude-opus-4-7` | 1M | 128K | $5 | $25 | 較舊的 Opus；強大的代理＋視覺＋記憶。 |
 | Claude Opus 4.6 | `claude-opus-4-6` | 1M | 128K | $5 | $25 | 較舊的 Opus；自適應思考、128K 輸出。 |
 | Claude Sonnet 5 | `claude-sonnet-5` | 1M | 128K | $3 | $15 | 速度／智慧最佳平衡，適合大量生產用途。導入期 $2 ／ $10 至 2026-08-31。 |
 | Claude Haiku 4.5 | `claude-haiku-4-5` | 200K | 64K | $1 | $5 | 最快、最便宜；適合簡單／低延遲任務與廉價子代理。 |
 
 - **使用精確 ID，切勿用帶日期後綴的變體**（例如 `claude-opus-4-8`，而非 `claude-opus-4-8-20xxxxxx`）。來源：[模型總覽](https://platform.claude.com/docs/en/about-claude/models/overview)、[定價](https://platform.claude.com/docs/en/pricing)。
 - **即時查詢：** Models API 回傳每個模型的上下文視窗（`max_input_tokens`）、輸出上限（`max_tokens`）與 `capabilities` 樹——`GET /v1/models/{id}`。
-- **思考與努力度依層級而異：** Fable 5 / Opus 4.8 / 4.7 拒絕 `budget_tokens`——請改用 `thinking: {type:"adaptive"}` ＋ `output_config.effort`（`low`→`max`，4.7/4.8 另有 `xhigh`）。舊款模型仍使用 `budget_tokens`。
+- **思考與努力度依層級而異：** Opus 5 / Fable 5 / Opus 4.8 / 4.7 拒絕 `budget_tokens`——請改用 `thinking: {type:"adaptive"}` ＋ `output_config.effort`（`low`→`max`）。舊款模型仍使用 `budget_tokens`。
+- **Opus 5 須知(2026-07-24 發布)：** 思考**預設開啟**;停用思考(`thinking:{type:"disabled"}`)**只允許在 effort `high` 或以下** —— `xhigh`/`max` 會回傳 **400**。最小可快取前綴降到 **512 token**;**對話中途變更工具**(`mid-conversation-tool-changes-2026-07-01`)與 **`"default"` 伺服端後備模式**(`server-side-fallback-2026-07-01`)隨發布登場。定價與 Opus 4.8 相同 **$5 / $25**,Opus 4.8 續以舊版模型可呼叫。來源：[Opus 5 的新功能](https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5)。
 - **Sonnet 5 遷移須知：** Sonnet 5 採用較新的 tokenizer（Opus 4.7+ / Fable 5 一系）——同樣文字產生的 token 比 4.7 之前的模型**多約 30%**，因此估算成本或判斷是否放得下前，請先用 `count_tokens` 重新量測。自適應思考預設開啟；非預設值的 `temperature` / `top_p` / `top_k` 與手動 `budget_tokens` 思考都會回傳 **400**；且 Sonnet 5 **不提供 Priority Tier**。來源：[平台發行說明 —— 2026-06-30](https://platform.claude.com/docs/en/release-notes/api)。
 
 ---
