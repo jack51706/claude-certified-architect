@@ -9411,6 +9411,12 @@ session = client.beta.sessions.create(
 
 **唯一獲准的例外——per-session 覆寫(beta)。**你現在*可以*在不刷版本的前提下,為單一 session 更改部分設定:把 `agent` 傳成 `{type: "agent_with_overrides", id, …}`,並附上 `model`、`system`、`tools`、`mcp_servers` 或 `skills` 之中任意欄位。它用於一次性實驗——某一次執行試個較便宜的模型、或多給一個工具——**而非**塞每次請求資料的後門。規則很嚴格,值得記牢:覆寫是**整欄取代**(從不合併——`tools` 覆寫必須列出該 session 應有的*每一個*工具);**省略**某欄則從所引用的版本繼承;`null` / `[]` 則**清空**它——但有兩個例外:`model` 永遠不可清空(`model: null` → `400 agent_model_required`),而當生效的 `skills` 非空時 `tools` 不可清空,因為 skills 需要 `read` 工具。關鍵是:覆寫**不會**建立新版本、也不會變更 agent 資源,且回應中的 `agent` 仍帶著基底的 `id` / `version`——所以回報 #2 的「這是哪份定義跑的?」可追溯性依然成立,同一 agent 的其他 session 也不受影響。來源:[Override agent configuration for a session](https://platform.claude.com/docs/en/managed-agents/sessions)。
 
+**2026 年 7 月 22 日發布的三項精修——effort、種子化 session、無條件更新。**物件模型多了三項較小但與考試相關的收緊,各自落在不同物件上:
+
+- **每個 agent 模型的 `effort`。**你現在可在建立時,把 [`effort`](https://platform.claude.com/docs/en/build-with-claude/effort) 級別設在*agent 的 `model` 物件裡*——與直接呼叫 Messages API 相同的 `low` → `max` 階梯,如今烘進持久化的定義中(某一次執行可用 session 的 `model` 覆寫改變它)。這正是託管機群決定*每個角色的模型該想多用力*之處:高流量的分流 agent 釘 `effort: "low"` 壓低成本與延遲;能力關鍵的審查 agent 釘 `max`。它落在 **agent 的 model 設定**(或 session 的 `model` 覆寫)上,絕不作為原始 session 上的裸欄位——與 `model`/`system`/`tools` 同一紀律。
+- **以 `initial_events` 種子化 session。**`POST /v1/sessions` 現在接受一個 `initial_events` 陣列,最多 **50** 個 `user.message` 與 `user.define_outcome` 事件。**非空**的清單會*在同一個呼叫裡就啟動代理迴圈*,把舊的「先建 session、再送事件」兩步併成一個請求。對排程或扇出的工作,這是乾淨的路徑——原子式地建立並啟動——並與下方的串流規則相合:互動式 UI 仍要在種子化*之前*先開串流;射後不理的扇出則種子化後讓 **webhooks** 回報完成。
+- **無條件更新 agent。**更新 agent 時 `version` 欄位現在是**選填**。附上它以取得樂觀並行控制——過期的值會回傳 **409**,讓競爭的寫入者無法無聲地蓋掉較新的定義——或省略它以無條件套用變更。在任何多寫入者情境都附上它;只有在你*刻意*要覆寫的受控單一寫入者部署裡才省略。來源:[Managed Agents 平台發布說明(2026 年 7 月 22 日)](https://platform.claude.com/docs/en/release-notes/overview)。
+
 ## 24.3 驅動一個 Session:Events、串流與 Webhooks
 
 一個託管 session 是**事件驅動**的。Anthropic 跑迴圈,並發出一條 **Server-Sent Events(SSE)** 串流,即時描述代理正在做什麼。
@@ -9448,6 +9454,8 @@ sequenceDiagram
 **即時 token 預覽——event deltas(選用)。**預設下 `agent.message` 是**緩衝**的:每個事件都要等產生它的那次模型請求*完成後*才抵達。若要在文字生成時就渲染,請**逐連線**選用:在 `GET /v1/sessions/{id}/events/stream` 加上 `event_deltas[]` 查詢參數(可接受值為 `agent.message` 與 `agent.thinking`;其他值回 400,且只有 session 層級的串流接受它——[多代理 thread](https://platform.claude.com/docs/en/managed-agents/multi-agent) 串流會拒絕)。被預覽的訊息會先發一個 `event_start`(宣告即將到來事件的 `id`),接著是攜帶增量文字的 `event_delta` 事件,以 `event_id` + `delta.index` 為鍵。**預覽是顯示輔助,不是紀錄**——緩衝的 `agent.message` 仍是權威來源,忽略預覽的用戶端仍會收到完整串流;而且(不同於 [Messages API 串流](https://platform.claude.com/docs/en/build-with-claude/streaming))沒有逐區塊的 start/stop 事件,增量型別是 `content_delta`,所以 Messages API 的累積器程式碼**無法**原封不動沿用。`agent.thinking` 的預覽只發 `event_start`;其內容仍在緩衝事件中抵達。來源:[Event deltas](https://platform.claude.com/docs/en/managed-agents/events-and-streaming#event-deltas)。
 
 **何時*不要*一直掛著串流:webhooks。**對長時間執行或射後不理的工作——夜間批次、scheduled deployment、可能跑好幾分鐘的代理——一直掛著 HTTP 串流既脆弱又浪費。Managed Agents 可以改在狀態變更時送出 **HMAC 簽章的 webhooks**。你驗證簽章,再去拉你需要的東西。**串流**用於你要即時渲染 token 的互動式 UI;**webhooks** 用於非同步、耐久、伺服器對伺服器的工作流。
+
+**webhook 目錄現在涵蓋什麼。**webhooks 不再只關乎單一 session 的進度——它們橫跨整個**機群生命週期**。除了 session 與 vault 事件外,目錄還包含 **agent** 事件(發布了新版本)、**deployment** 與 **deployment-run** 事件(暫停的部署、失敗的排程執行),以及——在 2026 年 7 月 22 日發布中新增的——涵蓋 environment 與 memory store 生命週期變更的**四個 `environment.*` 事件類型**與**三個 `memory_store.*` 事件類型**。於是 SSE 串流給單一執行的那套事件驅動紀律,如今延伸到*機群所依賴的基礎設施*:對 environment 被佈建或拆除、或 memory store 的生命週期作出反應,**無需輪詢**。每個 webhook 仍只帶事件的**類型 + id**(從不帶完整物件)——驗證 HMAC 簽章,再去 `GET` 它指向的物件。這正是讓排程、扇出的機群可運維的那一塊:用 `initial_events` 種子化 session、讓它們無頭執行,並以生命週期事件而非一直掛著的串流來驅動你的控制平面。
 
 > **陷阱:**把 SSE 串流當成耐久日誌。它是*即時*通道,不是紀錄。如果你需要每個動作的稽核軌跡,就在事件抵達時持久化它們(或靠 webhooks + 你自己的儲存)——別指望能在重連後的串流裡「往回捲」。
 
@@ -15964,6 +15972,21 @@ Associate 考試認證的是另一種工作:勝任且負責任地使用 Claude *
 - D) 設 `temperature: 0` 讓停用思考的輸出具確定性。
 
 **為何選 B:** 在 Claude Opus 5 上思考預設開啟,且只有在 effort 為 `high` 或以下時才允許停用;把 `thinking: {"type": "disabled"}` 與 `xhigh` 或 `max` 搭配會回傳 400 —— 相對 Opus 4.8 是破壞性變更,當時這兩條軸互不相干。修法是讓兩者相容:維持思考關閉並把 effort 降到 `high`,或保留高 effort 讓思考執行(移除 `thinking` 欄位)。由於思考現在預設開啟,`max_tokens` 同時涵蓋思考*加上*回應,所以順手重新檢視舊的 8000 值。(A)`budget_tokens` 在所有現役 Opus/Fable/Sonnet-5 層級模型上都會以 400 被拒 —— 手動預算已不復存在。(C)縮小 `max_tokens` 並未觸及觸發 400 的非法 effort/thinking 組合。(D)非預設的 `temperature` 在這些模型上本身就是 400,且與此錯誤無關。
+
+---
+
+## 問題 302(情境:代理式 AI 工具)
+
+**情境:** 你營運一個 Claude Managed Agents 機群,由夜間排程器啟動數千個無頭的程式碼審查 session。目前啟動器為每個 session 開一條 SSE 串流,等 `session.status_completed` 後再關掉——而排程器一直逾時,因為同時掛著數千條串流既脆弱又不切實際。你還想讓每個 session 都以相同的兩則種子訊息開場,並且想在共用的審查 **environment** 於兩次執行之間被拆除與重新佈建時作出反應。
+
+**哪一種重新設計最貼合平台 2026 年 7 月的 Managed Agents 能力?**
+
+- A) 維持每個 session 一條開著的 SSE 串流,只調高用戶端的 socket 逾時,因為串流是得知 session 完成的唯一途徑。
+- B) 把每個 session 的兩則訊息透過 `POST /v1/sessions` 的 `initial_events` 種子化,讓迴圈在同一個呼叫裡就啟動,並以 **HMAC 簽章的 webhooks**(`session.*` 加上 `environment.*` 事件類型)而非一直掛著的串流來驅動完成與 environment 生命週期。 **[CORRECT]**
+- C) 為每個 session 呼叫 `agents.create()` 讓每次執行都拿到全新 environment,並定時輪詢 `GET /v1/environments` 偵測拆除。
+- D) 在建立 session 之後,以另一個 `send-events` 請求送出兩則種子訊息,並訂閱 `agent.message` 增量,靠執行何時不再吐字來偵測完成。
+
+**為何選 B:** 2026 年 7 月 22 日的發布正好補上這個扇出所需的兩塊:`initial_events`(最多 50 個 `user.message`/`user.define_outcome` 事件)讓**非空**的種子*在同一個建立呼叫裡就啟動迴圈*,不需另一個送出步驟;而生命週期 **webhooks**——包含四個 `environment.*` 事件類型——讓你**無需輪詢或一直掛著串流**就能對完成、以及 environment 被拆除與重新佈建作出反應。串流是*即時*的顯示通道、無重播,對數千個耐久的無頭工作是錯的選擇。(A)只是把脆弱的設計放大,仍撐不過一次斷線。(C)每次執行重建 agent——這是刷版本又割裂可觀測性的經典反模式——而輪詢正是 webhooks 存在要消除的東西。(D)是 `initial_events` 已併掉的、7 月前的兩步舞,且從「不再吐字」推斷完成,遠不如明確的 `session.status_completed` 事件可靠。
 
 ---
 # 實作練習
