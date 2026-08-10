@@ -9485,6 +9485,8 @@ flowchart TD
 
 **What it costs you:** you now operate the worker fleet — its availability, scaling, and patching become *your* SLO. The convenience you bought with "managed" is partly handed back. The loop, retries, and event plumbing stay with Anthropic, but the sandbox's reliability is on you.
 
+**A second residency lever — where *inference* runs.** The self-hosted sandbox controls where *tool side effects* happen; a separate control, **`inference_geo`**, governs where the *model inference itself* runs. Set it inside the agent's `model` object at create time, or override it for a single session, choosing among the available geos (each with its own pricing — see the data-residency docs). The two levers are orthogonal and often paired: a regulated workload may pin **both** an in-region self-hosted sandbox *and* an in-region `inference_geo`, so neither the data the tools touch nor the tokens the model processes leave the jurisdiction. Reach for `inference_geo` whenever a residency rule constrains inference itself — not only tool execution.
+
 > **Trade-off in one line:** fully managed minimizes ops; self-hosted maximizes control over *where tool side effects happen*. Pick self-hosted only when a real constraint (residency, reachability, licensing, audit) forces it — not by default.
 
 ## 24.5 Operating Agents in Production: Vaults, Memory, Schedules, Observability
@@ -9510,6 +9512,12 @@ flowchart TD
 ```
 
 **Observability — what you can and cannot see.** Because Anthropic runs the loop, your observability comes from the **event stream and webhooks**, plus the **agent ID + version** stamped on every session. You see tool calls, messages, thinking, and status transitions — but you do **not** get host-level access to the hosted container. If you need deep, host-level inspection (process dumps, kernel-level tracing), that is a reason to choose the **self-hosted sandbox** (§24.4). Design your observability around events, and persist them yourself if you need a durable audit trail (§24.3).
+
+**Session budgets — a hard spend cap per run.** You can set a **budget** on a session: a hard cap on that session's spend, priced at public list rates. When a session reaches its budget it **pauses with the `budget_reached` stop reason** instead of starting new model requests; **raise or remove the budget and it resumes** rather than being killed. A **scheduled deployment** takes the same budget and applies it to *each* session it starts — so a fanned-out or nightly fleet gets a per-run cost ceiling for free, without your control plane metering tokens itself. This is the managed answer to the runaway-agent cost risk: a mis-prompted loop that would otherwise burn budget indefinitely stops at a number you set, *visibly* (`budget_reached` is a distinct, detectable stop reason), rather than failing silently or running up the bill — the deterministic cost guardrail the "cap it in the prompt" anti-pattern only pretends to be.
+
+**Advisor — a stronger model the session can consult.** A session's primary thread can be given an **advisor**: a model *at least as capable as the agent's own* that it consults mid-turn for strategic guidance. You declare it as a `{"type": "advisor"}` entry in the agent's **multiagent roster**, naming the `model` to consult. This lets a cheap, high-volume agent run on a fast model for the bulk of its work yet escalate a genuinely hard sub-decision to a flagship — the tiered-cost pattern of Chapter 28, expressed inside one managed session instead of a hand-built coordinator.
+
+**Repo-mounted skills.** When a session **mounts a GitHub repository**, any skills in that repo's root `.claude/skills` directory are discovered automatically at session start and made available for that session — the same skills your engineers use locally, now in the managed run and versioned with the repo instead of pinned into the agent definition.
 
 > **Pitfall:** assuming "managed" means "fully observable." You get rich *event-level* visibility, but the hosted runtime is a black box at the OS level by design. Match your audit requirements to the hosting choice **before** you build.
 
@@ -9625,6 +9633,8 @@ Notice what each design choice bought: **session-points-at-agent** keeps every r
 | Streaming discipline | SSE has **no replay**: open the stream **before** sending, and **reconnect with de-duplication**. Use **webhooks** (HMAC-signed) for async/long-running work (§24.3). |
 | Hosting topology | Fully managed (Anthropic's container, zero ops) vs **self-hosted sandbox** (`type: self_hosted`, your infra via outbound-polling worker). Anthropic runs the loop either way; choose self-hosted only when residency/reachability/licensing/audit forces it (§24.4). |
 | Production features | **Vaults** inject secrets at egress (never visible in-sandbox); **memory stores** persist across sessions (versioned, redactable); **scheduled deployments** are cron for agents; observability is **event-level**, not host-level (§24.5). |
+| Cost governance | A per-session **budget** caps spend at list rates; a session that hits it pauses with the **`budget_reached`** stop reason and resumes when you raise/remove it — a scheduled deployment applies the same cap to every run (§24.5). |
+| Data residency | The self-hosted sandbox pins where *tool side effects* run; **`inference_geo`** pins where *inference* runs — orthogonal levers, often paired for a regulated workload (§24.4). |
 | Control vs convenience | Managed = less ops, less control; self-hosted harness = more control over where side effects happen, more ops burden. A regulatory/operational decision, **not** a maturity ladder (§24.1, §24.4). |
 
 > **Established vs evolving.** The object model, the create-once rule, and the SSE event names are established in the `managed-agents-2026-04-01` beta. Operational practice — fleet scaling, observability tooling, and the managed-vs-self-hosted line — is still maturing; carry the *reasoning*, and re-check the current docs before you build.
@@ -16037,6 +16047,21 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 - D) Use managed MCP + EMA to restrict which MCP servers each user's agents may call.
 
 **Why B:** Inference hooks are exactly this control — an enterprise, provider-side enforcement point that holds every *governed prompt*, on all three surfaces, before inference and awaits your security server's allow/deny verdict; requests are signed (so the hook can't be spoofed), the failure mode is configurable (fail **closed** for a true compliance boundary), and denials are recorded in the compliance Activity Feed for audit. (A) is wording, not enforcement — the model *usually* complies, which Chapter 13 says never counts as a control. (C) a firewall drops traffic but has no notion of a "governed prompt," no verdict lifecycle, and no coverage of the claude.ai/Cowork surfaces. (D) managed MCP + EMA govern *which servers exist and who may use them*, not the prompt itself before inference — a different ring of the same architecture (§29.3 vs §29.8).
+
+---
+
+## Question 304 (Scenario: Multi-agent Research System)
+
+**Situation:** A Managed Agents deployment runs a nightly fleet of multi-country market-research sessions: a coordinator delegates to research subagents, and occasionally a mis-scoped query sends one session into a long, expensive loop. Finance caps each nightly run's spend. Your current control is an application-side token meter that kills sessions past a threshold — but it fires late and can't cleanly resume a session it interrupted.
+
+**How should you enforce the per-run cost ceiling using the platform?**
+
+- A) Lower every subagent to Haiku and set a small `max_tokens`, accepting the quality hit, since that's the only way to bound cost.
+- B) Set a **session budget** on each session (and on the scheduled deployment, which applies it per session): a session that reaches the cap pauses with the **`budget_reached`** stop reason instead of starting new model requests, and raising or removing the budget resumes it. **[CORRECT]**
+- C) Poll `GET` on each session on a timer and hit the cancel endpoint once your own token tally crosses the limit.
+- D) Put the cost ceiling in the agent's system prompt ("never spend more than $X") so the model self-limits.
+
+**Why B:** Session budgets are the platform's built-in per-run cost governance — a hard cap, priced at list rates, that pauses the session with the distinct **`budget_reached`** stop reason when hit (detectable and *resumable*: raise or remove the budget to continue) rather than killing it, and a scheduled deployment applies the same budget to every session it starts. That is exactly the nightly-fleet ceiling Finance wants, with no app-side metering. (A) trades quality for cost and still doesn't bound a runaway loop. (C) is the late-firing, non-resumable app-side meter the question is trying to replace, reinventing what the budget does natively. (D) is wording, not enforcement — a model cannot reliably meter its own spend, and Chapter 13 says a prohibition that matters must be deterministic, not prompted.
 
 ---
 # Practical Exercises
