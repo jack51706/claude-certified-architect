@@ -16,7 +16,7 @@ This repository contains study materials for the **Claude Certified Architect �
 
 ## Interactive Learning Site
 
-A bilingual (English + 繁體中文) interactive study site lives in [`web/`](./web/): the full guide with search and a language switcher, a 302-question practice bank (CCAR-F 126 · CCAR-P 63 · CCDV-F 53 · CCAO-F 60 — the three sibling banks match their exams' official item counts), full-length timed mock exams for all four certifications (official item counts, 120 minutes, scaled 100–1000, pass 720) with reviewable attempt history, spaced-repetition flashcards with deck selection, an EN↔中 glossary, a progress dashboard, and progress export/import. Visited pages keep working offline.
+A bilingual (English + 繁體中文) interactive study site lives in [`web/`](./web/): the full guide with search and a language switcher, a 303-question practice bank (CCAR-F 127 · CCAR-P 63 · CCDV-F 53 · CCAO-F 60 — the three sibling banks match their exams' official item counts), full-length timed mock exams for all four certifications (official item counts, 120 minutes, scaled 100–1000, pass 720) with reviewable attempt history, spaced-repetition flashcards with deck selection, an EN↔中 glossary, a progress dashboard, and progress export/import. Visited pages keep working offline.
 
 > **Legacy quiz pages:** the standalone `practical_test_<lang>.html` files at the repo root predate the site. For English and Traditional Chinese they are superseded by the site's question bank and are no longer regenerated; they remain only for the other languages.
 

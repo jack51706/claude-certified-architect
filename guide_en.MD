@@ -10959,6 +10959,7 @@ The nightly job starts on a schedule; the runner authenticates via **WIF** (no s
 | Secrets | Egress injection: the context window never holds a credential, so prompt injection can't steal what isn't there (§29.4). |
 | The principle | Identity, authorization, and secrecy are **configuration, not prompt text** — the same law as deny rules and hooks (Ch 13, §26.6). |
 | Member governance | Claude Enterprise manages members, invites, groups, and roles through the Admin API (beta); it assigns only `user`/`managed`, custom roles are read-only, and SSO/SCIM-managed writes return 400 — the IdP stays the source of truth (§29.7). |
+| Inference hooks | Route every governed prompt (claude.ai, Cowork, Claude Code) through your org's AI-security server for an **allow/deny** verdict *before* inference; requests are signed, fail-open/closed is configurable, and denials are logged to the compliance Activity Feed (§29.8). |
 
 ## 29.7 Governing Human Members: the Enterprise Admin API
 
@@ -10976,6 +10977,33 @@ Group and custom-role calls require the `anthropic-beta: ce-user-management-2026
 - **The identity provider wins.** When the org provisions people through SSO/SCIM, the API *reads* everything but *writes nothing the IdP owns*: invite creation, role changes, and member removals return **400** for JIT/SCIM-managed identities. The fix is to deprovision in Okta/Entra, not to fight the API — the same EMA principle from §29.3 (identity is the source of truth), now applied to human membership. SCIM-provisioned groups are likewise read-only.
 
 Architecturally this closes the loop WIF opened: workloads authenticate as short-lived service accounts (§29.2), humans are provisioned and offboarded through the IdP, and the Admin API gives you a *programmatic, auditable* view of both — an offboarding job that removes a departing member (or, under SCIM, confirms the IdP already did) and an audit job that walks every group's membership against the HR roster. **The pitfall is treating the API as the source of truth when your IdP is:** on an SSO/SCIM org, build the automation *in* the identity provider and use the `read:org_audit` key to verify, not to mutate.
+
+## 29.8 Inference Hooks: Governing Every Prompt Before Inference
+
+§29.3 governed *which* servers an agent may reach and *who* may reach them; §29.4 kept credentials out of the model's world. Both act at the agent's edge. **Inference hooks** (beta for Claude Enterprise) move a control point one step earlier — *in front of the model itself* — and make it organization-wide.
+
+The mechanism: you point Claude at your organization's own **AI-security server**, and every **governed prompt** — across **claude.ai, Claude Cowork, and Claude Code** — is **held before inference runs** while your server returns an **allow or deny** verdict. Inference proceeds only on *allow*; a *deny* stops the request before the model ever sees it. This is the Chapter 13 law — "when a prohibition matters, enforce it deterministically, not by wording" — enforced *centrally, at the provider*, for every surface an employee might use, rather than per-application.
+
+```mermaid
+flowchart TD
+    P[Governed prompt<br/>claude.ai / Cowork / Claude Code] --> Hold[Anthropic holds the request<br/>before inference]
+    Hold -->|signed verdict request| Sec[Your org AI-security server]
+    Sec -->|allow| Inf[Inference proceeds]
+    Sec -->|deny| Block[Request blocked<br/>logged to Activity Feed]
+    Hold -. server unreachable .-> Fail{Configured failure mode}
+    Fail -->|fail closed| Block
+    Fail -->|fail open| Inf
+```
+
+Three properties make it operable rather than a single point of failure:
+
+- **Requests are signed.** Your security server verifies each verdict request genuinely came from Anthropic before trusting it — the hook can't be spoofed by anything that merely reaches your endpoint.
+- **Failure handling is configurable.** You decide what happens when your server is slow or down — fail **closed** (block, maximum safety) or fail **open** (allow, maximum availability). That is a deliberate risk decision, not a default to accept blindly: a compliance-critical org fails closed and accepts the outage; a productivity-first one may fail open and lean on the audit trail.
+- **Every denial is recorded** in the compliance **Activity Feed**, so a blocked prompt is an auditable event, not a silent drop.
+
+**Where it fits versus the controls you already know.** A `PreToolUse` hook (§26.7) gates a *tool call inside one Claude Code session*; managed MCP + EMA (§29.3) gate *which servers exist and who may use them*; inference hooks gate *the prompt itself, before any inference, across every enterprise surface*. They compose: inference hooks are the outermost ring — a prompt your org's policy forbids never reaches the model, whatever app it came from — and the deny rules, hooks, and EMA still apply to everything that passes.
+
+> **Pitfall:** treating a fail-open configuration as "governed." Fail-open means that when your security server is unreachable, prompts flow *unchecked* — acceptable for availability-first workloads, but a true compliance boundary must fail **closed** and engineer the security server for the availability that demands. Decide, document, and test the failure mode before you rely on the hook as a control.
 
 > **Beyond the foundations exam.** The exam stops at the agent's edge; production starts there. Choose the surface by parity, make every workload prove who it is, govern MCP through identity, and keep secrets out of the model's world entirely — and the same agent you built in Parts I–III becomes something an enterprise can actually run.
 
@@ -15994,6 +16022,21 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 - D) Send the two seed messages as a separate `send-events` request after session creation, and subscribe to `agent.message` deltas to detect when the run stops emitting text.
 
 **Why B:** The July 22, 2026 release added exactly the two pieces this fan-out needs: `initial_events` (up to 50 `user.message`/`user.define_outcome` events) makes a **non-empty** seed *start the loop in the same create call*, so there's no separate send step; and lifecycle **webhooks** — including the four `environment.*` event types — let you react to completion and to the environment being torn down and re-provisioned **without polling or long-held streams**. Streams are a *live* display channel with no replay, wrong for durable, thousands-strong headless work. (A) scales the fragile design instead of replacing it and still can't survive a dropped connection. (C) re-creates the agent per run — the classic anti-pattern that churns versions and fragments observability — and polling is exactly what webhooks exist to remove. (D) is the pre-July two-step dance `initial_events` collapses, and inferring completion from "text stopped" is unreliable versus the explicit `session.status_completed` event.
+
+---
+
+## Question 303 (Scenario: Agentic AI Tools)
+
+**Situation:** Your enterprise runs Claude across three surfaces — claude.ai for analysts, Claude Cowork for ops, and Claude Code for engineers. Compliance mandates that prompts matching certain data-handling policies must be blocked *before the model processes them*, uniformly across all three surfaces, with every block auditable. A `PreToolUse` deny rule in Claude Code only covers engineers and only gates tool calls, not the prompts themselves.
+
+**Which control meets the requirement?**
+
+- A) Add the policy as text in each surface's system prompt / CLAUDE.md so the model refuses matching prompts.
+- B) Enable **inference hooks** (Claude Enterprise): point Claude at your org's AI-security server so each governed prompt across claude.ai, Cowork, and Claude Code is held for an allow/deny verdict *before* inference, with signed requests, a chosen fail-open/closed mode, and every denial logged to the Activity Feed. **[CORRECT]**
+- C) Put a network firewall in front of the Claude API that drops requests containing forbidden strings.
+- D) Use managed MCP + EMA to restrict which MCP servers each user's agents may call.
+
+**Why B:** Inference hooks are exactly this control — an enterprise, provider-side enforcement point that holds every *governed prompt*, on all three surfaces, before inference and awaits your security server's allow/deny verdict; requests are signed (so the hook can't be spoofed), the failure mode is configurable (fail **closed** for a true compliance boundary), and denials are recorded in the compliance Activity Feed for audit. (A) is wording, not enforcement — the model *usually* complies, which Chapter 13 says never counts as a control. (C) a firewall drops traffic but has no notion of a "governed prompt," no verdict lifecycle, and no coverage of the claude.ai/Cowork surfaces. (D) managed MCP + EMA govern *which servers exist and who may use them*, not the prompt itself before inference — a different ring of the same architecture (§29.3 vs §29.8).
 
 ---
 # Practical Exercises
