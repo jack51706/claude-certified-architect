@@ -333,7 +333,7 @@ Pricing is per-token, billed separately for input and output, and varies by mode
 | Model | Input $/1M | Output $/1M | Context |
 |---|---|---|---|
 | `claude-opus-4-8` | $5.00 | $25.00 | 1M |
-| `claude-sonnet-5` | $3.00 | $15.00 | 1M |
+| `claude-sonnet-5` | $2.00 | $10.00 | 1M |
 | `claude-haiku-4-5` | $1.00 | $5.00 | 200K |
 
 - **Output is far more expensive than input** (5× on every model above). A response that rambles costs more than the prompt that asked for it — another reason a well-scoped `max_tokens` and a concise system prompt matter.
@@ -10561,10 +10561,10 @@ Four model families are in active service. They differ on three axes that matter
 |---|---|---|---|---|---|
 | **Claude Fable 5** | `claude-fable-5` | 1M | 128K | $10 / $50 | The hardest reasoning & long-horizon agentic work (flagship) |
 | **Claude Opus 5** | `claude-opus-5` | 1M | 128K | $5 / $25 | Default for complex agentic coding & enterprise work; frontier intelligence at half Fable 5's cost |
-| **Claude Sonnet 5** | `claude-sonnet-5` | 1M | 128K | $3 / $15 | Best speed/intelligence balance; high-volume |
+| **Claude Sonnet 5** | `claude-sonnet-5` | 1M | 128K | $2 / $10 | Best speed/intelligence balance; high-volume |
 | **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | Fast, cheap, simple/latency-critical tasks |
 
-> **Sonnet 5 is the current balanced tier**, succeeding Sonnet 4.6 (now a legacy model that is still callable via `claude-sonnet-4-6`). Sonnet 5 carries **introductory pricing of $2 / $10 per MTok through 2026-08-31**, after which standard **$3 / $15** applies. On Claude Sonnet 5 the `effort` parameter defaults to `high` on the Claude API and Claude Code. Source: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview), [Pricing](https://platform.claude.com/docs/en/about-claude/pricing).
+> **Sonnet 5 is the current balanced tier**, succeeding Sonnet 4.6 (now a legacy model that is still callable via `claude-sonnet-4-6`). Sonnet 5's launch **$2 / $10 per MTok** pricing **was made permanent on 2026-08-10** — the standard **$3 / $15** rate that had been scheduled to take effect 2026-09-01 (after the 2026-08-31 introductory window) **no longer applies**, so $2 / $10 is the ongoing price, not a promo. On Claude Sonnet 5 the `effort` parameter defaults to `high` on the Claude API and Claude Code. Source: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview), [Pricing](https://platform.claude.com/docs/en/about-claude/pricing).
 >
 > **Migrating from Sonnet 4.6 to Sonnet 5** — three API behaviors changed: [adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) is now **on by default**; manual extended thinking (`thinking: {type: "enabled", budget_tokens: N}`) is **removed and returns a 400 error**; and setting the sampling parameters `temperature` / `top_p` / `top_k` to non-default values **returns a 400 error**. [Priority Tier](https://platform.claude.com/docs/en/api/service-tiers) is **not available** on Sonnet 5 (otherwise it carries the same tools and platform features as Sonnet 4.6, with a 1M context window and 128K max output). Sonnet 5 also uses a **new tokenizer that produces roughly 30% more tokens for the same text**, so re-measure prompt size and cost with the [token counting API](https://platform.claude.com/docs/en/build-with-claude/token-counting) (`model="claude-sonnet-5"`) instead of reusing Sonnet 4.6 estimates. Source: [What's new in Claude Sonnet 5](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5).
 >
@@ -16955,7 +16955,7 @@ All current models share a 1M-token context window except Haiku. Prices are USD 
 | Claude Opus 4.8 | `claude-opus-4-8` | 1M | 128K | $5 | $25 | Previous-gen Opus (now legacy, still callable); state-of-the-art autonomous agents, knowledge work, memory. |
 | Claude Opus 4.7 | `claude-opus-4-7` | 1M | 128K | $5 | $25 | Older Opus; strong agentic + vision + memory. |
 | Claude Opus 4.6 | `claude-opus-4-6` | 1M | 128K | $5 | $25 | Older Opus; adaptive thinking, 128K output. |
-| Claude Sonnet 5 | `claude-sonnet-5` | 1M | 128K | $3 | $15 | Best speed/intelligence balance for high-volume production. Introductory $2 / $10 through 2026-08-31. |
+| Claude Sonnet 5 | `claude-sonnet-5` | 1M | 128K | $2 | $10 | Best speed/intelligence balance for high-volume production. $2 / $10 made permanent 2026-08-10 (the scheduled $3 / $15 no longer applies). |
 | Claude Haiku 4.5 | `claude-haiku-4-5` | 200K | 64K | $1 | $5 | Fastest, cheapest; simple/latency-sensitive tasks and cheap subagents. |
 
 - **Use exact IDs, never date-suffixed variants** (e.g. `claude-opus-4-8`, not `claude-opus-4-8-20xxxxxx`). Source: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview), [Pricing](https://platform.claude.com/docs/en/pricing).

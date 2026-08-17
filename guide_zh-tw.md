@@ -333,7 +333,7 @@ sequenceDiagram
 | 模型 | 輸入 $/1M | 輸出 $/1M | 上下文 |
 |---|---|---|---|
 | `claude-opus-4-8` | $5.00 | $25.00 | 1M |
-| `claude-sonnet-5` | $3.00 | $15.00 | 1M |
+| `claude-sonnet-5` | $2.00 | $10.00 | 1M |
 | `claude-haiku-4-5` | $1.00 | $5.00 | 200K |
 
 - **輸出遠比輸入昂貴**(上表每個模型都是 5 倍)。一個囉嗦的回應,比要求它的提示還貴——這又是一個「妥善界定 `max_tokens` 與精簡系統提示」很重要的理由。
@@ -10561,10 +10561,10 @@ sequenceDiagram
 |---|---|---|---|---|---|
 | **Claude Fable 5** | `claude-fable-5` | 1M | 128K | $10 / $50 | 最難的推理與長程代理工作(旗艦) |
 | **Claude Opus 5** | `claude-opus-5` | 1M | 128K | $5 / $25 | 複雜代理程式設計與企業工作的預設;以 Fable 5 一半的成本提供前沿智慧 |
-| **Claude Sonnet 5** | `claude-sonnet-5` | 1M | 128K | $3 / $15 | 速度/智慧最佳平衡;大量使用 |
+| **Claude Sonnet 5** | `claude-sonnet-5` | 1M | 128K | $2 / $10 | 速度/智慧最佳平衡;大量使用 |
 | **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | 快速、便宜、簡單/延遲關鍵任務 |
 
-> **Sonnet 5 是目前的平衡層級**,接替 Sonnet 4.6(現為舊版模型,仍可透過 `claude-sonnet-4-6` 呼叫)。Sonnet 5 具有**導入期定價 $2 / $10 每 MTok,至 2026-08-31**,之後套用標準 **$3 / $15**。在 Claude Sonnet 5 上,`effort` 參數在 Claude API 與 Claude Code 預設為 `high`。來源:[模型總覽](https://platform.claude.com/docs/en/about-claude/models/overview)、[定價](https://platform.claude.com/docs/en/about-claude/pricing)。
+> **Sonnet 5 是目前的平衡層級**,接替 Sonnet 4.6(現為舊版模型,仍可透過 `claude-sonnet-4-6` 呼叫)。Sonnet 5 上市時的 **$2 / $10 每 MTok** 定價已於 **2026-08-10 轉為永久價** —— 原本排定於 2026-09-01(導入期 2026-08-31 結束後)生效的標準 **$3 / $15** **不再適用**,因此 $2 / $10 是常態價,而非促銷。在 Claude Sonnet 5 上,`effort` 參數在 Claude API 與 Claude Code 預設為 `high`。來源:[模型總覽](https://platform.claude.com/docs/en/about-claude/models/overview)、[定價](https://platform.claude.com/docs/en/about-claude/pricing)。
 >
 > **從 Sonnet 4.6 遷移到 Sonnet 5** —— 有三項 API 行為改變:[自適應思考(adaptive thinking)](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)現在**預設開啟**;手動延伸思考(`thinking: {type: "enabled", budget_tokens: N}`)已**移除並回傳 400 錯誤**;將取樣參數 `temperature` / `top_p` / `top_k` 設為非預設值也會**回傳 400 錯誤**。Sonnet 5 **不支援** [Priority Tier](https://platform.claude.com/docs/en/api/service-tiers)(其餘工具與平台功能與 Sonnet 4.6 相同,具備 1M 上下文視窗與 128K 最大輸出)。Sonnet 5 另外採用**新的分詞器(tokenizer),相同文字會產生約多 30% 的 token**,因此請用 [token 計數 API](https://platform.claude.com/docs/en/build-with-claude/token-counting)(`model="claude-sonnet-5"`)重新量測提示長度與成本,不要沿用 Sonnet 4.6 的估算。來源:[Claude Sonnet 5 的新功能](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5)。
 >
@@ -16947,7 +16947,7 @@ results = await asyncio.gather(*(call(client, r, "backfill") for r in reqs),
 | Claude Opus 4.8 | `claude-opus-4-8` | 1M | 128K | $5 | $25 | 上一代 Opus(現為舊版,仍可呼叫);頂尖的自主代理、知識工作與記憶能力。 |
 | Claude Opus 4.7 | `claude-opus-4-7` | 1M | 128K | $5 | $25 | 較舊的 Opus；強大的代理＋視覺＋記憶。 |
 | Claude Opus 4.6 | `claude-opus-4-6` | 1M | 128K | $5 | $25 | 較舊的 Opus；自適應思考、128K 輸出。 |
-| Claude Sonnet 5 | `claude-sonnet-5` | 1M | 128K | $3 | $15 | 速度／智慧最佳平衡，適合大量生產用途。導入期 $2 ／ $10 至 2026-08-31。 |
+| Claude Sonnet 5 | `claude-sonnet-5` | 1M | 128K | $2 | $10 | 速度／智慧最佳平衡，適合大量生產用途。$2 ／ $10 已於 2026-08-10 轉為永久價(原排定的 $3 ／ $15 不再適用)。 |
 | Claude Haiku 4.5 | `claude-haiku-4-5` | 200K | 64K | $1 | $5 | 最快、最便宜；適合簡單／低延遲任務與廉價子代理。 |
 
 - **使用精確 ID，切勿用帶日期後綴的變體**（例如 `claude-opus-4-8`，而非 `claude-opus-4-8-20xxxxxx`）。來源：[模型總覽](https://platform.claude.com/docs/en/about-claude/models/overview)、[定價](https://platform.claude.com/docs/en/pricing)。
