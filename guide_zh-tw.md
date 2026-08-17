@@ -10093,7 +10093,7 @@ flowchart TD
 
 三項能力把個人設定變成可散布、且省上下文的平台。
 
-**Plugins 與 marketplace。** 一個 *plugin* 把 Skills、子代理定義、hooks、slash 指令,以及 MCP server 設定打包成**一個可安裝的套件**,透過 **plugin marketplace** 散布。這正是資安或平台團隊把一項標準化代理能力交付給全組織的方式:一次安裝就把 SAST skill、政策 hook、核可的 MCP servers,以及審查子代理一起拉進來 —— 以單一單元做版本控管,而非每位工程師手動把片段複製進自己的 `.claude/`。
+**Plugins 與 marketplace。** 一個 *plugin* 把 Skills、子代理定義、hooks、slash 指令,以及 MCP server 設定打包成**一個可安裝的套件**,透過 **plugin marketplace** 散布。這正是資安或平台團隊把一項標準化代理能力交付給全組織的方式:一次安裝就把 SAST skill、政策 hook、核可的 MCP servers,以及審查子代理一起拉進來 —— 以單一單元做版本控管,而非每位工程師手動把片段複製進自己的 `.claude/`。plugin 的來源可以是 **git repo**、**npm 套件**,或(2026-08 新增)**`archive` 來源** —— 一個透過 **HTTPS 抓取的 zip**,不需要 git 或 npm,並可**選用 SHA-256 釘選**。最後這個選項最適合鎖定或氣隙(air-gapped)組織:把核可的套件放在內部 URL 並釘選其雜湊,如此工程師安裝到的位元組永遠不會在其腳下改變。
 
 **擴充的 hook 事件。** 第 3 章用 `PreToolUse`/`PostToolUse` 做確定性強制。現代 Claude Code 加上了對*自主*運行很重要的生命週期事件:
 
@@ -10125,6 +10125,8 @@ flowchart TD
 `auto` 是 2026 年有意義的新增:不再是全有或全無,而是由分類器判斷每個動作的風險,讓無人值守的運行能在安全步驟上前進,同時仍對危險步驟守住底線。**陷阱是在 CI 裡為了方便就動用 `bypassPermissions`** —— 那會移除每一道護欄;`auto` 或 `dontAsk` 加上確定性 hooks(§26.5)才是站得住腳的姿態。
 
 **排程與遠端。** 雲端 **routines** 以 **cron 排程**運行 Claude Code(夜間分流、每週相依檢查);**channels** 把外部事件推進運行中的工作階段(一次 CI 失敗、一個新 issue),讓代理對外部世界做出反應;**遠端控制**則讓你從另一台裝置操控或查看工作階段。三者合起來,把引擎從「我現在正在打字」延伸成「它依排程運行並回應事件」。
+
+**自架 runner(self-hosted runners)。** 預設下,雲端／web／行動／桌面工作階段在 Anthropic 託管的基礎設施上執行。在 **Team 與 Enterprise** 方案上,`claude self-hosted-runner`(2026-08 新增)把**你自己的機器或容器**變成這些工作階段執行的地方 —— 程式碼、密鑰與網路存取都留在你的邊界內,而編排仍由 Anthropic 託管。這是 Claude Code 對應於 Managed Agent 所用之**自架環境**的做法(§24):託管的大腦、*你的*執行基質 —— 當資料落地(data-residency)或網路輸出(egress)規範禁止程式碼離開你的邊界時,這就是答案。伺服器提供的 hooks 仍套用於這些工作階段,因此你提交的 `.claude/` 護欄會跟著工作走到你自己的硬體上。
 
 **韌性:後備模型(fallback models)。** 一次無人值守的運行,可用性不會高於它的模型。**`fallbackModel`** 設定可配置**最多三個**模型,在主模型過載或不可用時**依序**嘗試,讓夜間工作降級到下一個層級,而不是直接失敗 —— 這正是你早已包在暫時性工具錯誤外的重試邏輯,套用到模型鏈上的對應物。子代理與上下文壓縮(compaction)現在也會**繼承工作階段的延伸思考(extended-thinking)設定**,所以後備模型或衍生出的工作者會保留你設定的推理預算,而不是悄悄重置。把後備鏈與 `auto`/`dontAsk` 權限及確定性 hooks 搭配,一次無人值守的運行就能同時扛住*危險動作*與*繁忙的主模型* —— 這兩種最常拖垮排程工作的失敗模式。
 
@@ -10236,6 +10238,7 @@ sequenceDiagram
 | Plugins + 擴充的 hooks | Plugins 把 Skills/agents/hooks/MCP 當成單一版本化單元交付;`SubagentStart`/`PreCompact`/`SessionEnd` 加上艦隊規模的可觀測性與政策(§26.5)。 |
 | 上下文是一筆預算 | MCP tool search 與 managed MCP 只延遲載入任務所需的工具,讓視窗在規模下撐得住(§26.5)。 |
 | 無人值守的安全 | Headless `-p` + `--json-schema` + `--bare` 用於確定性 CI;偏好 `auto` 分類器或 `dontAsk` 而非 `bypassPermissions`,並用 hooks 為規則撐腰(§26.6)。 |
+| 工作階段在哪執行 | `claude self-hosted-runner`(Team/Enterprise)讓雲端／web／行動／桌面工作階段在*你的*邊界內執行 —— 託管編排、你的基質 —— 以滿足資料落地與 egress 控管;`archive` plugin 來源(HTTPS zip + SHA-256 釘選)以同樣方式供給核可的 plugins(§26.5–26.6)。 |
 
 > **超出基礎考試範圍。** 第 5 章是單一互動工作階段;本章是建構在其上的正式環境系統 —— 一支握有計畫、隔離影響範圍、能從錯誤中復原、並在你能證明的護欄之下無人值守運行的代理艦隊。如果你能設計並捍衛 §26.7 的遷移作業,你就理解了作為基礎設施的現代 Claude Code。
 
