@@ -8090,7 +8090,7 @@ sequenceDiagram
 
 - **兩種執行模型**(§20.1)—— 用戶端工具(`stop_reason: "tool_use"`,你執行)對比伺服器端工具(`server_tool_use`,Anthropic 執行,你不回傳 `tool_result`)。
 - **伺服器端工具目錄**(§20.2)—— web search、web fetch、code execution、tool search、advisor。
-- **Anthropic 結構描述的用戶端工具**(§20.3)—— bash、text editor、computer use、memory:結構描述已公布,但仍由**你**執行。
+- **Anthropic 結構描述的用戶端工具**(§20.3)—— bash、text editor、computer use、browser use、memory:結構描述已公布,但仍由**你**執行。
 - **伺服器端迴圈、`pause_turn` 與混合回合**(§20.4)—— 唯一一個會讓所有人意外的控制流程。
 - **成本與安全取捨**(§20.5)—— 計費表、ZDR、沙箱邊界、網域過濾。
 
@@ -8144,7 +8144,8 @@ flowchart TD
 
 - **Bash**(`bash_20250124`)與 **text editor**(`text_editor_20250728`)—— 無結構描述、由 Anthropic 訓練的工具,並附有參考實作。**你**提供 shell 與檔案系統。*請沙箱化*——它們會以你的處理程式授予的權限執行。
 - **Memory tool**(`memory_20250818`)—— Claude 讀寫 `/memories` 目錄做跨工作階段狀態;**後端由你實作**(一個目錄、一個儲存桶或一個資料庫)。它是長時間代理背後的持久記憶基元(第 21 章)。
-- **Computer use** —— 螢幕截圖加上滑鼠/鍵盤操控 GUI(beta)。你執行桌面環境,並重放 Claude 請求的動作。
+- **Computer use**(`computer_toolset_20260801`)—— 螢幕截圖加上滑鼠/鍵盤操控整個 GUI 桌面。**2026-08 起脫離 beta:**不需 beta header,可把多個動作**批次併入單一輪**(減少往返),`zoom` 預設開啟,並可透過工具集的 `configs` 逐成員調校。早期 beta 版本(如 `computer_20251124`)仍可用,但升級會改變請求形狀與工具處理方式。你執行桌面環境,並重放 Claude 請求的動作。
+- **Browser use**(`browser_toolset_20260801`,2026-08 GA)—— 一個用戶端工具集,用來驅動**由你的應用託管的瀏覽器**,範圍限於瀏覽器視埠而非整個桌面。除了螢幕截圖與點擊外,它會*直接讀取頁面本身*——可及性樹(accessibility tree)、元素、表單與分頁——並加上元素參照、表單輸入、分頁管理、下載回報與可選的檔案上傳。這種結構化讀取讓代理操作無 API 的網頁應用時,往返次數遠少於在截圖上「找像素」。與 computer use 一樣,它是**用戶端**工具集(你託管瀏覽器並執行動作),不是伺服器工具。兩個工具集都可用於 Claude Fable 5、Mythos 5、Opus 5、Sonnet 5 與 Opus 4.8。
 
 > **陷阱。** `code_execution`(伺服器端)與 `bash`/`text_editor`(用戶端)*看起來*可以互換——兩者都「執行程式碼」。其實不然。伺服器端 `code_execution` 容器在 Anthropic 基礎設施執行,**網路停用**且無法存取你的系統。用戶端 `bash` 工具則在**你掌控的機器**上執行,使用你開放的網路與資料。若你同時啟用兩者,Claude 就處於*多電腦*環境而可能搞混它們;Anthropic 建議在系統提示加上一段說明,釐清狀態**不會**在兩者之間留存,且用戶端工具才是通往使用者本機系統的路徑。
 
@@ -8302,7 +8303,7 @@ sequenceDiagram
 | 兩種執行模型 | 用戶端工具 → `tool_use`,由*你*執行並回傳 `tool_result`;伺服器端工具 → `server_tool_use`(`srvtoolu_`),由 Anthropic 在回合內部執行,**不回傳 `tool_result`**(§20.1)。 |
 | 伺服器端目錄 | Web search、web fetch、code execution、tool search、advisor —— 在 `tools` 宣告,不必託管基礎設施(§20.2)。 |
 | 程式化工具呼叫 | 把用戶端工具標上 `allowed_callers: ["code_execution_20260120"]`,讓 Claude 從沙箱程式碼呼叫它——多次呼叫、在容器內過濾、只把精簡結果送回上下文(輸入 token 約少 24%)。仍是暫停的 `tool_use`:由你執行並回傳 `tool_result`;不是安全邊界,也不符合 ZDR(§20.2)。 |
-| Anthropic 結構描述的用戶端工具 | `bash`、`text_editor`、`memory`、computer use 附帶結構描述,但**由你執行**——請據此沙箱化(§20.3)。 |
+| Anthropic 結構描述的用戶端工具 | `bash`、`text_editor`、`memory`、computer use(`computer_toolset_20260801`,GA)、browser use(`browser_toolset_20260801`,GA)附帶結構描述,但**由你執行**——請據此沙箱化(§20.3)。 |
 | `pause_turn` 對比混合 `tool_use` | 長伺服器端迴圈 → `pause_turn`,原樣回傳(相同 tools)。伺服器端**加**用戶端在同一回合 → `tool_use`;回覆**只含** `tool_result` 區塊(§20.4)。 |
 | 成本計費表 | Web search **每千次 $10**(用 `max_uses` 設上限);code execution **與 web 工具併用免費**,否則 1,550 免費小時後**每容器每小時 $0.05**(§20.5)。 |
 | 安全邊界 | Code execution 沙箱**網路停用**;除非 `allowed_callers: ["direct"]`,否則 ZDR 排除動態過濾 web 工具;主權資料留在**用戶端**工具;網域允許清單只用 ASCII(§20.5)。 |
@@ -8625,9 +8626,11 @@ flowchart TD
 |---|---|---|---|---|
 | **base64** | 無 | 每次請求都內嵌 | 一次性呼叫;本機檔案;ZDR 嚴格的流程 | **每一輪**都重送 —— 多輪時 payload 暴增 |
 | **url** | 無 | 伺服器端抓取 | 公開託管的資產 | URL 必須可達;你無法控制該抓取的快取 |
-| **file_id**(Files API) | `files-api-2025-04-14` | 上傳**一次**,以 id 參照 | 同一檔案跨多個請求 / 多輪 | 上傳**與**訊息**兩處**都需要 beta header |
+| **file_id**(Files API) | 無(GA);`files-api-2025-04-14` 選用 | 上傳**一次**,以 id 參照 | 同一檔案跨多個請求 / 多輪 | 過去上傳**與**訊息**兩處**都需要 beta header |
 
 **base64 陷阱。** API 是無狀態的 —— 每次請求都會重送完整的對話歷史。若一份 5 MB 的 PDF 或一張截圖以 base64 內嵌,這些位元組就會在代理迴圈的**每一輪**搭便車。一段 10 輪的對話會把同一份文件重送 10 次。請求大小變大、延遲攀升,而在合作夥伴平台上,你可能在還沒碰到頁數上限之前,就先撞上 32 MB 的請求上限。
+
+> **2026-08 起 GA。** Files API 在 Claude API 上已脫離 beta:`/v1/files` 呼叫,以及參照已上傳檔案的訊息,**不再需要** `files-api-2025-04-14` header(仍傳送該 header 的請求照常運作,並回傳舊版回應格式)。GA 版介面新增**檔案到期**——上傳時設定 `expires_in_seconds`,並可從檔案物件讀取 `expires_at`——以及列出檔案時的 `page`/`next_page` 分頁與 `ids[]` 過濾器,同時提高速率限制、每個組織 1 TB 儲存空間。下方的 `client.beta.*` 範例仍可用;在 GA 用戶端上可省略 `betas=[...]` 引數。
 
 **Files API 解法。** 上傳一次,取得 `file_id`,之後永遠以 id 參照:
 
@@ -16060,6 +16063,21 @@ Associate 考試認證的是另一種工作:勝任且負責任地使用 Claude *
 **為何選 B:** session 預算就是平台內建的每次執行成本治理——一個以牌價計價的硬性上限,達標時以獨立的 **`budget_reached`** 停止原因暫停 session(可偵測且*可恢復*:調高或移除預算即續跑),而非把它殺掉;scheduled deployment 更會把同一份預算套到它啟動的每一個 session。這正是財務要的夜間機群天花板,而且不必應用端計量。(A)拿品質換成本,而且仍約束不了失控迴圈。(C)正是本題想取代的那個觸發太晚、無法恢復的應用端計量器,還重造了預算原生就會做的事。(D)是措辭而非強制——模型無法可靠地計量自己的花費,而第 13 章說重要的禁令必須是確定性的,不能靠提示。
 
 ---
+
+## 問題 305(情境:代理式 AI 工具)
+
+**情境:** 一個營運團隊必須自動化一個**沒有公開 API** 的供應商入口網站。Claude 需要登入、篩選一張表格、逐一開啟符合條件的紀錄,並下載 PDF,且在你自己的雲端上以無頭(headless)模式執行。原型使用 computer-use 桌面工具集驅動一整台 VM,但既慢又脆:它在原始截圖上「找像素」找按鈕,而且每次點擊後都要重新截圖。
+
+**對這個以瀏覽器為主、無 API 的工作流程,哪一個平台能力最合適?**
+
+- A) 保留 computer-use 桌面工具集,但調高 `max_tokens` 並加上更多截圖,因為對沒有 API 的應用來說,GUI 操控是唯一選項。
+- B) 改用 **browser use 工具**(`browser_toolset_20260801`,GA):一個範圍限於瀏覽器視埠的用戶端工具集,會讀取頁面的可及性樹、元素、表單與分頁——因此 Claude 以元素參照鎖定目標,直接處理分頁與下載,往返次數遠少於截圖加點擊。你仍託管瀏覽器並執行動作。 **[CORRECT]**
+- C) 用伺服器端的 `code_execution` 工具 `pip install` Playwright,從 Anthropic 的沙箱內驅動該入口網站。
+- D) 把入口網站透過 MCP 伺服器暴露出來,讓 Claude 呼叫具型別的工具而非用瀏覽器。
+
+**為何選 B:** browser use 工具正是為此而生——一個託管瀏覽器的用戶端工具集,在視埠內運作並*直接讀取頁面本身*(可及性樹、元素、表單、分頁),再加上元素參照、表單輸入、分頁管理、下載回報與可選的檔案上傳。以結構化方式鎖定元素、而非在截圖上找像素,往返次數遠少於整台桌面的 computer-use 路徑(A)——後者只有在你真的需要瀏覽器之外的作業系統層級操控時才是對的工具。(C)有兩處致命傷:`code_execution` 沙箱的網際網路是**停用**的,也無法存取你的系統,因此它根本連不上該入口網站,而且它本來就不是驅動瀏覽器的介面。(D)預設了一個該入口網站並不具備的 API/MCP 介面——前提是「沒有公開 API」,而 browser use 正是為這種情況而存在。注意 browser use 是**用戶端**工具集(`stop_reason: "tool_use"`):你託管瀏覽器並執行動作,因此第 20 章的沙箱與最小權限紀律仍然適用。
+
+---
 # 實作練習
 
 十三個動手實驗,按證照分成四條軌道。閱讀只能建立辨識力;唯有動手建造,才能長出考試真正測的判斷力。每個實驗都標明**時間預算**、鍛鍊的**領域**、具體的**建造步驟**,以及讓它成為「實驗」而非「建議」的關鍵——**「完成標準(Done when)」**:每一條都成立之前,不要往下走。照順序做你目標證照的軌道;軌道 A 是其他一切的地基。所有實驗只需一把普通的 API key 或一套 Claude Code,不需要任何特殊基礎設施。每個實驗的參考解答就在下一章——先動手,再對照。
@@ -17056,7 +17074,7 @@ Anthropic 的代理式編碼工具——可在終端機、IDE 與雲端執行；
 | **提示快取** | 前綴比對快取；讀取約 0.1×，寫入 1.25×（5 分）／2×（1 小時）。自動或手動斷點（最多 4 個）。以 `max_tokens:0` 預熱。 | [prompt-caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) |
 | **批次（Batches）** | 非同步、**5 折成本**；每批最多 10 萬筆請求；結果約 1 小時內（最長 24 小時）。以 `custom_id` 配對（順序不定）。 | [batch-processing](https://platform.claude.com/docs/en/build-with-claude/batch-processing) |
 | **引用（Citations）** | 對每份文件設 `citations:{enabled:true}` 會產生帶字元/頁碼位置的引用片段（與結構化輸出不相容）。 | [citations](https://platform.claude.com/docs/en/build-with-claude/citations) |
-| **Skills** | 以資料夾為基礎（`SKILL.md`）、漸進揭露的任務專長；預建（xlsx/docx/pptx/pdf）＋透過 Skills API 自訂。 | [skills](https://platform.claude.com/docs/en/agents-and-tools/skills) |
+| **Skills** | 以資料夾為基礎（`SKILL.md`）、漸進揭露的任務專長；預建（xlsx/docx/pptx/pdf）＋透過 Skills API（`/v1/skills`,**2026-08 GA**——不再需要 `skills-2025-10-02` header,包含透過 `container` 載入技能的 Messages 請求）自訂。 | [skills](https://platform.claude.com/docs/en/agents-and-tools/skills) |
 | **上下文管理** | **壓縮（Compaction）**（接近上限時摘要）與**上下文編輯**（清除過時的工具結果/思考），用於長時間執行。 | [compaction](https://platform.claude.com/docs/en/build-with-claude/compaction) |
 | **記憶工具** | `memory_20250818`——Claude 讀寫 `/memories` 目錄並跨工作階段保存（後端由你負責）。 | [memory-tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool) |
 | **驗證** | 靜態 API key（`sk-ant-…`），或 **Workload Identity Federation（WIF，工作負載身分聯合，2026 年正式上線）**——工作負載在 `POST /v1/oauth/token` 以自有身分供應商（AWS、GCP、Microsoft Entra ID、GitHub Actions、Kubernetes、SPIFFE、Okta）簽發的短期 OIDC JWT，換取一個以**服務帳號**身分運作、僅數分鐘有效且受範圍限制的 Anthropic token。沒有需要產生、輪替或可能外洩的靜態密鑰；涵蓋所有端點、各 SDK 與 Claude Code。 | [workload-identity-federation](https://platform.claude.com/docs/en/manage-claude/workload-identity-federation) |

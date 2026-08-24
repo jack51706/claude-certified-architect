@@ -8090,7 +8090,7 @@ The distinction is not cosmetic. It changes **who runs the code**, **where the d
 
 - **The two execution models** (§20.1) — client tools (`stop_reason: "tool_use"`, you execute) vs server tools (`server_tool_use`, Anthropic executes, no `tool_result` from you).
 - **The server-tool catalogue** (§20.2) — web search, web fetch, code execution, tool search, advisor.
-- **Anthropic-schema client tools** (§20.3) — bash, text editor, computer use, memory: published schemas, but *you* still execute them.
+- **Anthropic-schema client tools** (§20.3) — bash, text editor, computer use, browser use, memory: published schemas, but *you* still execute them.
 - **The server-side loop, `pause_turn`, and mixed turns** (§20.4) — the one piece of control flow that surprises everyone.
 - **Cost & security trade-offs** (§20.5) — pricing meters, ZDR, the sandbox boundary, domain filtering.
 
@@ -8144,7 +8144,8 @@ A subtle middle category trips up architects: **Anthropic publishes the schema, 
 
 - **Bash** (`bash_20250124`) and **text editor** (`text_editor_20250728`) — schema-less, Anthropic-trained tools with reference implementations. **You** provide the shell and the filesystem. *Sandbox them* — they run with whatever privileges your handler grants.
 - **Memory tool** (`memory_20250818`) — Claude reads/writes a `/memories` directory for cross-session state; **you implement the backend** (a directory, a bucket, a database). It is the durable-memory primitive behind long-running agents (Chapter 21).
-- **Computer use** — screenshots plus mouse/keyboard control of a GUI (beta). You run the desktop environment and replay the actions Claude requests.
+- **Computer use** (`computer_toolset_20260801`) — screenshots plus mouse/keyboard control of a full GUI desktop. **Out of beta since 2026-08:** no beta header, several actions can be **batched into one turn** (fewer round trips), `zoom` is on by default, and each member is tunable through the toolset's `configs`. Earlier beta versions (e.g. `computer_20251124`) still work, but upgrading changes the request shape and tool handling. You run the desktop environment and replay the actions Claude requests.
+- **Browser use** (`browser_toolset_20260801`, GA 2026-08) — a client toolset for driving a **browser your application hosts**, scoped to a viewport rather than a whole desktop. On top of screenshot-and-click it *reads the page itself* — accessibility tree, elements, forms, and tabs — and adds element references, form input, tab management, download reporting, and opt-in file upload. That structured reading lets an agent operate a no-API web app in far fewer round trips than pixel-hunting a screenshot. Like computer use it is a **client** toolset (you host the browser and execute the actions), not a server tool. Both toolsets run on Claude Fable 5, Mythos 5, Opus 5, Sonnet 5, and Opus 4.8.
 
 > **The trap.** `code_execution` (server) and `bash`/`text_editor` (client) *look* interchangeable — both "run code." They are not. The server `code_execution` container runs on Anthropic's infrastructure with **internet disabled** and no access to your systems. The client `bash` tool runs **on a machine you control**, with whatever network and data you expose. If you enable both, Claude is in a *multi-computer* environment and can confuse them; Anthropic recommends a system-prompt note clarifying that state does **not** persist between the two and that client tools are the path to the user's local system.
 
@@ -8302,7 +8303,7 @@ The single most important line: when Claude mixed a server call with the client 
 | Two execution models | Client tools → `tool_use`, *you* execute and return `tool_result`; server tools → `server_tool_use` (`srvtoolu_`), Anthropic executes inside the turn, **no `tool_result`** (§20.1). |
 | Server catalogue | Web search, web fetch, code execution, tool search, advisor — declared in `tools`, no infra to host (§20.2). |
 | Programmatic tool calling | Mark a client tool `allowed_callers: ["code_execution_20260120"]` so Claude calls it from sandboxed code — many calls, filtered in-container, one reduced result to context (~24% fewer input tokens). Still a paused `tool_use`: you execute and return `tool_result`; not a security boundary, not ZDR (§20.2). |
-| Anthropic-schema client tools | `bash`, `text_editor`, `memory`, computer use ship schemas but **you execute** them — sandbox accordingly (§20.3). |
+| Anthropic-schema client tools | `bash`, `text_editor`, `memory`, computer use (`computer_toolset_20260801`, GA), browser use (`browser_toolset_20260801`, GA) ship schemas but **you execute** them — sandbox accordingly (§20.3). |
 | `pause_turn` vs mixed `tool_use` | Long server loop → `pause_turn`, re-send as-is (same tools). Server **+ client** in one turn → `tool_use`; reply with **only** `tool_result` blocks (§20.4). |
 | Cost meters | Web search **$10/1k** (bound with `max_uses`); code execution **free with web tools**, else **$0.05/hr/container** after 1,550 free hrs (§20.5). |
 | Security boundary | Code-execution sandbox has **internet disabled**; ZDR excludes dynamic-filtering web tools unless `allowed_callers: ["direct"]`; keep sovereign data on **client** tools; ASCII-only domain allow-lists (§20.5). |
@@ -8625,9 +8626,11 @@ Every `image` and `document` block specifies a `source` with one of three types.
 |---|---|---|---|---|
 | **base64** | none | inline, every request | one-shot calls; local files; ZDR-strict flows | re-sent on **every** turn — payload bloats in multi-turn |
 | **url** | none | fetched server-side | publicly hosted assets | URL must be reachable; you don't control caching of the fetch |
-| **file_id** (Files API) | `files-api-2025-04-14` | uploaded **once**, referenced by id | the same file across many requests / many turns | beta header needed on **both** upload and the message |
+| **file_id** (Files API) | none (GA); `files-api-2025-04-14` optional | uploaded **once**, referenced by id | the same file across many requests / many turns | historically the beta header was needed on **both** upload and the message |
 
 **The base64 trap.** The API is stateless — every request re-sends the full conversation history. If a 5 MB PDF or a screenshot is embedded as base64, those bytes ride along on **every** turn of an agentic loop. A 10-turn conversation re-uploads the same document 10 times. Request size grows, latency climbs, and on partner platforms you can hit the 32 MB request ceiling before you ever hit the page limit.
+
+> **GA since 2026-08.** The Files API is out of beta on the Claude API: `/v1/files` calls and messages that reference an uploaded file **no longer require** the `files-api-2025-04-14` header (requests that still send it keep working and get the previous response format). The GA surface adds **file expiration** — set `expires_in_seconds` on upload, read `expires_at` on the file object — and `page`/`next_page` pagination with an `ids[]` filter when listing files, alongside higher rate limits and 1 TB of storage per organization. The `client.beta.*` sample below still works; on the GA client you can drop the `betas=[...]` argument.
 
 **The Files API fix.** Upload once, get a `file_id`, reference it by id forever:
 
@@ -16067,6 +16070,21 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 **Why B:** Session budgets are the platform's built-in per-run cost governance — a hard cap, priced at list rates, that pauses the session with the distinct **`budget_reached`** stop reason when hit (detectable and *resumable*: raise or remove the budget to continue) rather than killing it, and a scheduled deployment applies the same budget to every session it starts. That is exactly the nightly-fleet ceiling Finance wants, with no app-side metering. (A) trades quality for cost and still doesn't bound a runaway loop. (C) is the late-firing, non-resumable app-side meter the question is trying to replace, reinventing what the budget does natively. (D) is wording, not enforcement — a model cannot reliably meter its own spend, and Chapter 13 says a prohibition that matters must be deterministic, not prompted.
 
 ---
+
+## Question 305 (Scenario: Agentic AI Tools)
+
+**Situation:** An operations team must automate a vendor portal that has **no public API**. Claude needs to log in, filter a table, open each matching record, and download a PDF, running headless in your own cloud. A prototype uses the computer-use desktop toolset driving a full VM, but it's slow and brittle: it pixel-hunts for buttons on raw screenshots and re-screenshots after every click.
+
+**Which platform capability best fits this browser-bound, no-API workflow?**
+
+- A) Keep the computer-use desktop toolset but raise `max_tokens` and add more screenshots, since GUI control is the only option for apps without an API.
+- B) Switch to the **browser use tool** (`browser_toolset_20260801`, GA): a client toolset scoped to a browser viewport that reads the page's accessibility tree, elements, forms, and tabs — so Claude targets elements by reference and handles tabs and downloads directly, cutting round trips versus screenshot-and-click. You still host the browser and execute the actions. **[CORRECT]**
+- C) Use the server-side `code_execution` tool to `pip install` Playwright and drive the portal from inside Anthropic's sandbox.
+- D) Expose the portal through an MCP server so Claude calls typed tools instead of a browser.
+
+**Why B:** The browser use tool is purpose-built for exactly this — a hosted-browser client toolset that operates inside a viewport and *reads the page itself* (accessibility tree, elements, forms, tabs), adding element references, form input, tab management, download reporting, and opt-in file upload. Targeting elements structurally instead of pixel-hunting screenshots means far fewer round trips than the full-desktop computer-use path (A), which is the right tool only when you genuinely need OS-level control beyond the browser. (C) fails twice over: the `code_execution` sandbox has internet **disabled** and no access to your systems, so it cannot reach the portal, and it isn't a browser-driving surface. (D) presumes an API/MCP surface the portal doesn't have — the premise is "no public API," which is precisely the case browser use exists for. Note browser use is a **client** toolset (`stop_reason: "tool_use"`): you host the browser and run the actions, so the Chapter 20 sandbox and least-privilege discipline still apply.
+
+---
 # Practical Exercises
 
 Thirteen hands-on labs, organized as one track per certification. Reading builds recognition; only building builds the judgment the exams test. Each lab states its **time budget**, the **domains** it exercises, concrete **build steps**, and — the part that makes it a lab rather than a suggestion — **"Done when" acceptance criteria**: don't move on until every box holds. Do your target certification's track in order; Track A is the foundation for everything else. All labs run on an ordinary API key or Claude Code install; none needs special infrastructure. Reference solutions for every lab live in the next section — attempt first, then compare.
@@ -17064,7 +17082,7 @@ Everything runs through one endpoint: **`POST /v1/messages`**. Tools and output 
 | **Prompt caching** | Prefix-match cache; reads ~0.1×, writes 1.25× (5m) / 2× (1h). Auto or manual breakpoints (max 4). Pre-warm with `max_tokens:0`. | [prompt-caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) |
 | **Batches** | Async at **50% cost**; up to 100K requests/batch; results within ~1h (max 24h). Key by `custom_id` (unordered). | [batch-processing](https://platform.claude.com/docs/en/build-with-claude/batch-processing) |
 | **Citations** | Per-document `citations:{enabled:true}` yields cited spans with char/page locations (incompatible with structured outputs). | [citations](https://platform.claude.com/docs/en/build-with-claude/citations) |
-| **Skills** | Folder-based (`SKILL.md`) task expertise with progressive disclosure; pre-built (xlsx/docx/pptx/pdf) + custom via Skills API. | [skills](https://platform.claude.com/docs/en/agents-and-tools/skills) |
+| **Skills** | Folder-based (`SKILL.md`) task expertise with progressive disclosure; pre-built (xlsx/docx/pptx/pdf) + custom via the Skills API (`/v1/skills`, **GA 2026-08** — the `skills-2025-10-02` header is no longer required, including for Messages requests that load skills through `container`). | [skills](https://platform.claude.com/docs/en/agents-and-tools/skills) |
 | **Context management** | **Compaction** (summarize near limit) and **context editing** (clear stale tool results/thinking) for long runs. | [compaction](https://platform.claude.com/docs/en/build-with-claude/compaction) |
 | **Memory tool** | `memory_20250818` — Claude reads/writes a `/memories` directory persisting across sessions (you own the backend). | [memory-tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool) |
 | **Authentication** | Static API keys (`sk-ant-…`), or **Workload Identity Federation (WIF)** (GA 2026) — a workload exchanges a short-lived OIDC JWT from its own identity provider (AWS, GCP, Microsoft Entra ID, GitHub Actions, Kubernetes, SPIFFE, Okta) at `POST /v1/oauth/token` for a scoped, minutes-long Anthropic token that acts as a **service account**. No static secret to mint, rotate, or leak; covers all endpoints, the SDKs, and Claude Code. | [workload-identity-federation](https://platform.claude.com/docs/en/manage-claude/workload-identity-federation) |

@@ -1,293 +1,688 @@
 [
-  { "term": "Claude Agent SDK", "zh": "Claude Agent SDK", "tag": "Agent SDK",
+  {
+    "term": "Claude Agent SDK",
+    "zh": "Claude Agent SDK",
+    "tag": "Agent SDK",
     "def_en": "Anthropic's Python/TS toolkit for building agentic apps — 'Claude Code as a library': the agent loop, subagents, tool integration, context management, and lifecycle hooks. Formerly the Claude Code SDK.",
-    "def_zh": "Anthropic 用於建構代理式應用的 Python/TS 工具組——「把 Claude Code 當函式庫」:代理迴圈、子代理、工具整合、上下文管理與生命週期 hooks。前身為 Claude Code SDK。" },
-  { "term": "Agent loop", "zh": "代理迴圈", "tag": "Agent SDK",
+    "def_zh": "Anthropic 用於建構代理式應用的 Python/TS 工具組——「把 Claude Code 當函式庫」:代理迴圈、子代理、工具整合、上下文管理與生命週期 hooks。前身為 Claude Code SDK。"
+  },
+  {
+    "term": "Agent loop",
+    "zh": "代理迴圈",
+    "tag": "Agent SDK",
     "def_en": "The cycle of model call → tool execution → feeding results back, repeating until the model returns end_turn.",
-    "def_zh": "「模型呼叫 → 執行工具 → 回傳結果」的循環,反覆進行直到模型回傳 end_turn。" },
-  { "term": "Subagent", "zh": "子代理", "tag": "Agent SDK",
+    "def_zh": "「模型呼叫 → 執行工具 → 回傳結果」的循環,反覆進行直到模型回傳 end_turn。"
+  },
+  {
+    "term": "Subagent",
+    "zh": "子代理",
+    "tag": "Agent SDK",
     "def_en": "A separate agent the coordinator delegates a sub-task to, with its own isolated context.",
-    "def_zh": "協調者委派子任務的獨立代理,擁有自己隔離的上下文。" },
-  { "term": "Coordinator (hub-and-spoke)", "zh": "協調者(中樞輻射)", "tag": "Agent SDK",
+    "def_zh": "協調者委派子任務的獨立代理,擁有自己隔離的上下文。"
+  },
+  {
+    "term": "Coordinator (hub-and-spoke)",
+    "zh": "協調者(中樞輻射)",
+    "tag": "Agent SDK",
     "def_en": "The lead agent that splits work into sub-tasks, delegates them to specialized subagents, then synthesizes the results.",
-    "def_zh": "負責拆解工作、委派給專門子代理,再綜整結果的主導代理。" },
-  { "term": "Hook (PreToolUse / PostToolUse)", "zh": "Hook(工具使用前/後)", "tag": "Agent SDK",
+    "def_zh": "負責拆解工作、委派給專門子代理,再綜整結果的主導代理。"
+  },
+  {
+    "term": "Hook (PreToolUse / PostToolUse)",
+    "zh": "Hook(工具使用前/後)",
+    "tag": "Agent SDK",
     "def_en": "A lifecycle callback that runs before or after a tool call to inspect, modify, or filter it.",
-    "def_zh": "在工具呼叫前或後執行的生命週期回呼,可檢視、修改或過濾該呼叫。" },
-  { "term": "allowedTools", "zh": "allowedTools", "tag": "Agent SDK",
+    "def_zh": "在工具呼叫前或後執行的生命週期回呼,可檢視、修改或過濾該呼叫。"
+  },
+  {
+    "term": "allowedTools",
+    "zh": "allowedTools",
+    "tag": "Agent SDK",
     "def_en": "The list restricting which tools an agent may call; a coordinator must include 'Task' to spawn subagents.",
-    "def_zh": "限制代理可呼叫哪些工具的清單;協調者必須包含 'Task' 才能產生子代理。" },
-  { "term": "Task tool", "zh": "Task 工具", "tag": "Agent SDK",
+    "def_zh": "限制代理可呼叫哪些工具的清單;協調者必須包含 'Task' 才能產生子代理。"
+  },
+  {
+    "term": "Task tool",
+    "zh": "Task 工具",
+    "tag": "Agent SDK",
     "def_en": "The built-in tool an agent uses to spawn a subagent for an independent unit of work.",
-    "def_zh": "代理用來為獨立工作單元產生子代理的內建工具。" },
-  { "term": "stop_reason", "zh": "stop_reason", "tag": "API",
+    "def_zh": "代理用來為獨立工作單元產生子代理的內建工具。"
+  },
+  {
+    "term": "stop_reason",
+    "zh": "stop_reason",
+    "tag": "API",
     "def_en": "The response field saying why generation stopped: end_turn, tool_use, max_tokens, stop_sequence, pause_turn, or refusal.",
-    "def_zh": "回應中說明為何停止生成的欄位:end_turn、tool_use、max_tokens、stop_sequence、pause_turn 或 refusal。" },
-  { "term": "tool_use", "zh": "tool_use", "tag": "API",
+    "def_zh": "回應中說明為何停止生成的欄位:end_turn、tool_use、max_tokens、stop_sequence、pause_turn 或 refusal。"
+  },
+  {
+    "term": "tool_use",
+    "zh": "tool_use",
+    "tag": "API",
     "def_en": "The response block where the model requests a tool call with structured JSON input.",
-    "def_zh": "模型以結構化 JSON 輸入請求呼叫工具的回應區塊。" },
-  { "term": "tool_choice", "zh": "tool_choice", "tag": "Tools",
+    "def_zh": "模型以結構化 JSON 輸入請求呼叫工具的回應區塊。"
+  },
+  {
+    "term": "tool_choice",
+    "zh": "tool_choice",
+    "tag": "Tools",
     "def_en": "The request setting controlling tool use: auto, any, a forced specific tool, or none.",
-    "def_zh": "控制工具使用方式的請求設定:auto、any、強制特定工具,或 none。" },
-  { "term": "Parallel tool use", "zh": "平行工具呼叫", "tag": "Tools",
+    "def_zh": "控制工具使用方式的請求設定:auto、any、強制特定工具,或 none。"
+  },
+  {
+    "term": "Parallel tool use",
+    "zh": "平行工具呼叫",
+    "tag": "Tools",
     "def_en": "Issuing multiple independent tool calls in one turn; all results are returned together in a single user message.",
-    "def_zh": "在同一回合發出多個獨立工具呼叫;所有結果一併放入單一使用者訊息回傳。" },
-  { "term": "System prompt", "zh": "系統提示", "tag": "API",
+    "def_zh": "在同一回合發出多個獨立工具呼叫;所有結果一併放入單一使用者訊息回傳。"
+  },
+  {
+    "term": "System prompt",
+    "zh": "系統提示",
+    "tag": "API",
     "def_en": "The separate instruction field that sets the model's role, constraints, and output format for the whole conversation.",
-    "def_zh": "另外設定的指令欄位,為整段對話定義模型的角色、限制與輸出格式。" },
-  { "term": "Context window", "zh": "上下文視窗", "tag": "Context",
+    "def_zh": "另外設定的指令欄位,為整段對話定義模型的角色、限制與輸出格式。"
+  },
+  {
+    "term": "Context window",
+    "zh": "上下文視窗",
+    "tag": "Context",
     "def_en": "The total tokens the model processes at once: system prompt + full history + tool definitions + tool results.",
-    "def_zh": "模型一次能處理的 token 總量:系統提示 + 完整歷史 + 工具定義 + 工具結果。" },
-  { "term": "Lost-in-the-middle", "zh": "中段遺失", "tag": "Context",
+    "def_zh": "模型一次能處理的 token 總量:系統提示 + 完整歷史 + 工具定義 + 工具結果。"
+  },
+  {
+    "term": "Lost-in-the-middle",
+    "zh": "中段遺失",
+    "tag": "Context",
     "def_en": "The tendency to attend reliably to the start and end of a long input but miss details in the middle.",
-    "def_zh": "模型對長輸入的開頭與結尾較可靠,卻容易忽略中段細節的傾向。" },
-  { "term": "Progressive summarization", "zh": "漸進式摘要", "tag": "Context",
+    "def_zh": "模型對長輸入的開頭與結尾較可靠,卻容易忽略中段細節的傾向。"
+  },
+  {
+    "term": "Progressive summarization",
+    "zh": "漸進式摘要",
+    "tag": "Context",
     "def_en": "Compressing earlier history to save context; risks losing exact numbers, percentages, and dates.",
-    "def_zh": "壓縮較早的歷史以節省上下文;有遺失精確數字、百分比與日期的風險。" },
-  { "term": "Scratchpad file", "zh": "暫存檔", "tag": "Context",
+    "def_zh": "壓縮較早的歷史以節省上下文;有遺失精確數字、百分比與日期的風險。"
+  },
+  {
+    "term": "Scratchpad file",
+    "zh": "暫存檔",
+    "tag": "Context",
     "def_en": "An external file the agent writes intermediate findings to, keeping the context window lean.",
-    "def_zh": "代理把中間發現寫入的外部檔案,讓上下文視窗保持精簡。" },
-  { "term": "Prompt caching", "zh": "提示快取", "tag": "Context",
+    "def_zh": "代理把中間發現寫入的外部檔案,讓上下文視窗保持精簡。"
+  },
+  {
+    "term": "Prompt caching",
+    "zh": "提示快取",
+    "tag": "Context",
     "def_en": "Reusing a stable prompt prefix across requests to cut cost and latency; any byte change in the prefix invalidates it.",
-    "def_zh": "跨請求重用穩定的提示前綴以降低成本與延遲;前綴只要有一個位元組改變就會失效。" },
-  { "term": "MCP (Model Context Protocol)", "zh": "模型上下文協定(MCP)", "tag": "MCP",
+    "def_zh": "跨請求重用穩定的提示前綴以降低成本與延遲;前綴只要有一個位元組改變就會失效。"
+  },
+  {
+    "term": "MCP (Model Context Protocol)",
+    "zh": "模型上下文協定(MCP)",
+    "tag": "MCP",
     "def_en": "An open standard for connecting models to external tools, resources, and data via MCP servers.",
-    "def_zh": "透過 MCP 伺服器將模型連接到外部工具、資源與資料的開放標準。" },
-  { "term": "MCP server", "zh": "MCP 伺服器", "tag": "MCP",
+    "def_zh": "透過 MCP 伺服器將模型連接到外部工具、資源與資料的開放標準。"
+  },
+  {
+    "term": "MCP server",
+    "zh": "MCP 伺服器",
+    "tag": "MCP",
     "def_en": "A backend exposing tools and resources to the model over MCP; it handles authentication outside the prompt.",
-    "def_zh": "以 MCP 將工具與資源提供給模型的後端;在提示之外處理驗證。" },
-  { "term": "Enterprise-Managed Authorization (EMA)", "zh": "企業託管授權(EMA)", "tag": "MCP",
+    "def_zh": "以 MCP 將工具與資源提供給模型的後端;在提示之外處理驗證。"
+  },
+  {
+    "term": "Enterprise-Managed Authorization (EMA)",
+    "zh": "企業託管授權(EMA)",
+    "tag": "MCP",
     "def_en": "A stable MCP extension (June 2026) that governs MCP server access centrally through the org's identity provider (SSO): admins enable a server for the org, users get it automatically by their existing groups/roles, and revocation is instant—no per-user OAuth consent.",
-    "def_zh": "穩定版 MCP 擴充(2026 年 6 月),透過組織身分提供者(SSO)集中治理 MCP 伺服器存取:管理員為組織啟用伺服器,使用者依既有群組/角色自動取得存取權,撤銷即時——不需逐人 OAuth 同意。" },
-  { "term": "MCP tool vs resource", "zh": "MCP 工具 vs 資源", "tag": "MCP",
+    "def_zh": "穩定版 MCP 擴充(2026 年 6 月),透過組織身分提供者(SSO)集中治理 MCP 伺服器存取:管理員為組織啟用伺服器,使用者依既有群組/角色自動取得存取權,撤銷即時——不需逐人 OAuth 同意。"
+  },
+  {
+    "term": "MCP tool vs resource",
+    "zh": "MCP 工具 vs 資源",
+    "tag": "MCP",
     "def_en": "Tools are actions the model can invoke; resources are data the model can read.",
-    "def_zh": "工具是模型可叫用的動作;資源是模型可讀取的資料。" },
-  { "term": "isError (tool result)", "zh": "isError(工具結果)", "tag": "MCP",
+    "def_zh": "工具是模型可叫用的動作;資源是模型可讀取的資料。"
+  },
+  {
+    "term": "isError (tool result)",
+    "zh": "isError(工具結果)",
+    "tag": "MCP",
     "def_en": "The flag marking a tool result as an error so the model can recover rather than treat it as success.",
-    "def_zh": "將工具結果標示為錯誤的旗標,讓模型得以復原而非當成成功。" },
-  { "term": "Structured error (category + retryable)", "zh": "結構化錯誤(類別+可重試)", "tag": "Reliability",
+    "def_zh": "將工具結果標示為錯誤的旗標,讓模型得以復原而非當成成功。"
+  },
+  {
+    "term": "Structured error (category + retryable)",
+    "zh": "結構化錯誤(類別+可重試)",
+    "tag": "Reliability",
     "def_en": "Returning tool errors with a category and a retryable flag so the model retries transient failures and escalates permanent ones.",
-    "def_zh": "回傳帶有類別與可重試旗標的工具錯誤,讓模型重試暫時性失敗、升級永久性失敗。" },
-  { "term": ".mcp.json", "zh": ".mcp.json", "tag": "MCP",
+    "def_zh": "回傳帶有類別與可重試旗標的工具錯誤,讓模型重試暫時性失敗、升級永久性失敗。"
+  },
+  {
+    "term": ".mcp.json",
+    "zh": ".mcp.json",
+    "tag": "MCP",
     "def_en": "The project file declaring MCP servers for the team; user-level config lives in ~/.claude.json.",
-    "def_zh": "為團隊宣告 MCP 伺服器的專案檔;使用者層級設定放在 ~/.claude.json。" },
-  { "term": "CLAUDE.md", "zh": "CLAUDE.md", "tag": "Claude Code",
+    "def_zh": "為團隊宣告 MCP 伺服器的專案檔;使用者層級設定放在 ~/.claude.json。"
+  },
+  {
+    "term": "CLAUDE.md",
+    "zh": "CLAUDE.md",
+    "tag": "Claude Code",
     "def_en": "Claude Code's persistent project memory; conventions here load automatically every session (user → project → directory hierarchy).",
-    "def_zh": "Claude Code 的持久專案記憶;此處的慣例每次工作階段自動載入(使用者 → 專案 → 目錄階層)。" },
-  { "term": ".claude/rules/", "zh": ".claude/rules/", "tag": "Claude Code",
+    "def_zh": "Claude Code 的持久專案記憶;此處的慣例每次工作階段自動載入(使用者 → 專案 → 目錄階層)。"
+  },
+  {
+    "term": ".claude/rules/",
+    "zh": ".claude/rules/",
+    "tag": "Claude Code",
     "def_en": "Path-scoped rule files that load conditionally via a 'paths' glob, so rules apply only to matching files.",
-    "def_zh": "以 'paths' glob 條件式載入的路徑範圍化規則檔,規則只套用於符合的檔案。" },
-  { "term": "Slash command (.claude/commands/)", "zh": "斜線命令(.claude/commands/)", "tag": "Claude Code",
+    "def_zh": "以 'paths' glob 條件式載入的路徑範圍化規則檔,規則只套用於符合的檔案。"
+  },
+  {
+    "term": "Slash command (.claude/commands/)",
+    "zh": "斜線命令(.claude/commands/)",
+    "tag": "Claude Code",
     "def_en": "A reusable, invokable workflow saved as a project or user command (unified with skills).",
-    "def_zh": "存成專案或使用者命令的可重複、可叫用工作流程(已與技能整合)。" },
-  { "term": "Agent Skill / SKILL.md", "zh": "Agent Skill / SKILL.md", "tag": "Claude Code",
+    "def_zh": "存成專案或使用者命令的可重複、可叫用工作流程(已與技能整合)。"
+  },
+  {
+    "term": "Agent Skill / SKILL.md",
+    "zh": "Agent Skill / SKILL.md",
+    "tag": "Claude Code",
     "def_en": "A folder with a SKILL.md whose short description stays in context; the full instructions load on demand when relevant.",
-    "def_zh": "含 SKILL.md 的資料夾,其簡短描述常駐上下文;完整指令在相關時才按需載入。" },
-  { "term": "context: fork", "zh": "context: fork", "tag": "Claude Code",
+    "def_zh": "含 SKILL.md 的資料夾,其簡短描述常駐上下文;完整指令在相關時才按需載入。"
+  },
+  {
+    "term": "context: fork",
+    "zh": "context: fork",
+    "tag": "Claude Code",
     "def_en": "A skill/subagent setting that runs work in an isolated context and returns only a summary, protecting the main context.",
-    "def_zh": "讓工作在隔離上下文中執行、只回傳摘要的技能/子代理設定,可保護主上下文。" },
-  { "term": "Planning mode", "zh": "規劃模式", "tag": "Claude Code",
+    "def_zh": "讓工作在隔離上下文中執行、只回傳摘要的技能/子代理設定,可保護主上下文。"
+  },
+  {
+    "term": "Planning mode",
+    "zh": "規劃模式",
+    "tag": "Claude Code",
     "def_en": "A Claude Code mode that produces and confirms an approach before making any edits — best for large or ambiguous changes.",
-    "def_zh": "Claude Code 在進行任何編輯前先產出並確認做法的模式 —— 最適合大型或模糊的變更。" },
-  { "term": "/compact", "zh": "/compact", "tag": "Claude Code",
+    "def_zh": "Claude Code 在進行任何編輯前先產出並確認做法的模式 —— 最適合大型或模糊的變更。"
+  },
+  {
+    "term": "/compact",
+    "zh": "/compact",
+    "tag": "Claude Code",
     "def_en": "A Claude Code command that condenses the conversation to free up context.",
-    "def_zh": "Claude Code 用來壓縮對話以釋放上下文的命令。" },
-  { "term": "fork_session", "zh": "fork_session", "tag": "Claude Code",
+    "def_zh": "Claude Code 用來壓縮對話以釋放上下文的命令。"
+  },
+  {
+    "term": "fork_session",
+    "zh": "fork_session",
+    "tag": "Claude Code",
     "def_en": "Branching a session so a side task runs without polluting the main session's context.",
-    "def_zh": "分叉工作階段,讓支線任務在不污染主工作階段上下文的情況下執行。" },
-  { "term": "Headless mode (-p / --print)", "zh": "無頭模式(-p / --print)", "tag": "Claude Code",
+    "def_zh": "分叉工作階段,讓支線任務在不污染主工作階段上下文的情況下執行。"
+  },
+  {
+    "term": "Headless mode (-p / --print)",
+    "zh": "無頭模式(-p / --print)",
+    "tag": "Claude Code",
     "def_en": "Running Claude Code non-interactively for CI/scripts; pair with --output-format json for machine-readable output.",
-    "def_zh": "以非互動方式執行 Claude Code 供 CI/腳本使用;搭配 --output-format json 取得機器可讀輸出。" },
-  { "term": "Built-in tools", "zh": "內建工具", "tag": "Claude Code",
+    "def_zh": "以非互動方式執行 Claude Code 供 CI/腳本使用;搭配 --output-format json 取得機器可讀輸出。"
+  },
+  {
+    "term": "Built-in tools",
+    "zh": "內建工具",
+    "tag": "Claude Code",
     "def_en": "Claude Code's core file/shell tools: Read, Write, Edit, Bash, Grep, Glob (plus Task for subagents).",
-    "def_zh": "Claude Code 的核心檔案/shell 工具:Read、Write、Edit、Bash、Grep、Glob(加上用於子代理的 Task)。" },
-  { "term": "Grep/Glob vs Bash for search", "zh": "用 Grep/Glob 而非 Bash 搜尋", "tag": "Claude Code",
+    "def_zh": "Claude Code 的核心檔案/shell 工具:Read、Write、Edit、Bash、Grep、Glob(加上用於子代理的 Task)。"
+  },
+  {
+    "term": "Grep/Glob vs Bash for search",
+    "zh": "用 Grep/Glob 而非 Bash 搜尋",
+    "tag": "Claude Code",
     "def_en": "Prefer Grep/Glob for code search — structured, parallel-safe results — over piping files through Bash.",
-    "def_zh": "搜尋程式碼優先用 Grep/Glob —— 結果結構化、可平行安全 —— 而非把檔案透過 Bash 倒出。" },
-  { "term": "JSON Schema (structured output)", "zh": "JSON 結構描述(結構化輸出)", "tag": "Prompt",
+    "def_zh": "搜尋程式碼優先用 Grep/Glob —— 結果結構化、可平行安全 —— 而非把檔案透過 Bash 倒出。"
+  },
+  {
+    "term": "JSON Schema (structured output)",
+    "zh": "JSON 結構描述(結構化輸出)",
+    "tag": "Prompt",
     "def_en": "Defining the exact output shape so the model returns reliably parseable, well-typed data via tool_use.",
-    "def_zh": "定義精確的輸出形狀,讓模型透過 tool_use 回傳可靠可解析、型別良好的資料。" },
-  { "term": "Strict mode (strict tool use)", "zh": "strict 模式(嚴格工具使用)", "tag": "Prompt",
+    "def_zh": "定義精確的輸出形狀,讓模型透過 tool_use 回傳可靠可解析、型別良好的資料。"
+  },
+  {
+    "term": "Strict mode (strict tool use)",
+    "zh": "strict 模式(嚴格工具使用)",
+    "tag": "Prompt",
     "def_en": "Enforcing the schema at generation time so tool inputs conform exactly — no missing keys, no extras.",
-    "def_zh": "在生成時強制套用結構描述,使工具輸入完全相符 —— 不缺鍵、不多餘。" },
-  { "term": "Nullable / optional field", "zh": "可為 null / 選填欄位", "tag": "Prompt",
+    "def_zh": "在生成時強制套用結構描述,使工具輸入完全相符 —— 不缺鍵、不多餘。"
+  },
+  {
+    "term": "Nullable / optional field",
+    "zh": "可為 null / 選填欄位",
+    "tag": "Prompt",
     "def_en": "Schema design that lets the model represent 'not present' instead of fabricating a value.",
-    "def_zh": "讓模型能表示「不存在」而非捏造數值的結構描述設計。" },
-  { "term": "enum + \"other\"", "zh": "enum + 「other」", "tag": "Prompt",
+    "def_zh": "讓模型能表示「不存在」而非捏造數值的結構描述設計。"
+  },
+  {
+    "term": "enum + \"other\"",
+    "zh": "enum + 「other」",
+    "tag": "Prompt",
     "def_en": "Capturing known categories with an enum plus an 'other' value and a detail field for the long tail.",
-    "def_zh": "用 enum 擷取已知類別,再以 'other' 值與細節欄位處理長尾。" },
-  { "term": "Few-shot prompting", "zh": "少樣本提示", "tag": "Prompt",
+    "def_zh": "用 enum 擷取已知類別,再以 'other' 值與細節欄位處理長尾。"
+  },
+  {
+    "term": "Few-shot prompting",
+    "zh": "少樣本提示",
+    "tag": "Prompt",
     "def_en": "Giving the model a few targeted examples to steer behavior on ambiguous cases.",
-    "def_zh": "給模型少量針對性範例,以在模糊情況下引導其行為。" },
-  { "term": "Prompt chaining", "zh": "提示串接", "tag": "Prompt",
+    "def_zh": "給模型少量針對性範例,以在模糊情況下引導其行為。"
+  },
+  {
+    "term": "Prompt chaining",
+    "zh": "提示串接",
+    "tag": "Prompt",
     "def_en": "Decomposing a task into sequential focused passes, each handling one step.",
-    "def_zh": "把任務拆成連續、聚焦的多個步驟,每步處理一件事。" },
-  { "term": "Validation / retry loop", "zh": "驗證/重試迴圈", "tag": "Reliability",
+    "def_zh": "把任務拆成連續、聚焦的多個步驟,每步處理一件事。"
+  },
+  {
+    "term": "Validation / retry loop",
+    "zh": "驗證/重試迴圈",
+    "tag": "Reliability",
     "def_en": "Catching schema-valid-but-wrong output with semantic validation (e.g. Pydantic) and feeding failures back for correction.",
-    "def_zh": "用語意驗證(如 Pydantic)抓出「符合結構描述卻錯誤」的輸出,並把失敗回饋以供修正。" },
-  { "term": "Message Batches API", "zh": "Message Batches API", "tag": "Data",
+    "def_zh": "用語意驗證(如 Pydantic)抓出「符合結構描述卻錯誤」的輸出,並把失敗回饋以供修正。"
+  },
+  {
+    "term": "Message Batches API",
+    "zh": "Message Batches API",
+    "tag": "Data",
     "def_en": "Asynchronous bulk processing at ~50% cost for large, non-latency-sensitive jobs (results within ~24h).",
-    "def_zh": "為大量、非延遲敏感的工作提供約 5 折成本的非同步批次處理(約 24 小時內完成)。" },
-  { "term": "custom_id", "zh": "custom_id", "tag": "Data",
+    "def_zh": "為大量、非延遲敏感的工作提供約 5 折成本的非同步批次處理(約 24 小時內完成)。"
+  },
+  {
+    "term": "custom_id",
+    "zh": "custom_id",
+    "tag": "Data",
     "def_en": "The per-request identifier used to match batch results, which arrive in any order.",
-    "def_zh": "用來對應批次結果(結果順序不定)的每筆請求識別碼。" },
-  { "term": "Escalation / human-in-the-loop", "zh": "升級 / 人在迴路", "tag": "Reliability",
+    "def_zh": "用來對應批次結果(結果順序不定)的每筆請求識別碼。"
+  },
+  {
+    "term": "Escalation / human-in-the-loop",
+    "zh": "升級 / 人在迴路",
+    "tag": "Reliability",
     "def_en": "Handing off to a person on a policy gap, explicit request, or repeated inability to progress — with the gathered context.",
-    "def_zh": "在政策缺口、明確要求,或反覆無法推進時,帶著已蒐集的脈絡交給人處理。" },
-  { "term": "Confidence calibration", "zh": "信心校準", "tag": "Reliability",
+    "def_zh": "在政策缺口、明確要求,或反覆無法推進時,帶著已蒐集的脈絡交給人處理。"
+  },
+  {
+    "term": "Confidence calibration",
+    "zh": "信心校準",
+    "tag": "Reliability",
     "def_en": "Scoring per-field confidence and calibrating it on a labeled, stratified sample to set auto-accept vs review thresholds.",
-    "def_zh": "對各欄位評分信心,並以已標註、分層的樣本校準,以設定自動接受 vs 人工審查的門檻。" },
-  { "term": "Provenance / citations", "zh": "出處 / 引用", "tag": "Reliability",
+    "def_zh": "對各欄位評分信心,並以已標註、分層的樣本校準,以設定自動接受 vs 人工審查的門檻。"
+  },
+  {
+    "term": "Provenance / citations",
+    "zh": "出處 / 引用",
+    "tag": "Reliability",
     "def_en": "Tracking claim→source mappings so outputs are verifiable and conflicts are annotated, not silently resolved.",
-    "def_zh": "追蹤「主張→來源」對應,使輸出可驗證、衝突被註記而非默默處理。" },
-  { "term": "Adaptive thinking", "zh": "自適應思考", "tag": "API",
+    "def_zh": "追蹤「主張→來源」對應,使輸出可驗證、衝突被註記而非默默處理。"
+  },
+  {
+    "term": "Adaptive thinking",
+    "zh": "自適應思考",
+    "tag": "API",
     "def_en": "Letting the model decide when and how much to reason (thinking: adaptive), tuned via the effort parameter — replaces fixed budget_tokens.",
-    "def_zh": "讓模型自行決定何時、思考多少(thinking: adaptive),以 effort 參數調整 —— 取代固定的 budget_tokens。" },
-  { "term": "Idempotency (tool safety)", "zh": "冪等性(工具安全)", "tag": "Reliability",
+    "def_zh": "讓模型自行決定何時、思考多少(thinking: adaptive),以 effort 參數調整 —— 取代固定的 budget_tokens。"
+  },
+  {
+    "term": "Idempotency (tool safety)",
+    "zh": "冪等性(工具安全)",
+    "tag": "Reliability",
     "def_en": "Designing destructive tools so repeats don't double-apply, and gating them behind confirmation/permissions.",
-    "def_zh": "設計破壞性工具使重複執行不會重複套用,並以確認/權限把關。" },
-  { "term": "Dedicated tool vs bash", "zh": "專用工具 vs bash", "tag": "Tools",
+    "def_zh": "設計破壞性工具使重複執行不會重複套用,並以確認/權限把關。"
+  },
+  {
+    "term": "Dedicated tool vs bash",
+    "zh": "專用工具 vs bash",
+    "tag": "Tools",
     "def_en": "Promote an action to a dedicated, typed tool when the harness must gate, validate, render, or audit it; use bash for breadth.",
-    "def_zh": "當框架需要把關、驗證、渲染或稽核某動作時,將其提升為專用、具型別的工具;廣度需求才用 bash。" },
-  { "term": "Workflow vs Agent", "zh": "工作流 vs 代理", "tag": "Agents",
+    "def_zh": "當框架需要把關、驗證、渲染或稽核某動作時,將其提升為專用、具型別的工具;廣度需求才用 bash。"
+  },
+  {
+    "term": "Workflow vs Agent",
+    "zh": "工作流 vs 代理",
+    "tag": "Agents",
     "def_en": "Workflow = LLMs + tools on predefined code paths (you control the flow); agent = the model dynamically directs its own process.",
-    "def_zh": "工作流 = 以預定程式碼路徑編排 LLM 與工具(你控制流程);代理 = 模型自行動態主導流程。" },
-  { "term": "Orchestrator–workers", "zh": "協調者—工人", "tag": "Agents",
+    "def_zh": "工作流 = 以預定程式碼路徑編排 LLM 與工具(你控制流程);代理 = 模型自行動態主導流程。"
+  },
+  {
+    "term": "Orchestrator–workers",
+    "zh": "協調者—工人",
+    "tag": "Agents",
     "def_en": "Workflow pattern: a central LLM breaks a task down, delegates to worker LLMs, and synthesizes their results.",
-    "def_zh": "工作流模式:中央 LLM 拆解任務、委派給工人 LLM,再綜整結果。" },
-  { "term": "Evaluator–optimizer", "zh": "評估者—優化者", "tag": "Agents",
+    "def_zh": "工作流模式:中央 LLM 拆解任務、委派給工人 LLM,再綜整結果。"
+  },
+  {
+    "term": "Evaluator–optimizer",
+    "zh": "評估者—優化者",
+    "tag": "Agents",
     "def_en": "Workflow pattern: one LLM generates, another evaluates against a rubric and feeds back, looping to refine.",
-    "def_zh": "工作流模式:一個 LLM 生成,另一個依評分標準評估並回饋,反覆精修。" },
-  { "term": "Agent harness", "zh": "Agent harness", "tag": "Agents",
+    "def_zh": "工作流模式:一個 LLM 生成,另一個依評分標準評估並回饋,反覆精修。"
+  },
+  {
+    "term": "Agent harness",
+    "zh": "Agent harness",
+    "tag": "Agents",
     "def_en": "The infrastructure around the model (tool execution, context lifecycle, state, permissions, verification) that turns a model into an agent.",
-    "def_zh": "包在模型外、把模型變成代理的基礎架構:工具執行、上下文生命週期、狀態、權限、驗證。" },
-  { "term": "Loop engineering", "zh": "迴圈工程", "tag": "Agents",
+    "def_zh": "包在模型外、把模型變成代理的基礎架構:工具執行、上下文生命週期、狀態、權限、驗證。"
+  },
+  {
+    "term": "Loop engineering",
+    "zh": "迴圈工程",
+    "tag": "Agents",
     "def_en": "Designing the agent's iterate loop — especially a generator plus an independent evaluator — instead of crafting one-shot prompts.",
-    "def_zh": "設計代理的迭代迴圈(尤其產生者 + 獨立評估者),而非打磨一次性提示。" },
-  { "term": "Agent–computer interface (ACI)", "zh": "代理—電腦介面 (ACI)", "tag": "Agents",
+    "def_zh": "設計代理的迭代迴圈(尤其產生者 + 獨立評估者),而非打磨一次性提示。"
+  },
+  {
+    "term": "Agent–computer interface (ACI)",
+    "zh": "代理—電腦介面 (ACI)",
+    "tag": "Agents",
     "def_en": "The tool surface an agent acts through; invest in clear descriptions and schemas as much as you would a human UI.",
-    "def_zh": "代理據以行動的工具介面;清楚的描述與結構描述要像人機介面一樣用心。" },
-  { "term": "Effort parameter", "zh": "Effort 參數", "tag": "API",
+    "def_zh": "代理據以行動的工具介面;清楚的描述與結構描述要像人機介面一樣用心。"
+  },
+  {
+    "term": "Effort parameter",
+    "zh": "Effort 參數",
+    "tag": "API",
     "def_en": "output_config.effort (low–max) controls reasoning depth and total token spend; xhigh is the coding/agentic sweet spot.",
-    "def_zh": "output_config.effort(low–max)控制推理深度與整體 token 花費;xhigh 是程式/代理的甜蜜點。" },
-  { "term": "Task budget", "zh": "Task budget", "tag": "API",
+    "def_zh": "output_config.effort(low–max)控制推理深度與整體 token 花費;xhigh 是程式/代理的甜蜜點。"
+  },
+  {
+    "term": "Task budget",
+    "zh": "Task budget",
+    "tag": "API",
     "def_en": "An advisory token ceiling for a whole agentic loop; the model sees a countdown and paces itself (distinct from max_tokens).",
-    "def_zh": "給整個代理迴圈的建議 token 上限;模型看到倒數並自我調配(有別於 max_tokens)。" },
-  { "term": "Structured outputs (output_config.format)", "zh": "結構化輸出 (output_config.format)", "tag": "API",
+    "def_zh": "給整個代理迴圈的建議 token 上限;模型看到倒數並自我調配(有別於 max_tokens)。"
+  },
+  {
+    "term": "Structured outputs (output_config.format)",
+    "zh": "結構化輸出 (output_config.format)",
+    "tag": "API",
     "def_en": "Constrains the response to a JSON schema (constrained decoding) so the output is always valid, typed JSON; replaces the old output_format.",
-    "def_zh": "以 JSON 結構描述約束回應(constrained decoding),使輸出永遠是合法、型別化的 JSON;取代舊的 output_format。" },
-  { "term": "Context rot", "zh": "上下文腐化", "tag": "Context",
+    "def_zh": "以 JSON 結構描述約束回應(constrained decoding),使輸出永遠是合法、型別化的 JSON;取代舊的 output_format。"
+  },
+  {
+    "term": "Context rot",
+    "zh": "上下文腐化",
+    "tag": "Context",
     "def_en": "Recall degrades as the context window fills; bigger windows don't always help — prune to high-signal tokens.",
-    "def_zh": "上下文視窗填滿時回想力下降;視窗更大未必更好 —— 修剪成高訊號 token。" },
-  { "term": "Just-in-time retrieval", "zh": "即時擷取", "tag": "Context",
+    "def_zh": "上下文視窗填滿時回想力下降;視窗更大未必更好 —— 修剪成高訊號 token。"
+  },
+  {
+    "term": "Just-in-time retrieval",
+    "zh": "即時擷取",
+    "tag": "Context",
     "def_en": "Keep lightweight references (paths/URLs) and load content at runtime via tools, instead of pre-loading everything.",
-    "def_zh": "保留輕量參照(路徑/URL),執行期才用工具載入內容,而非事先全載。" },
-  { "term": "Compaction", "zh": "Compaction(壓縮)", "tag": "Context",
+    "def_zh": "保留輕量參照(路徑/URL),執行期才用工具載入內容,而非事先全載。"
+  },
+  {
+    "term": "Compaction",
+    "zh": "Compaction(壓縮)",
+    "tag": "Context",
     "def_en": "Server-side summarization of older history near the context limit; echo response.content back to preserve the compacted state.",
-    "def_zh": "接近上限時伺服器端摘要較早歷史;要把 response.content 接回以保留壓縮狀態。" },
-  { "term": "Context editing", "zh": "Context editing", "tag": "Context",
+    "def_zh": "接近上限時伺服器端摘要較早歷史;要把 response.content 接回以保留壓縮狀態。"
+  },
+  {
+    "term": "Context editing",
+    "zh": "Context editing",
+    "tag": "Context",
     "def_en": "Clearing (not summarizing) stale tool results or thinking blocks from the transcript to keep it lean.",
-    "def_zh": "清除(非摘要)歷程中過時的工具結果或思考區塊,使其精簡。" },
-  { "term": "Web search tool", "zh": "Web search 工具", "tag": "Tools",
+    "def_zh": "清除(非摘要)歷程中過時的工具結果或思考區塊,使其精簡。"
+  },
+  {
+    "term": "Web search tool",
+    "zh": "Web search 工具",
+    "tag": "Tools",
     "def_en": "Server-side tool: live web search with citations, run on Anthropic's infrastructure (just declare it in tools).",
-    "def_zh": "伺服器端工具:即時網路搜尋附引用,在 Anthropic 基礎設施執行(只要在 tools 宣告)。" },
-  { "term": "Code execution tool", "zh": "Code execution 工具", "tag": "Tools",
+    "def_zh": "伺服器端工具:即時網路搜尋附引用,在 Anthropic 基礎設施執行(只要在 tools 宣告)。"
+  },
+  {
+    "term": "Code execution tool",
+    "zh": "Code execution 工具",
+    "tag": "Tools",
     "def_en": "Server-side sandboxed Python/bash container the model uses to run code (free when paired with web tools).",
-    "def_zh": "伺服器端沙箱 Python/bash 容器,供模型執行程式碼(與 web 工具併用時免費)。" },
-  { "term": "Tool search", "zh": "Tool search", "tag": "Tools",
+    "def_zh": "伺服器端沙箱 Python/bash 容器,供模型執行程式碼(與 web 工具併用時免費)。"
+  },
+  {
+    "term": "Tool search",
+    "zh": "Tool search",
+    "tag": "Tools",
     "def_en": "Discover tools on demand from a large library (mark the rest defer_loading); schemas are appended, preserving the cache.",
-    "def_zh": "從大型工具庫按需探索工具(其餘標 defer_loading);結構描述以附加方式載入,可保留快取。" },
-  { "term": "Programmatic tool calling (PTC)", "zh": "程式化工具呼叫 (PTC)", "tag": "Tools",
+    "def_zh": "從大型工具庫按需探索工具(其餘標 defer_loading);結構描述以附加方式載入,可保留快取。"
+  },
+  {
+    "term": "Programmatic tool calling (PTC)",
+    "zh": "程式化工具呼叫 (PTC)",
+    "tag": "Tools",
     "def_en": "Claude calls your tools from inside code execution; intermediate results stay out of context, only the final output returns.",
-    "def_zh": "Claude 從 code execution 內部呼叫你的工具;中間結果不進上下文,只回傳最終輸出。" },
-  { "term": "Memory tool", "zh": "Memory tool", "tag": "Tools",
+    "def_zh": "Claude 從 code execution 內部呼叫你的工具;中間結果不進上下文,只回傳最終輸出。"
+  },
+  {
+    "term": "Memory tool",
+    "zh": "Memory tool",
+    "tag": "Tools",
     "def_en": "Client-side Anthropic-defined tool; Claude reads/writes a /memories directory for cross-session state (you implement the backend).",
-    "def_zh": "用戶端 Anthropic 定義工具;Claude 讀寫 /memories 目錄做跨工作階段狀態(後端由你實作)。" },
-  { "term": "Files API", "zh": "Files API", "tag": "Data",
-    "def_en": "Upload a file once, then reference it by file_id across many requests (PDF/text/image), instead of re-sending bytes.",
-    "def_zh": "檔案上傳一次,之後跨多個請求以 file_id 引用(PDF/文字/影像),不必重送位元組。" },
-  { "term": "Managed Agents", "zh": "Managed Agents(託管代理)", "tag": "Agents",
+    "def_zh": "用戶端 Anthropic 定義工具;Claude 讀寫 /memories 目錄做跨工作階段狀態(後端由你實作)。"
+  },
+  {
+    "term": "Files API",
+    "zh": "Files API",
+    "tag": "Data",
+    "def_en": "Upload a file once, then reference it by file_id across many requests (PDF/text/image), instead of re-sending bytes. GA on the Claude API since 2026-08 (the files-api-2025-04-14 beta header is now optional); GA adds file expiration (expires_in_seconds / expires_at) and ids[] list filtering, with higher rate limits and 1 TB of storage per organization.",
+    "def_zh": "檔案上傳一次,之後跨多個請求以 file_id 引用(PDF/文字/影像),不必重送位元組。2026-08 起在 Claude API 上 GA(files-api-2025-04-14 beta header 現為選用);GA 版新增檔案到期(expires_in_seconds / expires_at)與 ids[] 列表過濾,並提高速率限制、每個組織 1 TB 儲存空間。"
+  },
+  {
+    "term": "Managed Agents",
+    "zh": "Managed Agents(託管代理)",
+    "tag": "Agents",
     "def_en": "Anthropic-hosted agents: Anthropic runs the loop AND a per-session container; object model is Agent → Session → Environment.",
-    "def_zh": "Anthropic 託管代理:Anthropic 跑迴圈並提供每工作階段容器;物件模型為 Agent → Session → Environment。" },
-  { "term": "Agent vs Session (Managed Agents)", "zh": "Agent vs Session(Managed Agents)", "tag": "Agents",
+    "def_zh": "Anthropic 託管代理:Anthropic 跑迴圈並提供每工作階段容器;物件模型為 Agent → Session → Environment。"
+  },
+  {
+    "term": "Agent vs Session (Managed Agents)",
+    "zh": "Agent vs Session(Managed Agents)",
+    "tag": "Agents",
     "def_en": "Agent = persisted, versioned config (model/system/tools), created ONCE and referenced by id; Session = one run that points to it.",
-    "def_zh": "Agent = 持久、有版本的設定(model/system/tools),建立一次並以 id 引用;Session = 指向它的一次執行。" },
-  { "term": "Vault (Managed Agents)", "zh": "Vault(憑證庫)", "tag": "Reliability",
+    "def_zh": "Agent = 持久、有版本的設定(model/system/tools),建立一次並以 id 引用;Session = 指向它的一次執行。"
+  },
+  {
+    "term": "Vault (Managed Agents)",
+    "zh": "Vault(憑證庫)",
+    "tag": "Reliability",
     "def_en": "Credential store (MCP OAuth, static bearer, env-var secrets) injected at egress — secrets never enter the sandbox.",
-    "def_zh": "憑證庫(MCP OAuth、靜態 bearer、環境變數祕密),在 egress 注入 —— 祕密永不進入沙箱。" },
-  { "term": "MCP transports", "zh": "MCP 傳輸", "tag": "MCP",
+    "def_zh": "憑證庫(MCP OAuth、靜態 bearer、環境變數祕密),在 egress 注入 —— 祕密永不進入沙箱。"
+  },
+  {
+    "term": "MCP transports",
+    "zh": "MCP 傳輸",
+    "tag": "MCP",
     "def_en": "stdio (local subprocess) and Streamable HTTP (remote) are the two standard MCP transports; the SSE-only transport is deprecated.",
-    "def_zh": "stdio(本機子行程)與 Streamable HTTP(遠端)是兩種標準 MCP 傳輸;純 SSE 傳輸已棄用。" },
-  { "term": "MCP connector", "zh": "MCP connector", "tag": "MCP",
+    "def_zh": "stdio(本機子行程)與 Streamable HTTP(遠端)是兩種標準 MCP 傳輸;純 SSE 傳輸已棄用。"
+  },
+  {
+    "term": "MCP connector",
+    "zh": "MCP connector",
+    "tag": "MCP",
     "def_en": "Messages API feature letting Claude call a remote MCP server server-side via mcp_servers[] + an mcp_toolset entry.",
-    "def_zh": "Messages API 功能,讓 Claude 透過 mcp_servers[] + mcp_toolset 在伺服器端呼叫遠端 MCP 伺服器。" },
-  { "term": "MCP 2026-07-28 spec", "zh": "MCP 2026-07-28 規格", "tag": "MCP",
+    "def_zh": "Messages API 功能,讓 Claude 透過 mcp_servers[] + mcp_toolset 在伺服器端呼叫遠端 MCP 伺服器。"
+  },
+  {
+    "term": "MCP 2026-07-28 spec",
+    "zh": "MCP 2026-07-28 規格",
+    "tag": "MCP",
     "def_en": "The current MCP revision, published on schedule 2026-07-28 (frozen as an RC 2026-05-21) with Tier 1 SDKs shipped; the Foundations exam still assumes the prior 2025-11-25 revision, and the new core has breaking changes. It brings a stateless protocol core (capabilities move to _meta, any request can hit any server instance; the Mcp-Session-Id header is removed, plus header-based routing and cacheable list results), Multi Round-Trip Requests (MRTR, SEP-2322 — a server returns InputRequiredResult from tools/call instead of calling back to the client), an independently-versioned Extensions framework (reverse-DNS ids, ext-* repos) carrying Tasks and MCP Apps, and OAuth hardening (RFC 9207 iss validation, a formal 12-month deprecation policy).",
-    "def_zh": "當前的 MCP 修訂,已如期於 2026-07-28 正式發布(2026-05-21 凍結為 RC),Tier 1 SDK 已出貨;Foundations 考試仍假設前一版 2025-11-25,且新核心帶有破壞性變更。它帶來無狀態協定核心(能力移入 _meta,任何請求可打到任何伺服器實例;移除 Mcp-Session-Id 標頭,並加上基於標頭的路由與可快取的 list 結果)、Multi Round-Trip Requests(MRTR,SEP-2322 —— 伺服器以 InputRequiredResult 回應 tools/call,而非回呼用戶端)、獨立版本化的 Extensions 框架(反向 DNS id、ext-* 儲存庫)承載 Tasks 與 MCP Apps,以及 OAuth 加固(RFC 9207 iss 驗證、正式的 12 個月棄用政策)。" },
-  { "term": "Evals for agents", "zh": "代理評測 (Evals)", "tag": "Reliability",
+    "def_zh": "當前的 MCP 修訂,已如期於 2026-07-28 正式發布(2026-05-21 凍結為 RC),Tier 1 SDK 已出貨;Foundations 考試仍假設前一版 2025-11-25,且新核心帶有破壞性變更。它帶來無狀態協定核心(能力移入 _meta,任何請求可打到任何伺服器實例;移除 Mcp-Session-Id 標頭,並加上基於標頭的路由與可快取的 list 結果)、Multi Round-Trip Requests(MRTR,SEP-2322 —— 伺服器以 InputRequiredResult 回應 tools/call,而非回呼用戶端)、獨立版本化的 Extensions 框架(反向 DNS id、ext-* 儲存庫)承載 Tasks 與 MCP Apps,以及 OAuth 加固(RFC 9207 iss 驗證、正式的 12 個月棄用政策)。"
+  },
+  {
+    "term": "Evals for agents",
+    "zh": "代理評測 (Evals)",
+    "tag": "Reliability",
     "def_en": "The test suite for agents: code/model/human graders over realistic tasks, grading outcomes AND trajectories; use pass@k.",
-    "def_zh": "代理的測試套件:以程式碼/模型/人評分者在真實任務上評測,評結果與軌跡;用 pass@k。" },
-  { "term": "pass@k", "zh": "pass@k", "tag": "Reliability",
+    "def_zh": "代理的測試套件:以程式碼/模型/人評分者在真實任務上評測,評結果與軌跡;用 pass@k。"
+  },
+  {
+    "term": "pass@k",
+    "zh": "pass@k",
+    "tag": "Reliability",
     "def_en": "An eval metric for non-deterministic agents: does it succeed within k attempts? Run multiple trials rather than judging one.",
-    "def_zh": "不確定性代理的評測指標:k 次嘗試內是否成功?跑多次而非只看單次。" },
-  { "term": "Workload Identity Federation (WIF)", "zh": "工作負載身分聯合(WIF)", "tag": "Platform",
+    "def_zh": "不確定性代理的評測指標:k 次嘗試內是否成功?跑多次而非只看單次。"
+  },
+  {
+    "term": "Workload Identity Federation (WIF)",
+    "zh": "工作負載身分聯合(WIF)",
+    "tag": "Platform",
     "def_en": "Authenticate to the Claude API with a short-lived OIDC token from your own identity provider (AWS, GCP, Entra ID, GitHub Actions, Kubernetes, SPIFFE, Okta) instead of a static API key. The token is exchanged at POST /v1/oauth/token for a scoped Anthropic token acting as a service account — no standing secret to rotate or leak.",
-    "def_zh": "以自有身分供應商(AWS、GCP、Entra ID、GitHub Actions、Kubernetes、SPIFFE、Okta)簽發的短期 OIDC token 驗證 Claude API,取代靜態 API key。該 token 在 POST /v1/oauth/token 換取一個以服務帳號身分運作、受範圍限制的 Anthropic token——沒有需要輪替或可能外洩的長期密鑰。" },
-  { "term": "Claude Science", "zh": "Claude Science", "tag": "Platform",
+    "def_zh": "以自有身分供應商(AWS、GCP、Entra ID、GitHub Actions、Kubernetes、SPIFFE、Okta)簽發的短期 OIDC token 驗證 Claude API,取代靜態 API key。該 token 在 POST /v1/oauth/token 換取一個以服務帳號身分運作、受範圍限制的 Anthropic token——沒有需要輪替或可能外洩的長期密鑰。"
+  },
+  {
+    "term": "Claude Science",
+    "zh": "Claude Science",
+    "tag": "Platform",
     "def_en": "Anthropic's agentic scientific-research platform (launched 2026-06-30): 60+ scientific-database connectors, protein-structure prediction, and automated biology/chemistry research workflows.",
-    "def_zh": "Anthropic 的代理式科學研究平台(2026-06-30 推出):60+ 科學資料庫連接器、蛋白質結構預測,以及自動化的生物/化學研究工作流程。" },
-  { "term": "Claude Cowork", "zh": "Claude Cowork", "tag": "Platform",
+    "def_zh": "Anthropic 的代理式科學研究平台(2026-06-30 推出):60+ 科學資料庫連接器、蛋白質結構預測,以及自動化的生物/化學研究工作流程。"
+  },
+  {
+    "term": "Claude Cowork",
+    "zh": "Claude Cowork",
+    "tag": "Platform",
     "def_en": "Anthropic's agentic AI for knowledge work: Claude Code's agent architecture running inside Claude Desktop (no terminal) for non-developers. Reads and writes local files, coordinates sub-agents into parallel workstreams, and produces artifacts like Excel workbooks and PowerPoint decks. Available on all paid plans.",
-    "def_zh": "Anthropic 面向知識工作的代理式 AI:把 Claude Code 的代理架構搬進 Claude Desktop(不需終端機),供非開發者使用。可讀寫本機檔案、將子代理協調成平行工作流,並產出 Excel 活頁簿、PowerPoint 簡報等產物。所有付費方案皆可使用。" },
-  { "term": "Claude Tag", "zh": "Claude Tag", "tag": "Platform",
+    "def_zh": "Anthropic 面向知識工作的代理式 AI:把 Claude Code 的代理架構搬進 Claude Desktop(不需終端機),供非開發者使用。可讀寫本機檔案、將子代理協調成平行工作流,並產出 Excel 活頁簿、PowerPoint 簡報等產物。所有付費方案皆可使用。"
+  },
+  {
+    "term": "Claude Tag",
+    "zh": "Claude Tag",
+    "tag": "Platform",
     "def_en": "Claude as a shared team member, starting in Slack: tag @Claude in a channel to delegate a task and it works through stages with its connected tools, replying in-thread. Multiplayer (one Claude per channel that everyone shares), keeps channel memory, and can run an ambient mode that proactively surfaces information. Uses an agent-identity access model — the agent has its own team-wide identity rather than borrowing a person's.",
-    "def_zh": "讓 Claude 成為共享的團隊成員,起點在 Slack:在頻道中 @Claude 委派任務,它會以連接的工具分階段完成,並在討論串中回覆。多人協作(每個頻道一個由所有人共享的 Claude)、保有頻道記憶,並可啟用主動浮現資訊的環境感知(ambient)模式。採用代理身分存取模型——代理擁有自己的團隊層級身分,而非借用某個人的身分。" },
-  { "term": "CCAR-P (Architect — Professional)", "zh": "CCAR-P(Architect — Professional)", "tag": "Platform",
+    "def_zh": "讓 Claude 成為共享的團隊成員,起點在 Slack:在頻道中 @Claude 委派任務,它會以連接的工具分階段完成,並在討論串中回覆。多人協作(每個頻道一個由所有人共享的 Claude)、保有頻道記憶,並可啟用主動浮現資訊的環境感知(ambient)模式。採用代理身分存取模型——代理擁有自己的團隊層級身分,而非借用某個人的身分。"
+  },
+  {
+    "term": "CCAR-P (Architect — Professional)",
+    "zh": "CCAR-P(Architect — Professional)",
+    "tag": "Platform",
     "def_en": "The Claude Certified Architect — Professional exam (v1.0, July 2026): 63 multiple-choice/multiple-response items, 120 min, pass 720/1000, $175, credential valid 12 months (free on-time renewal). Seven domains — Integration (19%) is the heaviest. This guide's PART V covers the blueprint and delta topics.",
-    "def_zh": "Claude Certified Architect — Professional 考試(v1.0,2026 年 7 月):63 題單選/複選混合、120 分鐘、及格 720/1000、$175,證照效期 12 個月(準時續證免費)。七大領域——整合(19%)權重最高。本指南第五部分涵蓋考綱與增量主題。" },
-  { "term": "RAG (retrieval-augmented generation)", "zh": "檢索增強生成(RAG)", "tag": "Data",
+    "def_zh": "Claude Certified Architect — Professional 考試(v1.0,2026 年 7 月):63 題單選/複選混合、120 分鐘、及格 720/1000、$175,證照效期 12 個月(準時續證免費)。七大領域——整合(19%)權重最高。本指南第五部分涵蓋考綱與增量主題。"
+  },
+  {
+    "term": "RAG (retrieval-augmented generation)",
+    "zh": "檢索增強生成(RAG)",
+    "tag": "Data",
     "def_en": "Retrieve relevant chunks from an indexed corpus at query time and feed them to the model: ingest → chunk → embed → index → retrieve → (rerank) → generate. When answers turn confident-but-wrong after a data refresh with the model unchanged, suspect the retrieval layer first.",
-    "def_zh": "查詢時從已索引語料檢索相關片段餵給模型:攝取 → 分塊 → 嵌入 → 索引 → 檢索 → (重排) → 生成。資料更新後答案變得自信但錯誤、而模型沒變,先懷疑檢索層。" },
-  { "term": "Chunking", "zh": "分塊(chunking)", "tag": "Data",
+    "def_zh": "查詢時從已索引語料檢索相關片段餵給模型:攝取 → 分塊 → 嵌入 → 索引 → 檢索 → (重排) → 生成。資料更新後答案變得自信但錯誤、而模型沒變,先懷疑檢索層。"
+  },
+  {
+    "term": "Chunking",
+    "zh": "分塊(chunking)",
+    "tag": "Data",
     "def_en": "Splitting documents into retrievable units for RAG — a trade-off, not a constant: fixed-size + overlap for uniform prose; structure-aware for contracts/tables; small-to-big and contextual retrieval to balance precision against coherence.",
-    "def_zh": "把文件切成 RAG 可檢索的單元——是取捨,不是常數:均質散文用固定大小+重疊;合約/表格用結構感知;要平衡精準與連貫時用 small-to-big 與上下文化檢索。" },
-  { "term": "CCDV-F (Developer — Foundations)", "zh": "CCDV-F(Developer — Foundations)", "tag": "Platform",
+    "def_zh": "把文件切成 RAG 可檢索的單元——是取捨,不是常數:均質散文用固定大小+重疊;合約/表格用結構感知;要平衡精準與連貫時用 small-to-big 與上下文化檢索。"
+  },
+  {
+    "term": "CCDV-F (Developer — Foundations)",
+    "zh": "CCDV-F(Developer — Foundations)",
+    "tag": "Platform",
     "def_en": "The Claude Certified Developer — Foundations exam (v1.0, July 2026): 53 MC/MR items, 120 min, pass 720/1000, $125, valid 12 months. Eight domains — Applications & Integration alone is 33.1%; Claude Code just 3.1%. See Chapter 32.",
-    "def_zh": "Claude Certified Developer — Foundations 考試(v1.0,2026 年 7 月):53 題單選/複選、120 分鐘、及格 720/1000、$125,效期 12 個月。八大領域——僅「應用與整合」就佔 33.1%;Claude Code 只有 3.1%。見第 32 章。" },
-  { "term": "CCAO-F (Associate — Foundations)", "zh": "CCAO-F(Associate — Foundations)", "tag": "Platform",
+    "def_zh": "Claude Certified Developer — Foundations 考試(v1.0,2026 年 7 月):53 題單選/複選、120 分鐘、及格 720/1000、$125,效期 12 個月。八大領域——僅「應用與整合」就佔 33.1%;Claude Code 只有 3.1%。見第 32 章。"
+  },
+  {
+    "term": "CCAO-F (Associate — Foundations)",
+    "zh": "CCAO-F(Associate — Foundations)",
+    "tag": "Platform",
     "def_en": "The Claude Certified Associate — Foundations exam (v1.0, July 2026): 60 MC/MR items, 120 min, pass 720/1000, $99, valid 12 months. Seven domains for practitioners using the Claude apps; Output Evaluation & Validation (21%) is the heaviest. See Chapter 33.",
-    "def_zh": "Claude Certified Associate — Foundations 考試(v1.0,2026 年 7 月):60 題單選/複選、120 分鐘、及格 720/1000、$99,效期 12 個月。七大領域,面向使用 Claude 應用程式的實務者;「輸出評估與驗證」(21%)權重最高。見第 33 章。" },
-  { "term": "Cache diagnostics", "zh": "快取診斷", "tag": "Prompt",
+    "def_zh": "Claude Certified Associate — Foundations 考試(v1.0,2026 年 7 月):60 題單選/複選、120 分鐘、及格 720/1000、$99,效期 12 個月。七大領域,面向使用 Claude 應用程式的實務者;「輸出評估與驗證」(21%)權重最高。見第 33 章。"
+  },
+  {
+    "term": "Cache diagnostics",
+    "zh": "快取診斷",
+    "tag": "Prompt",
     "def_en": "Public-beta API aid for debugging prompt-cache misses: send the cache-diagnosis-2026-04-07 beta header and diagnostics.previous_message_id (the prior response's id), and the API returns a cache_miss_reason naming where the current prefix diverged from that turn. Replaces eyeballing two rendered prompts for a silent invalidator; a diagnostic only — caching behaviour is unchanged when the header is absent.",
-    "def_zh": "用於除錯提示快取落空的公開測試版 API 輔助:送出 cache-diagnosis-2026-04-07 beta 標頭與 diagnostics.previous_message_id(前一回合回應的 id),API 會回傳 cache_miss_reason,指出目前前綴與該回合在何處分岔。取代肉眼比對兩份算繪提示找無聲失效因子;純屬診斷——少了這個標頭,快取行為完全不變。" },
-  { "term": "fallbackModel", "zh": "fallbackModel(後備模型)", "tag": "Claude Code",
+    "def_zh": "用於除錯提示快取落空的公開測試版 API 輔助:送出 cache-diagnosis-2026-04-07 beta 標頭與 diagnostics.previous_message_id(前一回合回應的 id),API 會回傳 cache_miss_reason,指出目前前綴與該回合在何處分岔。取代肉眼比對兩份算繪提示找無聲失效因子;純屬診斷——少了這個標頭,快取行為完全不變。"
+  },
+  {
+    "term": "fallbackModel",
+    "zh": "fallbackModel(後備模型)",
+    "tag": "Claude Code",
     "def_en": "Claude Code setting that lists up to three models tried in order when the primary is overloaded or unavailable, so an unattended run degrades to the next tier instead of failing. Orthogonal to permission mode (which governs actions, not model availability); subagents and context compaction inherit the session's extended-thinking config, so a fallback keeps the reasoning budget you set.",
-    "def_zh": "Claude Code 的設定,列出最多三個模型,在主模型過載或不可用時依序嘗試,讓無人值守的運行降級到下一層級而非失敗。與權限模式正交(權限管動作,不管模型可用性);子代理與上下文壓縮會繼承工作階段的延伸思考設定,所以後備模型保留你設定的推理預算。" },
-  { "term": "API key expiration", "zh": "API key 過期", "tag": "API",
+    "def_zh": "Claude Code 的設定,列出最多三個模型,在主模型過載或不可用時依序嘗試,讓無人值守的運行降級到下一層級而非失敗。與權限模式正交(權限管動作,不管模型可用性);子代理與上下文壓縮會繼承工作階段的延伸思考設定,所以後備模型保留你設定的推理預算。"
+  },
+  {
+    "term": "API key expiration",
+    "zh": "API key 過期",
+    "tag": "API",
     "def_en": "Console option to set an expiration (preset, custom duration, or Never) when creating an API key or Admin API key. Anthropic emails the creator before a key with a lifetime of at least 7 days expires; existing keys are unaffected; the Admin API reports each key's expires_at for programmatic audit. Credential hygiene for the static keys WIF doesn't replace — not a substitute for workload identity, but strictly better than a key that lives forever.",
-    "def_zh": "在 Console 建立 API key 或 Admin API key 時設定過期時間(預設、自訂時長或永不過期)的選項。對於效期至少 7 天的 key,Anthropic 會在過期前寄信通知建立者;既有 key 不受影響;Admin API 會回報每把 key 的 expires_at 供程式化稽核。這是為 WIF 無法取代的靜態 key 做的憑證衛生——不是工作負載身分的替代品,但嚴格勝過永遠存活的 key。" },
-  { "term": "Claude Enterprise user management (Admin API)", "zh": "Claude Enterprise 成員管理(Admin API)", "tag": "Platform",
+    "def_zh": "在 Console 建立 API key 或 Admin API key 時設定過期時間(預設、自訂時長或永不過期)的選項。對於效期至少 7 天的 key,Anthropic 會在過期前寄信通知建立者;既有 key 不受影響;Admin API 會回報每把 key 的 expires_at 供程式化稽核。這是為 WIF 無法取代的靜態 key 做的憑證衛生——不是工作負載身分的替代品,但嚴格勝過永遠存活的 key。"
+  },
+  {
+    "term": "Claude Enterprise user management (Admin API)",
+    "zh": "Claude Enterprise 成員管理(Admin API)",
+    "tag": "Platform",
     "def_en": "Beta Admin API surface (/v1/organizations/…) for Claude Enterprise (claude.ai) orgs to manage members and invites, groups and group members, and read custom roles. Group and custom-role calls need the anthropic-beta: ce-user-management-2026-07-13 header; member/invite calls don't. Scopes are granular (read/write:members, read/write:rbac_groups); a read:org_audit key can call every GET. Constraints: the API assigns only the user and managed roles (administrative roles and custom-role authoring live in claude.ai settings), custom roles are read-only, and on SSO/SCIM orgs invite creation, role changes, and member removals return 400 — the identity provider stays the source of truth. The human-identity counterpart to WIF.",
-    "def_zh": "供 Claude Enterprise(claude.ai)組織使用的 beta Admin API 介面(/v1/organizations/…):管理成員與邀請、群組與群組成員,並讀取自訂角色。群組與自訂角色的呼叫需要 anthropic-beta: ce-user-management-2026-07-13 標頭;成員/邀請的呼叫則不用。範圍是細粒度的(read/write:members、read/write:rbac_groups);一把 read:org_audit key 能呼叫每一個 GET。約束:API 只能指派 user 與 managed 角色(管理型角色與自訂角色的撰寫都在 claude.ai 設定裡)、自訂角色唯讀,且在 SSO/SCIM 組織裡建立邀請、變更角色與移除成員都回傳 400——身分供應商始終是真相來源。這是 WIF 在真人身分上的對應。" },
-  { "term": "Claude Opus 5", "zh": "Claude Opus 5", "tag": "Platform",
+    "def_zh": "供 Claude Enterprise(claude.ai)組織使用的 beta Admin API 介面(/v1/organizations/…):管理成員與邀請、群組與群組成員,並讀取自訂角色。群組與自訂角色的呼叫需要 anthropic-beta: ce-user-management-2026-07-13 標頭;成員/邀請的呼叫則不用。範圍是細粒度的(read/write:members、read/write:rbac_groups);一把 read:org_audit key 能呼叫每一個 GET。約束:API 只能指派 user 與 managed 角色(管理型角色與自訂角色的撰寫都在 claude.ai 設定裡)、自訂角色唯讀,且在 SSO/SCIM 組織裡建立邀請、變更角色與移除成員都回傳 400——身分供應商始終是真相來源。這是 WIF 在真人身分上的對應。"
+  },
+  {
+    "term": "Claude Opus 5",
+    "zh": "Claude Opus 5",
+    "tag": "Platform",
     "def_en": "Anthropic's default Opus model (claude-opus-5), launched 2026-07-24 as a step-change over Opus 4.8 at the same $5 / $25 per-MTok pricing: 1M-token context (default and maximum), 128K max output, and thinking on by default with effort (low→max) as the control. Guidance is to start at Opus 5 for complex agentic coding and enterprise work and reserve Fable 5 for the highest-capability slice. Two migration gotchas: thinking on by default means max_tokens now caps thinking plus response; and disabling thinking (thinking:{type:'disabled'}) is allowed only at effort high or below — xhigh/max returns a 400 (a breaking change from Opus 4.8). Also lowers the minimum cacheable prefix to 512 tokens and adds mid-conversation tool changes (mid-conversation-tool-changes-2026-07-01) and a 'default' server-side fallback mode. Opus 4.8 remains callable as a legacy model.",
-    "def_zh": "Anthropic 的預設 Opus 模型(claude-opus-5),於 2026-07-24 發布,相對 Opus 4.8 是階躍式提升,定價維持每 MTok $5 / $25:1M token 上下文(預設即上限)、128K 最大輸出,思考預設開啟並以 effort(low→max)控制。官方建議複雜代理程式設計與企業工作從 Opus 5 起步,把 Fable 5 保留給需要最高能力的那一小片。兩個遷移陷阱:思考預設開啟代表 max_tokens 現在同時涵蓋思考加回應;而停用思考(thinking:{type:'disabled'})只允許在 effort high 或以下——xhigh/max 會回傳 400(相對 Opus 4.8 是破壞性變更)。另把最小可快取前綴降到 512 token,並新增對話中途變更工具(mid-conversation-tool-changes-2026-07-01)與 'default' 伺服端後備模式。Opus 4.8 續以舊版模型可呼叫。" },
-  { "term": "Claude Sonnet 5", "zh": "Claude Sonnet 5", "tag": "Platform",
+    "def_zh": "Anthropic 的預設 Opus 模型(claude-opus-5),於 2026-07-24 發布,相對 Opus 4.8 是階躍式提升,定價維持每 MTok $5 / $25:1M token 上下文(預設即上限)、128K 最大輸出,思考預設開啟並以 effort(low→max)控制。官方建議複雜代理程式設計與企業工作從 Opus 5 起步,把 Fable 5 保留給需要最高能力的那一小片。兩個遷移陷阱:思考預設開啟代表 max_tokens 現在同時涵蓋思考加回應;而停用思考(thinking:{type:'disabled'})只允許在 effort high 或以下——xhigh/max 會回傳 400(相對 Opus 4.8 是破壞性變更)。另把最小可快取前綴降到 512 token,並新增對話中途變更工具(mid-conversation-tool-changes-2026-07-01)與 'default' 伺服端後備模式。Opus 4.8 續以舊版模型可呼叫。"
+  },
+  {
+    "term": "Claude Sonnet 5",
+    "zh": "Claude Sonnet 5",
+    "tag": "Platform",
     "def_en": "Anthropic's balanced production tier (claude-sonnet-5), succeeding Sonnet 4.6 (still callable as claude-sonnet-4-6, now legacy). 1M context, 128K max output, effort defaults to high. Its launch $2 / $10 per-MTok pricing was made permanent on 2026-08-10 — the standard $3 / $15 rate that had been scheduled for 2026-09-01 no longer applies, so $2 / $10 is the ongoing price. Migration gotchas from Sonnet 4.6: adaptive thinking on by default; manual budget_tokens and non-default temperature/top_p/top_k each return 400; Priority Tier is unavailable; and a new tokenizer emits ~30% more tokens for the same text, so re-measure cost with the token-counting API.",
-    "def_zh": "Anthropic 的平衡生產層級(claude-sonnet-5),接替 Sonnet 4.6(仍可用 claude-sonnet-4-6 呼叫,現為舊版)。1M 上下文、128K 最大輸出,effort 預設為 high。上市時的 $2 / $10 每 MTok 定價已於 2026-08-10 轉為永久價 —— 原排定 2026-09-01 生效的標準 $3 / $15 不再適用,因此 $2 / $10 是常態價。從 Sonnet 4.6 遷移的陷阱:自適應思考預設開啟;手動 budget_tokens 與非預設 temperature/top_p/top_k 各自回傳 400;無 Priority Tier;且新 tokenizer 對相同文字約多產生 30% token,故須以 token 計數 API 重新量測成本。" },
-  { "term": "Session seeding (initial_events)", "zh": "Session 種子化(initial_events)", "tag": "Agents",
+    "def_zh": "Anthropic 的平衡生產層級(claude-sonnet-5),接替 Sonnet 4.6(仍可用 claude-sonnet-4-6 呼叫,現為舊版)。1M 上下文、128K 最大輸出,effort 預設為 high。上市時的 $2 / $10 每 MTok 定價已於 2026-08-10 轉為永久價 —— 原排定 2026-09-01 生效的標準 $3 / $15 不再適用,因此 $2 / $10 是常態價。從 Sonnet 4.6 遷移的陷阱:自適應思考預設開啟;手動 budget_tokens 與非預設 temperature/top_p/top_k 各自回傳 400;無 Priority Tier;且新 tokenizer 對相同文字約多產生 30% token,故須以 token 計數 API 重新量測成本。"
+  },
+  {
+    "term": "Session seeding (initial_events)",
+    "zh": "Session 種子化(initial_events)",
+    "tag": "Agents",
     "def_en": "Managed Agents session-creation option (July 22 2026 release): pass an initial_events array of up to 50 user.message and user.define_outcome events on POST /v1/sessions. A non-empty list starts the agent loop in the same call, collapsing the old create-session-then-send-events two-step into one request — the clean path for scheduled/fanned-out headless fleets, paired with lifecycle webhooks for completion. Shipped alongside two sibling refinements: effort now sits inside the agent's model config (low→max, per role), and the version field is optional on agent update (supply it for optimistic-concurrency 409s, omit it to overwrite unconditionally).",
-    "def_zh": "Managed Agents 建立 session 的選項(2026 年 7 月 22 日發布):在 POST /v1/sessions 傳一個 initial_events 陣列,最多 50 個 user.message 與 user.define_outcome 事件。非空清單會在同一個呼叫裡啟動代理迴圈,把舊的「先建 session、再送事件」兩步併成一個請求——是排程/扇出無頭機群的乾淨路徑,搭配生命週期 webhooks 回報完成。與兩項姊妹精修一同發布:effort 現在落在 agent 的 model 設定裡(low→max,依角色),而更新 agent 時 version 欄位選填(附上以取得樂觀並行的 409,省略則無條件覆寫)。" },
-  { "term": "Inference hooks", "zh": "推論 hook", "tag": "Platform",
+    "def_zh": "Managed Agents 建立 session 的選項(2026 年 7 月 22 日發布):在 POST /v1/sessions 傳一個 initial_events 陣列,最多 50 個 user.message 與 user.define_outcome 事件。非空清單會在同一個呼叫裡啟動代理迴圈,把舊的「先建 session、再送事件」兩步併成一個請求——是排程/扇出無頭機群的乾淨路徑,搭配生命週期 webhooks 回報完成。與兩項姊妹精修一同發布:effort 現在落在 agent 的 model 設定裡(low→max,依角色),而更新 agent 時 version 欄位選填(附上以取得樂觀並行的 409,省略則無條件覆寫)。"
+  },
+  {
+    "term": "Inference hooks",
+    "zh": "推論 hook",
+    "tag": "Platform",
     "def_en": "Claude Enterprise governance control (beta, announced 2026-08-05) that holds every governed prompt — across claude.ai, Claude Cowork, and Claude Code — before inference while your organization's own AI-security server returns an allow or deny verdict; only 'allow' lets inference proceed. Verdict requests are signed (so the hook can't be spoofed), the failure mode is configurable (fail closed for a real compliance boundary, fail open for availability), and every denial is recorded in the compliance Activity Feed. It is the outermost, provider-side, org-wide enforcement ring — earlier than a PreToolUse hook (which gates one Claude Code session's tool call) or managed MCP + EMA (which govern which servers exist and who may use them), all of which still apply to prompts that pass.",
-    "def_zh": "Claude Enterprise 的治理控制(beta,2026-08-05 公布):在推論之前暫留每一則受治理的提示——橫跨 claude.ai、Claude Cowork 與 Claude Code——並等候組織自己的 AI 安全伺服器回傳放行或拒絕裁決;唯有「放行」才讓推論進行。裁決請求帶簽章(hook 無法被假冒),失敗模式可設定(真正的合規邊界用 fail closed,重可用性用 fail open),且每一次拒絕都記入合規 Activity Feed。它是最外層、供應商端、涵蓋整個組織的強制執行環——比 PreToolUse hook(守單一 Claude Code session 的工具呼叫)或 managed MCP + EMA(治理哪些伺服器存在、誰可使用)更早,而後者對通過的提示仍繼續生效。" },
-  { "term": "Session budget (Managed Agents)", "zh": "Session 預算(Managed Agents)", "tag": "Agents",
+    "def_zh": "Claude Enterprise 的治理控制(beta,2026-08-05 公布):在推論之前暫留每一則受治理的提示——橫跨 claude.ai、Claude Cowork 與 Claude Code——並等候組織自己的 AI 安全伺服器回傳放行或拒絕裁決;唯有「放行」才讓推論進行。裁決請求帶簽章(hook 無法被假冒),失敗模式可設定(真正的合規邊界用 fail closed,重可用性用 fail open),且每一次拒絕都記入合規 Activity Feed。它是最外層、供應商端、涵蓋整個組織的強制執行環——比 PreToolUse hook(守單一 Claude Code session 的工具呼叫)或 managed MCP + EMA(治理哪些伺服器存在、誰可使用)更早,而後者對通過的提示仍繼續生效。"
+  },
+  {
+    "term": "Session budget (Managed Agents)",
+    "zh": "Session 預算(Managed Agents)",
+    "tag": "Agents",
     "def_en": "Managed Agents cost guardrail (2026-08-07 release): a hard cap on a single session's spend, priced at public list rates. When a session reaches its budget it pauses with the budget_reached stop reason instead of starting new model requests; raising or removing the budget resumes it (the session is paused, not killed). A scheduled deployment accepts the same budget and applies it to every session it starts, giving a fanned-out or nightly fleet a per-run cost ceiling without app-side token metering. The deterministic answer to runaway-agent cost — a distinct, detectable stop reason rather than a silent overrun or a prompt-based 'don't overspend' instruction.",
-    "def_zh": "Managed Agents 的成本護欄(2026-08-07 發布):對單一 session 花費的硬性上限,以公開牌價計價。當 session 達到預算,它會以 budget_reached 停止原因暫停、而非再發起新的模型請求;調高或移除預算即恢復(是暫停,不是殺掉)。scheduled deployment 會拿同一份預算套用到它啟動的每一個 session,讓扇出或夜間機群不必應用端計量 token 就有每次執行的成本天花板。這是對失控代理成本的確定性解——一個獨立、可偵測的停止原因,而不是無聲超支或靠提示寫「別超花」。" },
-  { "term": "Data residency (inference_geo)", "zh": "資料落地(inference_geo)", "tag": "Agents",
+    "def_zh": "Managed Agents 的成本護欄(2026-08-07 發布):對單一 session 花費的硬性上限,以公開牌價計價。當 session 達到預算,它會以 budget_reached 停止原因暫停、而非再發起新的模型請求;調高或移除預算即恢復(是暫停,不是殺掉)。scheduled deployment 會拿同一份預算套用到它啟動的每一個 session,讓扇出或夜間機群不必應用端計量 token 就有每次執行的成本天花板。這是對失控代理成本的確定性解——一個獨立、可偵測的停止原因,而不是無聲超支或靠提示寫「別超花」。"
+  },
+  {
+    "term": "Data residency (inference_geo)",
+    "zh": "資料落地(inference_geo)",
+    "tag": "Agents",
     "def_en": "Managed Agents control (2026-08-07 release) over where model inference runs: set inference_geo inside the agent's model object at create time, or override it for a single session, choosing among available geos (each with its own pricing). Orthogonal to the self-hosted sandbox, which controls where tool side effects run — a regulated workload often pins both an in-region self-hosted sandbox and an in-region inference_geo so neither the tool-touched data nor the model-processed tokens leave the jurisdiction. Reach for inference_geo whenever a residency rule constrains inference itself, not only tool execution.",
-    "def_zh": "Managed Agents 對模型推論在哪裡跑的控制(2026-08-07 發布):在建立 agent 時把 inference_geo 設進 agent 的 model 物件,或針對單一 session 覆寫,從可用的 geo 中挑選(每個 geo 有自己的定價)。它與自架沙箱正交——後者控制工具副作用在哪裡跑;受監理的工作負載常同時釘住在地自架沙箱與在地 inference_geo,讓工具觸及的資料與模型處理的 token 都不離開該轄區。只要落地規則約束的是推論本身、而不僅是工具執行,就用 inference_geo。" },
-  { "term": "Self-hosted runner (Claude Code)", "zh": "自架 runner(Claude Code)", "tag": "Claude Code",
+    "def_zh": "Managed Agents 對模型推論在哪裡跑的控制(2026-08-07 發布):在建立 agent 時把 inference_geo 設進 agent 的 model 物件,或針對單一 session 覆寫,從可用的 geo 中挑選(每個 geo 有自己的定價)。它與自架沙箱正交——後者控制工具副作用在哪裡跑;受監理的工作負載常同時釘住在地自架沙箱與在地 inference_geo,讓工具觸及的資料與模型處理的 token 都不離開該轄區。只要落地規則約束的是推論本身、而不僅是工具執行,就用 inference_geo。"
+  },
+  {
+    "term": "Self-hosted runner (Claude Code)",
+    "zh": "自架 runner(Claude Code)",
+    "tag": "Claude Code",
     "def_en": "A Team/Enterprise feature (claude self-hosted-runner, added 2026-08) that lets Claude Code web, mobile, and desktop sessions execute on your own machines or containers instead of Anthropic-managed infrastructure: the orchestration stays managed while the code, secrets, and network access stay inside your boundary — the Claude Code counterpart to a Managed Agent's self-hosted environment, and the answer to data-residency or network-egress rules that forbid code leaving your perimeter. Server-supplied hooks still apply, so committed .claude/ guardrails follow the work onto your hardware.",
-    "def_zh": "一項 Team/Enterprise 功能(claude self-hosted-runner,2026-08 新增):讓 Claude Code 的 web、行動與桌面工作階段在你自己的機器或容器上執行,而非 Anthropic 託管的基礎設施 —— 編排仍由 Anthropic 託管,而程式碼、密鑰與網路存取都留在你的邊界內。這是 Claude Code 對應於 Managed Agent 自架環境的做法,也是當資料落地或網路輸出規範禁止程式碼離開邊界時的答案。伺服器提供的 hooks 仍套用,因此已提交的 .claude/ 護欄會跟著工作走到你的硬體上。" }
+    "def_zh": "一項 Team/Enterprise 功能(claude self-hosted-runner,2026-08 新增):讓 Claude Code 的 web、行動與桌面工作階段在你自己的機器或容器上執行,而非 Anthropic 託管的基礎設施 —— 編排仍由 Anthropic 託管,而程式碼、密鑰與網路存取都留在你的邊界內。這是 Claude Code 對應於 Managed Agent 自架環境的做法,也是當資料落地或網路輸出規範禁止程式碼離開邊界時的答案。伺服器提供的 hooks 仍套用,因此已提交的 .claude/ 護欄會跟著工作走到你的硬體上。"
+  },
+  {
+    "term": "Browser use tool",
+    "zh": "Browser use 工具",
+    "tag": "Tools",
+    "def_en": "An Anthropic client toolset (browser_toolset_20260801, GA 2026-08) for driving a browser your application hosts, scoped to a viewport rather than a full desktop. On top of screenshot-and-click it reads the page itself — accessibility tree, elements, forms, tabs — and adds element references, form input, tab management, download reporting, and opt-in file upload, so an agent operates a no-API web app in far fewer round trips than pixel-hunting. Like computer use it is a client toolset (stop_reason 'tool_use'): you host the browser and execute the actions, so sandbox and least-privilege still apply. Runs on Fable 5, Mythos 5, Opus 5, Sonnet 5, and Opus 4.8.",
+    "def_zh": "Anthropic 的用戶端工具集(browser_toolset_20260801,2026-08 GA),用來驅動由你的應用託管的瀏覽器,範圍限於視埠而非整個桌面。除截圖與點擊外,它會直接讀取頁面本身——可及性樹、元素、表單、分頁——並加上元素參照、表單輸入、分頁管理、下載回報與可選檔案上傳,讓代理操作無 API 的網頁應用時往返遠少於「找像素」。與 computer use 一樣是用戶端工具集(stop_reason 為 'tool_use'):你託管瀏覽器並執行動作,因此沙箱與最小權限紀律仍適用。可用於 Fable 5、Mythos 5、Opus 5、Sonnet 5 與 Opus 4.8。"
+  }
 ]
