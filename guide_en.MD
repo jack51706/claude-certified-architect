@@ -10901,6 +10901,8 @@ What this buys, structurally: **nothing to mint, rotate, or leak** — a capture
 
 **Bounding the keys you still have.** For the static keys WIF doesn't replace — human developers, third-party tools that can't speak OIDC — you can now set an **expiration** when you create an API key or an Admin API key in the Console: a preset, a custom duration, or **Never**. Anthropic emails the creator before a key with a lifetime of at least 7 days expires, existing keys are unaffected, and the Admin API reports each key's **`expires_at`** so you can audit and sweep stale credentials programmatically. A self-expiring static key is not WIF, but it is strictly better than one that lives forever: make a bounded expiry the default at creation and reserve **Never** for the rare key you genuinely cannot rotate.
 
+**Naming the key: personal vs. service-account keys.** A workspace API key is anonymous — it identifies a *workspace*, not who or what is calling. The Console now lets you create **personal keys** (they act as *you*, with your permissions) and **service account keys** (they act as a dedicated non-human service account — the same identity WIF issues in §29.2), and either can be **scoped to one workspace** or made to **work across every workspace the account can reach, and on admin endpoints**. A key stops working the moment its linked account is removed from the organization — so offboarding a person or retiring a service account revokes its keys automatically, and per-account attribution replaces the old anonymous shared-key blur. **Workspace API keys remain a legacy option** — still supported, but no longer the default you reach for: prefer a service-account key (or WIF) for a workload and a personal key for a developer's own use, so every static credential you *do* keep carries an identity you can audit and revoke.
+
 ## 29.3 Governing MCP at Enterprise Scale
 
 An organization running agents against MCP has two distinct governance questions, and they have two distinct mechanisms:
@@ -16083,6 +16085,20 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 - D) Expose the portal through an MCP server so Claude calls typed tools instead of a browser.
 
 **Why B:** The browser use tool is purpose-built for exactly this — a hosted-browser client toolset that operates inside a viewport and *reads the page itself* (accessibility tree, elements, forms, tabs), adding element references, form input, tab management, download reporting, and opt-in file upload. Targeting elements structurally instead of pixel-hunting screenshots means far fewer round trips than the full-desktop computer-use path (A), which is the right tool only when you genuinely need OS-level control beyond the browser. (C) fails twice over: the `code_execution` sandbox has internet **disabled** and no access to your systems, so it cannot reach the portal, and it isn't a browser-driving surface. (D) presumes an API/MCP surface the portal doesn't have — the premise is "no public API," which is precisely the case browser use exists for. Note browser use is a **client** toolset (`stop_reason: "tool_use"`): you host the browser and run the actions, so the Chapter 20 sandbox and least-privilege discipline still apply.
+
+---
+## Question 306 (Scenario: Developer Productivity Tools)
+
+**Situation:** Your platform team hands every internal service and every engineer an Anthropic **workspace API key** copied from one shared workspace. Usage reports are one undifferentiated blur, a leaked key can't be traced to anyone, and when an engineer leaves you rotate the shared key and break every service that used it. You want each caller to carry its own auditable identity, without standing up WIF for the human developers yet.
+
+**Which Console credential model fixes this with the least standing-secret risk?**
+
+- A) Keep the shared workspace key but set an expiration so it rotates automatically; a short lifetime makes per-caller attribution unnecessary.
+- B) Issue a **personal key** to each engineer (it acts as that person, with their permissions) and a **service account key** to each unattended service (a non-human identity, the same kind WIF issues); scope each to the workspace it needs, and let removal of the linked account revoke its keys automatically. **[CORRECT]**
+- C) Give every service its own **Admin API key** so each has a distinct identity and can also manage the organization if needed.
+- D) Split the one workspace into many, one per caller, and keep issuing workspace keys — the workspace boundary supplies the identity.
+
+**Why B:** Personal and service-account keys attach a *real, auditable identity* to each caller — a person, or a dedicated non-human service account — so usage attributes per account, a leaked key traces to one owner, and a key dies automatically when its linked account leaves the org (offboarding revokes it, with no shared-key rotation storm). Scoping each to a single workspace keeps least privilege, and a service-account key is the natural stepping-stone to WIF for those same workloads (§29.2). (A) a rotating shared key is still anonymous — expiration bounds blast radius but never yields attribution, and it still breaks every caller on each rotation. (C) an Admin API key carries org-management scope no ordinary service should hold; handing one to every service is a massive over-grant, the opposite of least privilege. (D) workspace-per-caller multiplies workspaces and anonymous workspace keys without ever naming *who* calls — the workspace boundary is not a person or a service account. Workspace API keys remain a legacy option for exactly this reason; prefer identity-bound keys.
 
 ---
 # Practical Exercises

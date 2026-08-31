@@ -684,5 +684,12 @@
     "tag": "Tools",
     "def_en": "An Anthropic client toolset (browser_toolset_20260801, GA 2026-08) for driving a browser your application hosts, scoped to a viewport rather than a full desktop. On top of screenshot-and-click it reads the page itself — accessibility tree, elements, forms, tabs — and adds element references, form input, tab management, download reporting, and opt-in file upload, so an agent operates a no-API web app in far fewer round trips than pixel-hunting. Like computer use it is a client toolset (stop_reason 'tool_use'): you host the browser and execute the actions, so sandbox and least-privilege still apply. Runs on Fable 5, Mythos 5, Opus 5, Sonnet 5, and Opus 4.8.",
     "def_zh": "Anthropic 的用戶端工具集(browser_toolset_20260801,2026-08 GA),用來驅動由你的應用託管的瀏覽器,範圍限於視埠而非整個桌面。除截圖與點擊外,它會直接讀取頁面本身——可及性樹、元素、表單、分頁——並加上元素參照、表單輸入、分頁管理、下載回報與可選檔案上傳,讓代理操作無 API 的網頁應用時往返遠少於「找像素」。與 computer use 一樣是用戶端工具集(stop_reason 為 'tool_use'):你託管瀏覽器並執行動作,因此沙箱與最小權限紀律仍適用。可用於 Fable 5、Mythos 5、Opus 5、Sonnet 5 與 Opus 4.8。"
+  },
+  {
+    "term": "Personal & service account keys",
+    "zh": "個人 key 與服務帳戶 key",
+    "tag": "API",
+    "def_en": "Identity-bound Claude Console API keys (added 2026-08). A personal key acts as you, with your permissions; a service account key acts as a dedicated non-human service account — the same identity Workload Identity Federation issues. Either can be scoped to one workspace or made to work across every workspace the account can reach and on admin endpoints, and a key stops working the moment its linked account is removed from the organization, so offboarding revokes it automatically and usage attributes per account. They replace the anonymous workspace API key, which remains a legacy option: prefer a service-account key (or WIF) for workloads and a personal key for a developer's own use.",
+    "def_zh": "繫結身分的 Claude Console API key(2026-08 新增)。個人 key 以你的身分行動、擁有你的權限;服務帳戶 key 以一個專屬的非人類服務帳戶身分行動 —— 正是工作負載身分聯合(WIF)所簽發的同一種身分。兩者都可限定於單一工作區,或設成跨該帳戶可及的每個工作區並可呼叫 admin 端點;而 key 會在其連結帳戶被移出組織的當下立即失效,因此離職即自動撤銷,用量也按帳戶歸因。它們取代了匿名的 workspace API key —— 後者仍是 legacy 選項:工作負載優先用服務帳戶 key(或 WIF),開發者自用則用個人 key。"
   }
 ]
