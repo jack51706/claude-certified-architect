@@ -345,7 +345,7 @@ Pricing is per-token, billed separately for input and output, and varies by mode
 Prompt caching is a **prefix match**: the API caches the rendered prompt up to a `cache_control` breakpoint, and any byte change anywhere in that prefix invalidates everything after it. Render order is `tools` → `system` → `messages`.
 
 - **Keep the stable content first, volatile content last.** A frozen system prompt and a deterministic tool list are ideal cache anchors; a timestamp or per-request ID interpolated into the system prompt silently breaks caching for the whole request.
-- **Cache reads cost ~0.1× of base input price**, writes ~1.25× — so a large reused preamble (instructions, few-shot examples, a long document) pays for itself within a couple of requests.
+- **Cache reads cost ~0.1× of base input price**, writes ~1.25× — so a large reused preamble (instructions, few-shot examples, a long document) pays for itself within a couple of requests. (**Exception:** on **Fable 5.1 / Mythos 5.1** cache reads are **0.025×** — a quarter of the usual rate, $0.25/MTok — which sharply lowers the break-even for cache-heavy agents on those models; §28.1.)
 - **Verify with `usage.cache_read_input_tokens`.** If it stays zero across requests that *should* share a prefix, a silent invalidator is at work (commonly `datetime.now()` in the system prompt, an unsorted JSON dump, or a tool set that varies per request).
 
 **Exam angle:** caching, streaming, and token counting are the Chapter 1 building blocks behind Domain 5's cost/reliability scenarios — the questions test *when* to stream, *why* not to use `tiktoken`, and *what* invalidates a cache, not the exact pricing numbers.
@@ -7198,7 +7198,7 @@ The crash costs **one file of rework at most** (file 42, which had not been chec
 
 # PART IV: Complete Claude Platform Reference (Beyond the Foundations Exam)
 
-> **Scope note:** PART IV is a reference to the **full current Claude platform** (2026) for comprehensive mastery — the API, tools, SDKs, Managed Agents, MCP, and modern Claude Code. Most of it is **beyond the official Foundations syllabus** (some is even on the exam's explicit out-of-scope list); it is here so you can *learn all of Claude*, not only pass the exam. Each chapter cites official docs. Current models referenced: flagship **Claude Fable 5** (`claude-fable-5`); default Opus **Claude Opus 5** (`claude-opus-5`, launched 2026-07-24, superseding Opus 4.8); plus **Sonnet 5** and **Haiku 4.5**.
+> **Scope note:** PART IV is a reference to the **full current Claude platform** (2026) for comprehensive mastery — the API, tools, SDKs, Managed Agents, MCP, and modern Claude Code. Most of it is **beyond the official Foundations syllabus** (some is even on the exam's explicit out-of-scope list); it is here so you can *learn all of Claude*, not only pass the exam. Each chapter cites official docs. Current models referenced: flagship **Claude Fable 5.1** (`claude-fable-5-1`, launched 2026-09-01, superseding Fable 5); default Opus **Claude Opus 5** (`claude-opus-5`, launched 2026-07-24, superseding Opus 4.8); plus **Sonnet 5** and **Haiku 4.5**.
 
 ---
 
@@ -10565,7 +10565,7 @@ Four model families are in active service. They differ on three axes that matter
 
 | Model | API ID | Context | Max output | Input / Output ($/MTok) | Use for |
 |---|---|---|---|---|---|
-| **Claude Fable 5** | `claude-fable-5` | 1M | 128K | $10 / $50 | The hardest reasoning & long-horizon agentic work (flagship) |
+| **Claude Fable 5.1** | `claude-fable-5-1` | 1M | 128K | $10 / $50 | The hardest reasoning & long-horizon agentic work (flagship); cache reads at 0.025× (§18) |
 | **Claude Opus 5** | `claude-opus-5` | 1M | 128K | $5 / $25 | Default for complex agentic coding & enterprise work; frontier intelligence at half Fable 5's cost |
 | **Claude Sonnet 5** | `claude-sonnet-5` | 1M | 128K | $2 / $10 | Best speed/intelligence balance; high-volume |
 | **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | Fast, cheap, simple/latency-critical tasks |
@@ -10575,6 +10575,8 @@ Four model families are in active service. They differ on three axes that matter
 > **Migrating from Sonnet 4.6 to Sonnet 5** — three API behaviors changed: [adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking) is now **on by default**; manual extended thinking (`thinking: {type: "enabled", budget_tokens: N}`) is **removed and returns a 400 error**; and setting the sampling parameters `temperature` / `top_p` / `top_k` to non-default values **returns a 400 error**. [Priority Tier](https://platform.claude.com/docs/en/api/service-tiers) is **not available** on Sonnet 5 (otherwise it carries the same tools and platform features as Sonnet 4.6, with a 1M context window and 128K max output). Sonnet 5 also uses a **new tokenizer that produces roughly 30% more tokens for the same text**, so re-measure prompt size and cost with the [token counting API](https://platform.claude.com/docs/en/build-with-claude/token-counting) (`model="claude-sonnet-5"`) instead of reusing Sonnet 4.6 estimates. Source: [What's new in Claude Sonnet 5](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5).
 >
 > **Claude Opus 5 (launched 2026-07-24) is the new default Opus** — a step-change over Opus 4.8 at identical **$5 / $25** pricing, with a 1M-token context window (default *and* maximum), 128K max output, and **thinking on by default** (the model decides depth per turn; `effort` is the control). Anthropic's own guidance is to *start at Opus 5* for complex agentic coding and enterprise work, and reserve **Fable 5** for the highest-capability slice. Opus 4.8 remains callable (`claude-opus-4-8`) but is now a **legacy** model. Two behavior changes bite on migration: thinking is on by default (revisit `max_tokens`, which now caps thinking *plus* response together), and **disabling thinking is allowed only at effort `high` or below — `thinking: {type:"disabled"}` with `xhigh` or `max` returns a 400 error** (a breaking change from Opus 4.8, where the two were independent). Opus 5 also lowers the **minimum cacheable prefix to 512 tokens** and adds **mid-conversation tool changes** (beta header `mid-conversation-tool-changes-2026-07-01`, also on Fable 5 / Opus 4.8) and a **`"default"` server-side fallback mode** (`server-side-fallback-2026-07-01`). Source: [What's new in Claude Opus 5](https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5), [Platform release notes — July 24, 2026](https://platform.claude.com/docs/en/release-notes/api).
+>
+> **Claude Fable 5.1 (launched 2026-09-01) is the new default Fable — and it changes the cache-cost math.** `claude-fable-5-1` (and its gated sibling **Claude Mythos 5.1**, `claude-mythos-5-1`) keep the exact **$10 / $50** per-MTok price, 1M-token context, and 128K max output of Fable 5, but cut **cache reads to $0.25/MTok — 0.025× the base input price, one-quarter the ~0.1× charged on *every other* Claude model** (§18.3). For a long-lived agent that reuses a large cached prefix across many turns, that lands the read cost far below what the same prefix costs on Opus 5 or Sonnet 5, and is often the deciding factor when a workload is cache-dominated rather than output-dominated. Thinking is **adaptive and always on** (as on Fable 5 — even `thinking: {type:"disabled"}` returns a 400; omit the field), and the raw chain is never returned (summarized or empty blocks only). Two operational constraints: both models require a **30-day minimum data-retention window** and are **not available under zero-data-retention**, and their text output carries **Anthropic's text watermark** (media from the code-execution tool carries C2PA Content Credentials). Fable 5 / Mythos 5 remain callable as previous-gen models. Source: [Platform release notes — Sept 1, 2026](https://platform.claude.com/docs/en/release-notes/api), [Pricing](https://platform.claude.com/docs/en/about-claude/pricing).
 
 Read this as a ladder, not a menu. Each rung roughly doubles price for a step up in capability, so the engineering question is never "what is the best model" — it is "what is the **cheapest** rung that clears this task's bar with margin to spare."
 
@@ -10583,7 +10585,7 @@ Read this as a ladder, not a menu. Each rung roughly doubles price for a step up
 - **Haiku 4.5** — the workhorse for high-volume, well-specified, latency-sensitive work: classification, extraction, routing, formatting, and *cheap subagents* in a larger system. Note the smaller envelope — 200K context, 64K output — which is plenty for these jobs but rules it out for whole-repository reasoning.
 - **Sonnet 5** — the default for production at scale. It carries the same 1M-context / 128K-output envelope as the flagships at a fraction of the price, which is why most user-facing agents and high-throughput pipelines should *start* here, not at Opus.
 - **Opus 5** — the flagship Opus, and the right default when the task is genuinely complex or agentic: multi-step planning, hard code, long-horizon autonomous loops, nuanced judgment. Thinking is on by default and **effort matters more here than on any prior Opus** — start at `high` and tune per route. You pay ~1.7× Sonnet on output; you buy frontier reliability at half Fable 5's price on tasks Sonnet would only *sometimes* get right.
-- **Fable 5** — the absolute ceiling, for the hardest reasoning and longest-horizon work. At $10/$50 it is twice Opus on output, so reserve it for the small slice of tasks where Opus measurably under-delivers; using it as a default is the single most common way to burn budget for no gain.
+- **Fable 5.1** — the absolute ceiling, for the hardest reasoning and longest-horizon work. At $10/$50 it is twice Opus on output, so reserve it for the small slice of tasks where Opus measurably under-delivers; using it as a default is the single most common way to burn budget for no gain. The one place it *undercuts* the cheaper tiers is **cache reads at 0.025×** (a quarter of every other model's rate) — so a cache-dominated long-horizon agent can be cheaper on Fable 5.1 than the sticker price suggests.
 
 **Why "intelligence per dollar" beats "most intelligent."** A model that is 10% more accurate but 2× the cost is a *bad* trade for a task the cheaper tier already passes at 99%; it is an *excellent* trade for a task the cheaper tier fails at 60%. The whole chapter is about locating that crossover for each workload rather than guessing.
 
@@ -10607,11 +10609,11 @@ flowchart TD
     F -->|yes| E
     F -->|no| G[Opus 5<br/>flagship default]
     G --> H{Still failing on the<br/>hardest cases?}
-    H -->|yes| I[Fable 5<br/>absolute ceiling]
+    H -->|yes| I[Fable 5.1<br/>absolute ceiling]
     H -->|no| G
 ```
 
-**How to read the tree.** The default path lands on **Sonnet 5** — that is deliberate. You move *down* to Haiku only when the task is simple *and* you need speed or scale; you move *up* to Opus only when an eval set proves Sonnet leaves quality on the table; you reach **Fable 5** only at the very top, for the residual cases Opus still misses.
+**How to read the tree.** The default path lands on **Sonnet 5** — that is deliberate. You move *down* to Haiku only when the task is simple *and* you need speed or scale; you move *up* to Opus only when an eval set proves Sonnet leaves quality on the table; you reach **Fable 5.1** only at the very top, for the residual cases Opus still misses.
 
 **Pitfalls this tree exists to prevent:**
 
@@ -16101,6 +16103,21 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 **Why B:** Personal and service-account keys attach a *real, auditable identity* to each caller — a person, or a dedicated non-human service account — so usage attributes per account, a leaked key traces to one owner, and a key dies automatically when its linked account leaves the org (offboarding revokes it, with no shared-key rotation storm). Scoping each to a single workspace keeps least privilege, and a service-account key is the natural stepping-stone to WIF for those same workloads (§29.2). (A) a rotating shared key is still anonymous — expiration bounds blast radius but never yields attribution, and it still breaks every caller on each rotation. (C) an Admin API key carries org-management scope no ordinary service should hold; handing one to every service is a massive over-grant, the opposite of least privilege. (D) workspace-per-caller multiplies workspaces and anonymous workspace keys without ever naming *who* calls — the workspace boundary is not a person or a service account. Workspace API keys remain a legacy option for exactly this reason; prefer identity-bound keys.
 
 ---
+
+## Question 307 (Scenario: Multi-agent Research System)
+
+**Situation:** A long-horizon research agent re-sends the same ~180K-token corpus (a cached prefix) on every one of its many turns; the reused prefix, not the model's short answers, dominates the bill. The team already runs on the flagship tier for reasoning quality and is choosing which flagship-class model to standardize on. Everything else — sticker price, context window, output cap — is equal across the candidates.
+
+**Which choice minimizes the cost of this cache-dominated workload without dropping below flagship capability?**
+
+- A) Move to Sonnet 5 — at $2 / $10 its base price is lowest, so the cached prefix is cheapest there.
+- B) Standardize on **Claude Fable 5.1** (`claude-fable-5-1`): at the same $10 / $50 as Fable 5 it reads cache at **0.025× ($0.25/MTok)** — a quarter of the ~0.1× every other model charges — so a prefix-dominated agent pays far less per turn while keeping flagship reasoning. **[CORRECT]**
+- C) Stay on Fable 5 but raise the cache TTL to 1 hour so the prefix is read more times before it expires.
+- D) Disable prompt caching and rely on the Batch API's 50% discount to cover the repeated prefix instead.
+
+**Why B:** The workload is *cache-read-dominated*, so the lever that matters is the cache-read multiplier, not the base rate. Fable 5.1 (and its gated sibling Mythos 5.1) is the only flagship-class model that reads cache at **0.025×** — one-quarter of the ~0.1× charged everywhere else — at the identical $10 / $50 sticker price of Fable 5, so it directly attacks the dominant cost while preserving flagship capability (§28.1, §18.3). (A) Sonnet 5's lower *base* price still reads cache at the ordinary ~0.1×, and the scenario stipulates flagship capability is required — dropping a tier trades away the very quality they're paying for. (C) a longer TTL changes *survival across idle gaps*, not the per-read price, and the 1-hour write costs 2× — it doesn't lower the read multiplier that dominates here. (D) the Batch API discounts *output/throughput* for async work and is orthogonal to (and can stack with) caching; turning caching off to chase it would re-bill the 180K prefix at full input price every turn — the opposite of the goal.
+
+---
 # Practical Exercises
 
 Thirteen hands-on labs, organized as one track per certification. Reading builds recognition; only building builds the judgment the exams test. Each lab states its **time budget**, the **domains** it exercises, concrete **build steps**, and — the part that makes it a lab rather than a suggestion — **"Done when" acceptance criteria**: don't move on until every box holds. Do your target certification's track in order; Track A is the foundation for everything else. All labs run on an ordinary API key or Claude Code install; none needs special infrastructure. Reference solutions for every lab live in the next section — attempt first, then compare.
@@ -16982,12 +16999,14 @@ The following adjacent topics will **NOT** be on the exam:
 
 ## 1. The Claude Model Family
 
-All current models share a 1M-token context window except Haiku. Prices are USD per **million tokens (MTok)**, standard tier; batch is 50% off and prompt-cache reads are ~0.1×.
+All current models share a 1M-token context window except Haiku. Prices are USD per **million tokens (MTok)**, standard tier; batch is 50% off and prompt-cache reads are ~0.1× — **except Fable 5.1 / Mythos 5.1, whose cache reads are 0.025× ($0.25/MTok)**.
 
 | Model | Model ID | Context | Max output | Input $/MTok | Output $/MTok | Positioning |
 |---|---|---|---|---|---|---|
-| Claude Fable 5 | `claude-fable-5` | 1M | 128K | $10 | $50 | Most capable widely-released model; hardest reasoning + long-horizon agentic work. Thinking always on; safety classifiers may refuse. |
-| Claude Mythos 5 | `claude-mythos-5` | 1M | 128K | $10 | $50 | Same as Fable 5 with dual-use safeguards lifted for approved organizations — Project Glasswing partners (cyber) plus a trusted-access program for biology; a systematic application route is planned. |
+| Claude Fable 5.1 | `claude-fable-5-1` | 1M | 128K | $10 | $50 | Default Fable (launched 2026-09-01); most capable widely-released model, hardest reasoning + long-horizon agentic work. Thinking always on. Cache reads 0.025× ($0.25/MTok). 30-day retention minimum, no ZDR; text watermarked. |
+| Claude Mythos 5.1 | `claude-mythos-5-1` | 1M | 128K | $10 | $50 | Same as Fable 5.1 with dual-use safeguards lifted for approved organizations (Project Glasswing, gated). Same 0.025× cache reads, 30-day retention, no ZDR. |
+| Claude Fable 5 | `claude-fable-5` | 1M | 128K | $10 | $50 | Previous-gen Fable (still callable); superseded by Fable 5.1. Cache reads at the usual ~0.1×. |
+| Claude Mythos 5 | `claude-mythos-5` | 1M | 128K | $10 | $50 | Previous-gen Mythos (still callable); superseded by Mythos 5.1. |
 | Claude Opus 5 | `claude-opus-5` | 1M | 128K | $5 | $25 | Default Opus (launched 2026-07-24) — complex agentic coding & enterprise work; thinking on by default; frontier intelligence at half Fable 5's cost. |
 | Claude Opus 4.8 | `claude-opus-4-8` | 1M | 128K | $5 | $25 | Previous-gen Opus (now legacy, still callable); state-of-the-art autonomous agents, knowledge work, memory. |
 | Claude Opus 4.7 | `claude-opus-4-7` | 1M | 128K | $5 | $25 | Older Opus; strong agentic + vision + memory. |
@@ -17000,6 +17019,7 @@ All current models share a 1M-token context window except Haiku. Prices are USD 
 - **Thinking & effort differ by tier:** Opus 5 / Fable 5 / Opus 4.8 / 4.7 reject `budget_tokens` — use `thinking: {type:"adaptive"}` + `output_config.effort` (`low`→`max`). Legacy models still use `budget_tokens`.
 - **Opus 5 specifics (launched 2026-07-24):** thinking is **on by default**; disabling it (`thinking:{type:"disabled"}`) is allowed **only at effort `high` or below** — `xhigh`/`max` return **400**. Minimum cacheable prefix drops to **512 tokens**; **mid-conversation tool changes** (`mid-conversation-tool-changes-2026-07-01`) and a **`"default"` server-side fallback mode** (`server-side-fallback-2026-07-01`) arrive with the launch. Same **$5 / $25** as Opus 4.8, which stays callable as a legacy model. Source: [What's new in Opus 5](https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5).
 - **Sonnet 5 migration specifics:** Sonnet 5 ships on the newer tokenizer (Opus 4.7+ / Fable 5 lineage) — the same text yields **~30% more tokens** than pre-4.7 models, so re-measure with `count_tokens` before estimating cost or fit. Adaptive thinking is on by default; non-default `temperature` / `top_p` / `top_k` and manual `budget_tokens` thinking both return **400**; and **Priority Tier** is not offered on Sonnet 5. Source: [Platform release notes — June 30, 2026](https://platform.claude.com/docs/en/release-notes/api).
+- **Fable 5.1 / Mythos 5.1 specifics (launched 2026-09-01):** now the default Fable / Mythos, at the same **$10 / $50** as Fable 5 but with **cache reads at 0.025× ($0.25/MTok)** — a quarter of the ~0.1× charged on every other model, which is the headline reason to pick them for cache-dominated long-horizon agents. Thinking is **adaptive and always on** (`thinking:{type:"disabled"}` returns **400** — omit it); the raw chain is never returned. Both require a **30-day minimum data-retention window**, are **not available under ZDR**, and emit **text-watermarked** output (code-execution media carries C2PA Content Credentials). Fable 5 / Mythos 5 remain callable as previous-gen. Source: [Platform release notes — Sept 1, 2026](https://platform.claude.com/docs/en/release-notes/api).
 
 ---
 

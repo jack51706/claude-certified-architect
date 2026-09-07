@@ -345,7 +345,7 @@ sequenceDiagram
 提示快取是**前綴比對**:API 會快取渲染後的提示直到某個 `cache_control` 斷點,而該前綴中任何位元組的變動都會讓其後的一切失效。渲染順序是 `tools` → `system` → `messages`。
 
 - **把穩定內容放前面,易變內容放後面。** 凍結的系統提示與確定性的工具清單是理想的快取錨點;一個插進系統提示的時間戳記或每次請求的 ID,會無聲地破壞整個請求的快取。
-- **快取讀取約為基礎輸入價格的 0.1 倍**,寫入約 1.25 倍——所以一段大型、重複使用的前言(指令、few-shot 範例、一份長文件)在幾次請求內就回本。
+- **快取讀取約為基礎輸入價格的 0.1 倍**,寫入約 1.25 倍——所以一段大型、重複使用的前言(指令、few-shot 範例、一份長文件)在幾次請求內就回本。(**例外:**在 **Fable 5.1 / Mythos 5.1** 上快取讀取為 **0.025 倍**——是一般費率的四分之一,$0.25/MTok——大幅降低了這些模型上快取密集代理的回本門檻;§28.1。)
 - **用 `usage.cache_read_input_tokens` 驗證。** 如果它在*應該*共享前綴的請求間一直是零,那就有無聲的失效因子在作怪(常見的是系統提示裡的 `datetime.now()`、未排序的 JSON 傾印,或每次請求都變動的工具集)。
 
 **考試角度:**快取、串流與 token 計數是 Domain 5 成本/可靠性情境背後的第 1 章構件——題目考的是*何時*串流、*為何*不用 `tiktoken`、*什麼*會讓快取失效,而不是確切的定價數字。
@@ -7198,7 +7198,7 @@ sequenceDiagram
 
 # 第四部分:Claude 平台完整參考(超出基礎考綱)
 
-> **範圍說明:** 第四部分是 **2026 年 Claude 平台完整功能** 的參考 —— API、工具、SDK、Managed Agents、MCP 與現代 Claude Code,供你**完整掌握 Claude**,而非只為通過考試。其中**大多超出官方 Foundations 考綱**(部分甚至在考試明列的範圍外清單上)。每章都附官方文件。引用的現役模型:旗艦 **Claude Fable 5**(`claude-fable-5`);預設 Opus **Claude Opus 5**(`claude-opus-5`,2026-07-24 發布,接替 Opus 4.8);以及 **Sonnet 5**、**Haiku 4.5**。
+> **範圍說明:** 第四部分是 **2026 年 Claude 平台完整功能** 的參考 —— API、工具、SDK、Managed Agents、MCP 與現代 Claude Code,供你**完整掌握 Claude**,而非只為通過考試。其中**大多超出官方 Foundations 考綱**(部分甚至在考試明列的範圍外清單上)。每章都附官方文件。引用的現役模型:旗艦 **Claude Fable 5.1**(`claude-fable-5-1`,2026-09-01 發布,接替 Fable 5);預設 Opus **Claude Opus 5**(`claude-opus-5`,2026-07-24 發布,接替 Opus 4.8);以及 **Sonnet 5**、**Haiku 4.5**。
 
 ---
 
@@ -10565,7 +10565,7 @@ sequenceDiagram
 
 | 模型 | API ID | 上下文 | 最大輸出 | 輸入 / 輸出 ($/MTok) | 適用 |
 |---|---|---|---|---|---|
-| **Claude Fable 5** | `claude-fable-5` | 1M | 128K | $10 / $50 | 最難的推理與長程代理工作(旗艦) |
+| **Claude Fable 5.1** | `claude-fable-5-1` | 1M | 128K | $10 / $50 | 最難的推理與長程代理工作(旗艦);快取讀取為 0.025×(§18) |
 | **Claude Opus 5** | `claude-opus-5` | 1M | 128K | $5 / $25 | 複雜代理程式設計與企業工作的預設;以 Fable 5 一半的成本提供前沿智慧 |
 | **Claude Sonnet 5** | `claude-sonnet-5` | 1M | 128K | $2 / $10 | 速度/智慧最佳平衡;大量使用 |
 | **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | 快速、便宜、簡單/延遲關鍵任務 |
@@ -10575,6 +10575,8 @@ sequenceDiagram
 > **從 Sonnet 4.6 遷移到 Sonnet 5** —— 有三項 API 行為改變:[自適應思考(adaptive thinking)](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)現在**預設開啟**;手動延伸思考(`thinking: {type: "enabled", budget_tokens: N}`)已**移除並回傳 400 錯誤**;將取樣參數 `temperature` / `top_p` / `top_k` 設為非預設值也會**回傳 400 錯誤**。Sonnet 5 **不支援** [Priority Tier](https://platform.claude.com/docs/en/api/service-tiers)(其餘工具與平台功能與 Sonnet 4.6 相同,具備 1M 上下文視窗與 128K 最大輸出)。Sonnet 5 另外採用**新的分詞器(tokenizer),相同文字會產生約多 30% 的 token**,因此請用 [token 計數 API](https://platform.claude.com/docs/en/build-with-claude/token-counting)(`model="claude-sonnet-5"`)重新量測提示長度與成本,不要沿用 Sonnet 4.6 的估算。來源:[Claude Sonnet 5 的新功能](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5)。
 >
 > **Claude Opus 5(2026-07-24 發布)是新的預設 Opus** —— 相對 Opus 4.8 是階躍式提升,定價維持 **$5 / $25**,具備 1M token 上下文視窗(預設*即*上限)、128K 最大輸出,且**思考預設開啟**(模型逐輪自行決定深度;以 `effort` 控制)。Anthropic 的官方建議是:複雜代理程式設計與企業工作*從 Opus 5 起步*,把 **Fable 5** 保留給需要最高能力的那一小片。Opus 4.8 仍可呼叫(`claude-opus-4-8`),但現為**舊版(legacy)**模型。遷移時有兩項行為改變會咬人:思考預設開啟(請重新檢視 `max_tokens`,它現在同時涵蓋思考*加上*回應),以及**只有在 effort `high` 或以下才允許停用思考 —— `thinking: {type:"disabled"}` 搭配 `xhigh` 或 `max` 會回傳 400 錯誤**(相對 Opus 4.8 是破壞性變更,當時兩者互不相干)。Opus 5 另外把**最小可快取前綴降到 512 token**,並新增**對話中途變更工具**(beta 標頭 `mid-conversation-tool-changes-2026-07-01`,Fable 5 / Opus 4.8 亦支援)與**`"default"` 伺服端後備模式**(`server-side-fallback-2026-07-01`)。來源:[Claude Opus 5 的新功能](https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5)、[平台發行說明 —— 2026 年 7 月 24 日](https://platform.claude.com/docs/en/release-notes/api)。
+>
+> **Claude Fable 5.1(2026-09-01 發布)是新的預設 Fable —— 它改變了快取成本的算式。** `claude-fable-5-1`(以及受限的姊妹版 **Claude Mythos 5.1**,`claude-mythos-5-1`)維持 Fable 5 完全相同的 **$10 / $50** 每 MTok 定價、1M token 上下文與 128K 最大輸出,但把**快取讀取降到 $0.25/MTok —— 基礎輸入價格的 0.025×,是其他*每一個* Claude 模型 ~0.1× 的四分之一**(§18.3)。對於在多輪之間重複使用大型快取前綴的長程代理,這讓讀取成本遠低於同一前綴在 Opus 5 或 Sonnet 5 上的花費;當工作負載由快取而非輸出主導時,這往往是決定性因素。思考**自適應且恆常開啟**(與 Fable 5 相同 —— 連 `thinking: {type:"disabled"}` 都回傳 400;請省略該欄位),且原始推理鏈永不回傳(只有摘要或空區塊)。兩項操作限制:兩個模型都需要**30 天最短資料保留期**且**不支援零資料保留(ZDR)**,其文字輸出帶有 **Anthropic 的文字浮水印**(程式碼執行工具產生的媒體帶有 C2PA Content Credentials)。Fable 5 / Mythos 5 續以前一代模型可呼叫。來源:[平台發行說明 —— 2026 年 9 月 1 日](https://platform.claude.com/docs/en/release-notes/api)、[定價](https://platform.claude.com/docs/en/about-claude/pricing)。
 
 把它讀成一道階梯,而非一份菜單。每往上一階,價格大致翻倍以換取能力的提升,所以工程問題從來不是「哪個模型最好」—— 而是「哪個是**最便宜**、且能以充裕餘裕通過這項任務門檻的階梯」。
 
@@ -10583,7 +10585,7 @@ sequenceDiagram
 - **Haiku 4.5** —— 高量、規格明確、延遲敏感工作的主力:分類、抽取、路由、格式化,以及大型系統中的*便宜子代理*。注意較小的範圍 —— 200K 上下文、64K 輸出 —— 對這些工作綽綽有餘,但因此無法勝任整個程式庫的推理。
 - **Sonnet 5** —— 規模化生產的預設。它以旗艦的同等範圍(1M 上下文 / 128K 輸出)只收一小部分價格,這正是為何大多數面向使用者的代理與高吞吐管線都應該從這裡*起步*,而非從 Opus。
 - **Opus 5** —— 旗艦 Opus,在任務確實複雜或具代理性時是正確的預設:多步規劃、困難程式碼、長程自主迴圈、細膩判斷。思考預設開啟,且 **effort 在這裡比任何先前的 Opus 都更關鍵** —— 從 `high` 起步再依路由調校。輸出價格約為 Sonnet 的 1.7 倍;你以 Fable 5 一半的價格,買到在 Sonnet 只能*有時*答對的任務上的前沿可靠性。
-- **Fable 5** —— 絕對天花板,用於最難的推理與最長程的工作。在 $10/$50,其輸出是 Opus 的兩倍,所以只保留給 Opus 明顯做不好的那一小片任務;把它當預設用,是燒預算卻毫無收穫最常見的單一方式。
+- **Fable 5.1** —— 絕對天花板,用於最難的推理與最長程的工作。在 $10/$50,其輸出是 Opus 的兩倍,所以只保留給 Opus 明顯做不好的那一小片任務;把它當預設用,是燒預算卻毫無收穫最常見的單一方式。它*勝過*較便宜層級的唯一地方是**快取讀取 0.025×**(其他每個模型費率的四分之一)—— 所以由快取主導的長程代理,在 Fable 5.1 上可能比牌價看起來更便宜。
 
 **為何「每美元的智慧」勝過「最聰明」。** 一個準確率高 10% 但成本翻倍的模型,對於更便宜層級已經以 99% 通過的任務是個*糟糕*的交易;對於更便宜層級以 60% 失敗的任務則是*極佳*的交易。整章談的就是為每個工作負載找到那個交叉點,而非用猜的。
 
@@ -10607,11 +10609,11 @@ flowchart TD
     F -->|是| E
     F -->|否| G[Opus 5<br/>旗艦預設]
     G --> H{在最難的案例上<br/>仍然失敗?}
-    H -->|是| I[Fable 5<br/>絕對天花板]
+    H -->|是| I[Fable 5.1<br/>絕對天花板]
     H -->|否| G
 ```
 
-**如何讀這棵樹。** 預設路徑落在 **Sonnet 5** —— 這是刻意的。你只在任務簡單*且*需要速度或規模時往*下*移到 Haiku;只在評測集證明 Sonnet 把品質留在桌上時往*上*移到 Opus;只在最頂端、Opus 仍漏掉的殘餘案例上,才用到 **Fable 5**。
+**如何讀這棵樹。** 預設路徑落在 **Sonnet 5** —— 這是刻意的。你只在任務簡單*且*需要速度或規模時往*下*移到 Haiku;只在評測集證明 Sonnet 把品質留在桌上時往*上*移到 Opus;只在最頂端、Opus 仍漏掉的殘餘案例上,才用到 **Fable 5.1**。
 
 **這棵樹要防的陷阱:**
 
@@ -16094,6 +16096,21 @@ Associate 考試認證的是另一種工作:勝任且負責任地使用 Claude *
 **為何選 B:** 個人 key 與服務帳戶 key 為每個呼叫方繫上一個*真實、可稽核的身分* —— 一個人,或一個專屬的非人類服務帳戶 —— 因此用量按帳戶歸因、外洩的 key 追得到唯一的擁有者,而當其連結帳戶離開組織時,key 會自動失效(離職即撤銷,不會有共用 key 的輪替風暴)。把每一把限定於單一工作區維持了最小權限,而服務帳戶 key 正是那些工作負載邁向 WIF 的自然踏腳石(§29.2)。(A)會輪替的共用 key 依然是匿名的 —— 過期只界定了波及範圍,卻永遠給不了歸因,而且每次輪替仍會弄壞每個呼叫方。(C)Admin API key 帶著任何普通服務都不該持有的組織管理範圍;發給每個服務等於巨量的過度授權,與最小權限背道而馳。(D)每呼叫方一個工作區只是把工作區與匿名 workspace key 都乘上一個倍數,卻從未指明*誰*在呼叫 —— 工作區邊界不是一個人、也不是一個服務帳戶。workspace API key 正是因此仍屬 legacy 選項;請優先使用繫結身分的 key。
 
 ---
+
+## 問題 307(情境:多代理研究系統)
+
+**情境:** 一個長程研究代理在它眾多輪次的每一輪都重送同一份約 180K token 的語料(一段快取前綴);主導帳單的是這段重複使用的前綴,而非模型簡短的回答。團隊為了推理品質已經跑在旗艦層級,現正選擇要標準化採用哪一個旗艦等級的模型。其餘一切 —— 牌價、上下文視窗、輸出上限 —— 在候選之間都相同。
+
+**哪個選擇能在不低於旗艦能力的前提下,把這個快取主導工作負載的成本降到最低?**
+
+- A) 改用 Sonnet 5 —— 在 $2 / $10,它的基礎價最低,所以快取前綴在那裡最便宜。
+- B) 標準化採用 **Claude Fable 5.1**(`claude-fable-5-1`):在與 Fable 5 相同的 $10 / $50 下,它以 **0.025×($0.25/MTok)** 讀取快取 —— 是其他每個模型 ~0.1× 的四分之一 —— 因此前綴主導的代理每輪付得少得多,同時保有旗艦推理能力。 **[CORRECT]**
+- C) 留在 Fable 5,但把快取 TTL 提高到 1 小時,讓前綴在過期前被讀取更多次。
+- D) 停用提示快取,改靠 Batch API 的 5 折折扣來吸收重複的前綴。
+
+**為何選 B:** 這個工作負載是*快取讀取主導*,所以真正重要的槓桿是快取讀取的倍率,而非基礎費率。Fable 5.1(及其受限的姊妹版 Mythos 5.1)是唯一以 **0.025×** 讀取快取的旗艦等級模型 —— 是其他各處 ~0.1× 的四分之一 —— 而牌價與 Fable 5 完全相同的 $10 / $50,因此它直接攻擊主導成本又保住旗艦能力(§28.1、§18.3)。(A)Sonnet 5 較低的*基礎*價仍以一般的 ~0.1× 讀取快取,而情境明訂需要旗艦能力 —— 降一個層級等於把你正在付錢買的品質換掉。(C)較長的 TTL 改變的是*跨閒置間隔的存活*,而非每次讀取的價格,且 1 小時的寫入為 2× —— 它並不會降低在此主導的讀取倍率。(D)Batch API 折的是非同步工作的*輸出/吞吐量*,與快取正交(且可疊加);為了追它而關掉快取,反而會讓那 180K 前綴在每一輪都以全額輸入價重新計費 —— 與目標背道而馳。
+
+---
 # 實作練習
 
 十三個動手實驗,按證照分成四條軌道。閱讀只能建立辨識力;唯有動手建造,才能長出考試真正測的判斷力。每個實驗都標明**時間預算**、鍛鍊的**領域**、具體的**建造步驟**,以及讓它成為「實驗」而非「建議」的關鍵——**「完成標準(Done when)」**:每一條都成立之前,不要往下走。照順序做你目標證照的軌道;軌道 A 是其他一切的地基。所有實驗只需一把普通的 API key 或一套 Claude Code,不需要任何特殊基礎設施。每個實驗的參考解答就在下一章——先動手,再對照。
@@ -16974,12 +16991,14 @@ results = await asyncio.gather(*(call(client, r, "backfill") for r in reqs),
 
 ## 1. Claude 模型家族
 
-除 Haiku 外，目前所有模型皆具備 1M token 的上下文視窗。價格以**每百萬 token（MTok）**美元計，為標準層級；批次處理為 5 折，提示快取讀取約 0.1×。
+除 Haiku 外，目前所有模型皆具備 1M token 的上下文視窗。價格以**每百萬 token（MTok）**美元計，為標準層級；批次處理為 5 折,提示快取讀取約 0.1× —— **但 Fable 5.1 / Mythos 5.1 的快取讀取為 0.025×($0.25/MTok)**。
 
 | 模型 | 模型 ID | 上下文 | 最大輸出 | 輸入 $/MTok | 輸出 $/MTok | 定位 |
 |---|---|---|---|---|---|---|
-| Claude Fable 5 | `claude-fable-5` | 1M | 128K | $10 | $50 | 最強的廣泛發布模型；最艱難的推理＋長程代理工作。思考恆常開啟；安全分類器可能拒絕。 |
-| Claude Mythos 5 | `claude-mythos-5` | 1M | 128K | $10 | $50 | 與 Fable 5 相同，但對核准組織解除雙重用途防護——Project Glasswing 合作夥伴（資安）加上生物領域的信任存取計畫；並規劃更系統化的申請管道。 |
+| Claude Fable 5.1 | `claude-fable-5-1` | 1M | 128K | $10 | $50 | 預設 Fable(2026-09-01 發布);最強的廣泛發布模型,最艱難的推理＋長程代理工作。思考恆常開啟。快取讀取 0.025×($0.25/MTok)。30 天最短保留期、不支援 ZDR;文字帶浮水印。 |
+| Claude Mythos 5.1 | `claude-mythos-5-1` | 1M | 128K | $10 | $50 | 與 Fable 5.1 相同,但對核准組織解除雙重用途防護(Project Glasswing,受限)。同樣 0.025× 快取讀取、30 天保留期、不支援 ZDR。 |
+| Claude Fable 5 | `claude-fable-5` | 1M | 128K | $10 | $50 | 前一代 Fable(仍可呼叫);已被 Fable 5.1 接替。快取讀取為一般的 ~0.1×。 |
+| Claude Mythos 5 | `claude-mythos-5` | 1M | 128K | $10 | $50 | 前一代 Mythos(仍可呼叫);已被 Mythos 5.1 接替。 |
 | Claude Opus 5 | `claude-opus-5` | 1M | 128K | $5 | $25 | 預設 Opus(2026-07-24 發布)——複雜代理程式設計與企業工作;思考預設開啟;以 Fable 5 一半的成本提供前沿智慧。 |
 | Claude Opus 4.8 | `claude-opus-4-8` | 1M | 128K | $5 | $25 | 上一代 Opus(現為舊版,仍可呼叫);頂尖的自主代理、知識工作與記憶能力。 |
 | Claude Opus 4.7 | `claude-opus-4-7` | 1M | 128K | $5 | $25 | 較舊的 Opus；強大的代理＋視覺＋記憶。 |
@@ -16992,6 +17011,7 @@ results = await asyncio.gather(*(call(client, r, "backfill") for r in reqs),
 - **思考與努力度依層級而異：** Opus 5 / Fable 5 / Opus 4.8 / 4.7 拒絕 `budget_tokens`——請改用 `thinking: {type:"adaptive"}` ＋ `output_config.effort`（`low`→`max`）。舊款模型仍使用 `budget_tokens`。
 - **Opus 5 須知(2026-07-24 發布)：** 思考**預設開啟**;停用思考(`thinking:{type:"disabled"}`)**只允許在 effort `high` 或以下** —— `xhigh`/`max` 會回傳 **400**。最小可快取前綴降到 **512 token**;**對話中途變更工具**(`mid-conversation-tool-changes-2026-07-01`)與 **`"default"` 伺服端後備模式**(`server-side-fallback-2026-07-01`)隨發布登場。定價與 Opus 4.8 相同 **$5 / $25**,Opus 4.8 續以舊版模型可呼叫。來源：[Opus 5 的新功能](https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5)。
 - **Sonnet 5 遷移須知：** Sonnet 5 採用較新的 tokenizer（Opus 4.7+ / Fable 5 一系）——同樣文字產生的 token 比 4.7 之前的模型**多約 30%**，因此估算成本或判斷是否放得下前，請先用 `count_tokens` 重新量測。自適應思考預設開啟；非預設值的 `temperature` / `top_p` / `top_k` 與手動 `budget_tokens` 思考都會回傳 **400**；且 Sonnet 5 **不提供 Priority Tier**。來源：[平台發行說明 —— 2026-06-30](https://platform.claude.com/docs/en/release-notes/api)。
+- **Fable 5.1 / Mythos 5.1 須知(2026-09-01 發布):** 現為預設 Fable / Mythos,定價與 Fable 5 相同 **$10 / $50**,但**快取讀取為 0.025×($0.25/MTok)** —— 是其他每個模型 ~0.1× 的四分之一,這正是為快取主導的長程代理選它的首要理由。思考**自適應且恆常開啟**(`thinking:{type:"disabled"}` 回傳 **400** —— 請省略);原始推理鏈永不回傳。兩者都需要 **30 天最短資料保留期**、**不支援 ZDR**,並輸出**帶文字浮水印**的內容(程式碼執行工具產生的媒體帶有 C2PA Content Credentials)。Fable 5 / Mythos 5 續以前一代模型可呼叫。來源：[平台發行說明 —— 2026-09-01](https://platform.claude.com/docs/en/release-notes/api)。
 
 ---
 

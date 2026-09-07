@@ -630,6 +630,13 @@
     "def_zh": "供 Claude Enterprise(claude.ai)組織使用的 beta Admin API 介面(/v1/organizations/…):管理成員與邀請、群組與群組成員,並讀取自訂角色。群組與自訂角色的呼叫需要 anthropic-beta: ce-user-management-2026-07-13 標頭;成員/邀請的呼叫則不用。範圍是細粒度的(read/write:members、read/write:rbac_groups);一把 read:org_audit key 能呼叫每一個 GET。約束:API 只能指派 user 與 managed 角色(管理型角色與自訂角色的撰寫都在 claude.ai 設定裡)、自訂角色唯讀,且在 SSO/SCIM 組織裡建立邀請、變更角色與移除成員都回傳 400——身分供應商始終是真相來源。這是 WIF 在真人身分上的對應。"
   },
   {
+    "term": "Claude Fable 5.1",
+    "zh": "Claude Fable 5.1",
+    "tag": "Platform",
+    "def_en": "Anthropic's flagship model (claude-fable-5-1), launched 2026-09-01 as the new default Fable, superseding Fable 5 (still callable). Same $10 / $50 per-MTok price, 1M-token context, and 128K max output as Fable 5, but with a headline cost change: cache reads are 0.025× the base input price ($0.25/MTok) — a quarter of the ~0.1× charged on every other Claude model — which sharply lowers the break-even for cache-dominated, long-horizon agents. Thinking is adaptive and always on (thinking:{type:'disabled'} returns 400 — omit it); the raw reasoning chain is never returned (summarized or empty blocks only). Both Fable 5.1 and its gated sibling Mythos 5.1 (claude-mythos-5-1, Project Glasswing) require a 30-day minimum data-retention window, are not available under zero-data-retention, and emit text-watermarked output (code-execution media carries C2PA Content Credentials).",
+    "def_zh": "Anthropic 的旗艦模型(claude-fable-5-1),於 2026-09-01 發布為新的預設 Fable,接替 Fable 5(仍可呼叫)。定價、上下文與最大輸出與 Fable 5 相同($10 / $50 每 MTok、1M token 上下文、128K 最大輸出),但有一項關鍵成本變更:快取讀取為基礎輸入價格的 0.025 倍($0.25/MTok)——是其他所有 Claude 模型 ~0.1 倍的四分之一——大幅降低了快取主導、長程代理的回本門檻。思考為自適應且恆常開啟(thinking:{type:'disabled'} 會回傳 400——請省略);原始推理鏈永不回傳(只有摘要或空區塊)。Fable 5.1 與其受限的姊妹版 Mythos 5.1(claude-mythos-5-1,Project Glasswing)都需要 30 天最短資料保留期、不支援零資料保留(ZDR),且輸出帶有文字浮水印(程式碼執行工具產生的媒體帶有 C2PA Content Credentials)。"
+  },
+  {
     "term": "Claude Opus 5",
     "zh": "Claude Opus 5",
     "tag": "Platform",
