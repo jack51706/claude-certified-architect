@@ -9530,6 +9530,8 @@ flowchart TD
 
 **倉庫掛載的 skills。**當一個 session **掛載一個 GitHub 儲存庫**時,該倉庫根目錄 `.claude/skills` 下的任何 skill 都會在 session 開始時被自動探索,並在該 session 內可用——就是你的工程師本機在用的那些 skill,如今進到託管執行裡,而且隨倉庫版控,而非釘進 agent 定義。
 
+**可重現的定義——`ant apply` 與 lockfile。** 一個 agent、它的 environment、它的 skills、它的 memory stores,以及它的 scheduled deployments,全都是**資源**——否則你得靠一次次手動發 API 呼叫來建立:做一次還行,到機群規模就無法重現。**`ant apply`** 命令(ant CLI ≥ 1.30.0,2026-09)把這變成**基礎設施即程式碼(IaC)**:你把每個資源描述在簽入倉庫的檔案裡,執行 `ant apply`,審核它印出的計畫,它就會建立或更新資源以吻合。它會寫出一個 **`claude-lock.json`** lockfile,釘住你的檔案對應到哪些真實資源——**把它簽入版控**,之後每一次執行(在你的筆電或 CI 上)就會*更新同一個 agent 與 deployment*,而不是又生出重複的。這正是讓「session 指向 agent」(§24.2)在實務上可稽核的關鍵:每次執行所釘住的那份版本化定義,如今存在 git 裡、像任何變更一樣被審查,並從 staging 到 prod 一致地晉升。要互動式除錯某一次執行,**`ant beta:sessions connect`** 會把你的終端機接上一個進行中的 session——跟看它的事件、送訊息,並允許/拒絕它暫停等待的呼叫(`--web` 則改為在本機提供 Console 的 session 檢視器)。
+
 > **陷阱:**以為「託管」等於「完全可觀測」。你得到豐富的*事件層*可見性,但託管執行環境在 OS 層是刻意設計的黑盒。在你動手建之前,先把你的稽核需求對齊託管選擇。
 
 ## 24.6 端到端案例研究:生產級程式碼審查代理隊伍
@@ -9646,6 +9648,7 @@ sequenceDiagram
 | 生產功能 | **Vaults** 在 egress 注入祕密(沙箱內看不到);**memory stores** 跨 session 留存(有版本、可遮蔽);**scheduled deployments** 是給代理的 cron;可觀測性是**事件層**而非主機層(§24.5)。 |
 | 成本治理 | 每個 session 的**預算(budget)**以牌價封頂花費;達標的 session 以 **`budget_reached`** 停止原因暫停,調高/移除預算即恢復——scheduled deployment 把同一份上限套到每一次執行(§24.5)。 |
 | 治理工具呼叫 | 伺服器端工具帶有**權限政策**:`always_allow`(直接執行)、`always_ask`(暫停等 `user.tool_confirmation`),或 **`auto`**(伺服器逐次評估 → 執行 / 拒絕 / 暫停)。`auto` 是*風險過濾器,不是人工檢查點*——它判為安全的呼叫會無人過目即執行、且可能不可逆,所以動錢/生產/破壞性工具要留在 `always_ask`(§24.3)。 |
+| 可重現的機群 | 把 agents、environments、skills、memory stores 與 deployments 定義成檔案並 **`ant apply`**;簽入 **`claude-lock.json`** lockfile,讓之後的執行更新*同一批*資源而非重複建立——這是「建立一次」的 agent 定義的基礎設施即程式碼(§24.5)。 |
 | 資料落地 | 自架沙箱釘住*工具副作用*在哪裡跑;**`inference_geo`** 釘住*推論*在哪裡跑——兩道正交槓桿,受監理工作負載常成對使用(§24.4)。 |
 | 控制 vs 便利 | 託管 = 較少維運、較少控制;自架 harness = 對副作用發生地更多控制、更多維運負擔。這是法規/營運決策,**不是**成熟度階梯(§24.1、§24.4)。 |
 
@@ -16133,6 +16136,21 @@ Associate 考試認證的是另一種工作:勝任且負責任地使用 Claude *
 - D) 全部維持預設政策;MCP toolset 的預設已經保證每次 agent-toolset 呼叫都有人核准。
 
 **為何選 B:** `auto` 是*風險過濾器,不是人工檢查點* —— 文件明白警告:它判定為安全的呼叫會**在任何人看到之前就執行**,而副作用可能不可逆;更糟的是,你在 `user.message` 裡轉述的不受信任文字會被讀作你的意圖,足以說服伺服器放行某次呼叫。當某個工具*必須*先經人審,唯一正確的政策是 `always_ask`——它會讓 session 暫停(`stop_reason.type: requires_action`)直到一個明確的 `user.tool_confirmation`。逐工具的 `configs` 會覆寫 toolset 預設,所以你能同時得到 `auto` 的低摩擦讀取*與*對刪除的硬性關卡。(A)信賴 `auto` 去攔下刪除 —— 正是「auto 是檢查點」的錯誤,因為一次無法判定或誤判的呼叫可能無人過目就執行。(C)那是提示、不是確定性關卡 —— 第 3/9 章的教訓:重要的規則要靠設定落實,而非靠散文。(D)搞混了預設:*MCP* toolset 預設為 `always_ask`,但 *agent* toolset 預設為 `always_allow`,而且兩者的預設都不會特別挑出刪除工具。
+
+---
+
+## 問題 309(情境:多代理研究系統)
+
+**情境:** 一個平台團隊營運著一支 Managed Agents 機群 —— 一個協調者加上多個專門研究代理,各自有 environment、skills,以及一個夜間 scheduled deployment。如今他們全靠從一台筆電手動發 API 呼叫來建立與更新這一切。staging 與 prod 已悄悄漂移分歧,沒人說得出哪個 agent 版本正在線上,而重跑安裝腳本又一直*建出重複的* agent,而不是更新既有的。
+
+**哪種做法能同時修好漂移與重複?**
+
+- A) 把每個資源描述在簽入倉庫的檔案裡並執行 **`ant apply`**,簽入 **`claude-lock.json`** lockfile,讓之後的執行(筆電或 CI)更新同一批 agent 與 deployment,而非又建出新的。 **[CORRECT]**
+- B) 寫一支 shell 腳本,在每次部署前列出所有 agent、與預期設定比對差異,並刪掉任何重複。
+- C) 把 agent ID 存進一份團隊每次變更後手動更新的試算表,並在每次 API 呼叫貼上正確的 ID。
+- D) 把機群併成一個超大 agent,如此只有單一份定義要保持同步,從根本消除漂移。
+
+**為何選 A:** `ant apply`(ant CLI ≥ 1.30.0)是 Managed Agents 的基礎設施即程式碼:它*從檔案*建立與更新 agents、environments、skills、memory stores 與 deployments,而它寫出的 **`claude-lock.json`** lockfile 把那些檔案對應到真實資源 —— 簽入它,之後每一次執行就會**更新同一批資源、而非重複建立**,這正是「建立一次、以 ID 參照」的紀律(§24.2)在 git 裡變得可重現、可審查。漂移消失,因為 staging 與 prod 套用同一批經審查的檔案;「哪個版本在線上」由 lockfile 回答。(B)用手工重新發明對帳,又會與進行中的 session 競態 —— 先刪後建也會攪亂 agent ID。(C)手動試算表*就是*漂移本身,不是修法。(D)把一支良好切分的機群併成一個 agent,是拿工具選擇可靠性(領域 2)去換一個 IaC 早已解決的同步問題 —— 選錯了軸。
 
 ---
 # 實作練習

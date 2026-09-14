@@ -9530,6 +9530,8 @@ flowchart TD
 
 **Repo-mounted skills.** When a session **mounts a GitHub repository**, any skills in that repo's root `.claude/skills` directory are discovered automatically at session start and made available for that session — the same skills your engineers use locally, now in the managed run and versioned with the repo instead of pinned into the agent definition.
 
+**Reproducible definitions — `ant apply` and the lockfile.** An agent, its environment, its skills, its memory stores, and its scheduled deployments are all **resources** you would otherwise create by hand-firing API calls — fine once, unreproducible at fleet scale. The **`ant apply`** command (ant CLI ≥ 1.30.0, Sept 2026) turns that into **infrastructure-as-code**: you describe each resource in files checked into your repo, run `ant apply`, review the plan it prints, and it creates or updates them to match. It writes a **`claude-lock.json`** lockfile pinning which real resources your files map to — **commit it**, and every later run (on your laptop or in CI) *updates the same agent and deployment* instead of spawning duplicates. This is what makes "session-points-at-agent" (§24.2) auditable in practice: the versioned definition every run pins now lives in git, reviewed like any other change and promoted identically from staging to prod. To debug a specific run interactively, **`ant beta:sessions connect`** attaches your terminal to a live session — follow its events, send messages, and allow/deny the calls it has paused for (`--web` serves the Console session viewer locally instead).
+
 > **Pitfall:** assuming "managed" means "fully observable." You get rich *event-level* visibility, but the hosted runtime is a black box at the OS level by design. Match your audit requirements to the hosting choice **before** you build.
 
 ## 24.6 End-to-End Case Study: A Production Code-Review Agent Fleet
@@ -9646,6 +9648,7 @@ Notice what each design choice bought: **session-points-at-agent** keeps every r
 | Production features | **Vaults** inject secrets at egress (never visible in-sandbox); **memory stores** persist across sessions (versioned, redactable); **scheduled deployments** are cron for agents; observability is **event-level**, not host-level (§24.5). |
 | Cost governance | A per-session **budget** caps spend at list rates; a session that hits it pauses with the **`budget_reached`** stop reason and resumes when you raise/remove it — a scheduled deployment applies the same cap to every run (§24.5). |
 | Governing tool calls | Server-executed tools carry a **permission policy**: `always_allow` (runs), `always_ask` (pauses for a `user.tool_confirmation`), or **`auto`** (server evaluates each call → run / deny / pause). `auto` is a *risk filter, not a human checkpoint* — a call it deems safe runs unseen and can be irreversible, so keep money/prod/destructive tools on `always_ask` (§24.3). |
+| Reproducible fleets | Define agents, environments, skills, memory stores and deployments as files and **`ant apply`** them; commit the **`claude-lock.json`** lockfile so later runs update the *same* resources instead of duplicating — infrastructure-as-code for the create-once agent definition (§24.5). |
 | Data residency | The self-hosted sandbox pins where *tool side effects* run; **`inference_geo`** pins where *inference* runs — orthogonal levers, often paired for a regulated workload (§24.4). |
 | Control vs convenience | Managed = less ops, less control; self-hosted harness = more control over where side effects happen, more ops burden. A regulatory/operational decision, **not** a maturity ladder (§24.1, §24.4). |
 
@@ -16140,6 +16143,21 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 - D) Leave everything on the default policies; the MCP toolset default already guarantees a human approves every agent-toolset call.
 
 **Why B:** `auto` is a *risk filter, not a human checkpoint* — the docs warn that a call it determines is safe **runs before anyone sees it**, and its effects may be irreversible; worse, untrusted text you relay in a `user.message` is read as your intent and can talk the server into allowing a call. When a human *must* review a specific tool first, the only correct policy is `always_ask`, which pauses the session (`stop_reason.type: requires_action`) until an explicit `user.tool_confirmation`. Per-tool `configs` override the toolset default, so you get `auto`'s low-friction reads *and* a hard gate on deletion. (A) trusts `auto` to catch the deletion — exactly the "auto is a checkpoint" mistake, since an indeterminate or misjudged call could run unseen. (C) is a prompt, not a deterministic gate — the Chapter 3/9 lesson: a rule that matters is enforced by config, not prose. (D) confuses defaults: the *MCP* toolset defaults to `always_ask`, but the *agent* toolset defaults to `always_allow`, and neither default singles out the deletion tool.
+
+---
+
+## Question 309 (Scenario: Multi-agent Research System)
+
+**Situation:** A platform team runs a fleet of Managed Agents — a coordinator plus specialist research agents, each with an environment, skills, and a nightly scheduled deployment. Today they create and update all of it by hand-firing API calls from a laptop. Staging and prod have quietly drifted apart, nobody can say which agent version is live, and re-running the setup script keeps creating *duplicate* agents instead of updating the existing ones.
+
+**Which practice fixes both the drift and the duplication?**
+
+- A) Describe every resource in files checked into the repo and run **`ant apply`**, committing the **`claude-lock.json`** lockfile so later runs (laptop or CI) update the same agents and deployments instead of creating new ones. **[CORRECT]**
+- B) Write a shell script that lists all agents, diffs them against the intended config, and deletes any duplicates before each deploy.
+- C) Store the agent IDs in a spreadsheet the team updates manually after every change, and paste the right ID into each API call.
+- D) Collapse the fleet into one giant agent so there is only a single definition to keep in sync, eliminating drift by construction.
+
+**Why A:** `ant apply` (ant CLI ≥ 1.30.0) is infrastructure-as-code for Managed Agents: it creates and updates agents, environments, skills, memory stores, and deployments *from files*, and the **`claude-lock.json`** lockfile it writes maps those files to the real resources — commit it and every subsequent run **updates the same resources instead of duplicating them**, which is exactly the create-once, reference-by-ID discipline (§24.2) made reproducible and reviewable in git. Drift dies because staging and prod apply the same reviewed files, and "which version is live" is answered by the lockfile. (B) reinvents reconciliation by hand and races with in-flight sessions — delete-then-recreate also churns agent IDs. (C) a manual spreadsheet *is* the drift, not the fix. (D) collapsing a well-factored fleet into one agent trades tool-selection reliability (Domain 2) for a sync problem IaC already solves — the wrong axis.
 
 ---
 # Practical Exercises
