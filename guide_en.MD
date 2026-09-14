@@ -9462,6 +9462,14 @@ sequenceDiagram
 
 > **Pitfall:** treating the SSE stream as a durable log. It is a *live* channel, not a record. If you need an audit trail of every action, persist events as they arrive (or rely on webhooks + your own store) — do not expect to "scroll back" through a reconnected stream.
 
+**Governing which server-executed tools run — permission policies.** The **agent toolset** and **MCP toolsets** execute on Anthropic's side, so *when* each of their calls fires is governed by a per-toolset **permission policy** (custom tools you execute yourself are exempt — you gate those in your own `agent.custom_tool_use` handler). There are three policies, set in `default_config.permission_policy` for a whole toolset or per-tool in a `configs` entry:
+
+- **`always_allow`** — the call runs with no confirmation. This is the agent toolset's default.
+- **`always_ask`** — the session **pauses** before the call: it emits the `agent.tool_use`/`agent.mcp_tool_use` event, goes idle with `stop_reason.type: requires_action` (the blocking IDs in `stop_reason.event_ids`), and waits **indefinitely** until you send a `user.tool_confirmation` (`result: "allow"` or `"deny"`, with an optional `deny_message`). This is the MCP toolset's default — so a newly added tool on a trusted server never runs unreviewed.
+- **`auto`** (added Sept 2026) — the **server evaluates each call** against the tool, its input, and the session so far, and returns one of three outcomes: it **runs** the call (as `always_allow`), **denies** it (the agent gets an `is_error` result `Permission to use {tool} has been denied.` — your client *cannot* override this), or, when it reaches no determination, **pauses for your approval** exactly as `always_ask`. Because it judges each call in context, the *same* tool can be allowed on a safe input and denied on a dangerous one.
+
+Every `agent.tool_use`/`agent.mcp_tool_use` event now carries `evaluated_permission` (`"allow"`/`"ask"`/`"deny"`) and an `evaluation` object naming the policy that produced it; under `auto` it also records a `reason_code` (`high_risk`, `indeterminate`) — a value to *branch on and keep in your audit trail*, not text to show end users. **The exam-critical caveat: `auto` is not a human checkpoint.** A call it judges safe runs *before anyone sees it*, and its side effects may be irreversible — so for any tool whose calls a human must review first (moving money, prod writes, destructive ops), configure `always_ask`, never `auto`. And `auto` reads *your* `user.message` events as intent: relay untrusted end-user text there and that text can talk the server into allowing a call — another reason to keep truly sensitive tools on `always_ask`. This is Chapter 3's hooks-vs-prompts lesson at the platform layer: `always_ask` is a deterministic gate; `auto` is a *risk filter that cuts approval volume*, not a substitute for one.
+
 ## 24.4 Hosting Topology: Fully Managed vs Self-Hosted Sandbox
 
 Within Managed Agents there is a second, finer decision: **where do the agent's tools actually execute?** Anthropic always runs the *loop*; you choose who runs the *sandbox*.
@@ -9637,6 +9645,7 @@ Notice what each design choice bought: **session-points-at-agent** keeps every r
 | Hosting topology | Fully managed (Anthropic's container, zero ops) vs **self-hosted sandbox** (`type: self_hosted`, your infra via outbound-polling worker). Anthropic runs the loop either way; choose self-hosted only when residency/reachability/licensing/audit forces it (§24.4). |
 | Production features | **Vaults** inject secrets at egress (never visible in-sandbox); **memory stores** persist across sessions (versioned, redactable); **scheduled deployments** are cron for agents; observability is **event-level**, not host-level (§24.5). |
 | Cost governance | A per-session **budget** caps spend at list rates; a session that hits it pauses with the **`budget_reached`** stop reason and resumes when you raise/remove it — a scheduled deployment applies the same cap to every run (§24.5). |
+| Governing tool calls | Server-executed tools carry a **permission policy**: `always_allow` (runs), `always_ask` (pauses for a `user.tool_confirmation`), or **`auto`** (server evaluates each call → run / deny / pause). `auto` is a *risk filter, not a human checkpoint* — a call it deems safe runs unseen and can be irreversible, so keep money/prod/destructive tools on `always_ask` (§24.3). |
 | Data residency | The self-hosted sandbox pins where *tool side effects* run; **`inference_geo`** pins where *inference* runs — orthogonal levers, often paired for a regulated workload (§24.4). |
 | Control vs convenience | Managed = less ops, less control; self-hosted harness = more control over where side effects happen, more ops burden. A regulatory/operational decision, **not** a maturity ladder (§24.1, §24.4). |
 
@@ -16116,6 +16125,21 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 - D) Disable prompt caching and rely on the Batch API's 50% discount to cover the repeated prefix instead.
 
 **Why B:** The workload is *cache-read-dominated*, so the lever that matters is the cache-read multiplier, not the base rate. Fable 5.1 (and its gated sibling Mythos 5.1) is the only flagship-class model that reads cache at **0.025×** — one-quarter of the ~0.1× charged everywhere else — at the identical $10 / $50 sticker price of Fable 5, so it directly attacks the dominant cost while preserving flagship capability (§28.1, §18.3). (A) Sonnet 5's lower *base* price still reads cache at the ordinary ~0.1×, and the scenario stipulates flagship capability is required — dropping a tier trades away the very quality they're paying for. (C) a longer TTL changes *survival across idle gaps*, not the per-read price, and the 1-hour write costs 2× — it doesn't lower the read multiplier that dominates here. (D) the Batch API discounts *output/throughput* for async work and is orthogonal to (and can stack with) caching; turning caching off to chase it would re-bill the 180K prefix at full input price every turn — the opposite of the goal.
+
+---
+
+## Question 308 (Scenario: Agentic AI Tools)
+
+**Situation:** A Managed Agents ops assistant runs the agent toolset plus a GitHub MCP toolset. Most calls are low-risk reads you want to run without friction, but one tool can *delete production branches*, and compliance requires a human to review every deletion **before** it happens. A colleague proposes putting the whole agent on the new `auto` permission policy so "the server blocks the dangerous stuff automatically."
+
+**How should you configure permissions so the deletion is always human-reviewed while routine reads stay frictionless?**
+
+- A) Put every toolset on `auto`; the server evaluates each call, denies the high-risk deletion, and lets the reads through — no per-tool config needed.
+- B) Keep the toolsets on `auto` for low-friction reads, but **override the branch-deletion tool to `always_ask`** so it pauses with `requires_action` and executes only after you send a `user.tool_confirmation` — because `auto` may judge a deletion "safe" and run it before anyone sees it. **[CORRECT]**
+- C) Put the deletion tool on `always_allow` and enforce the review with a system-prompt rule ("never delete a prod branch without human sign-off").
+- D) Leave everything on the default policies; the MCP toolset default already guarantees a human approves every agent-toolset call.
+
+**Why B:** `auto` is a *risk filter, not a human checkpoint* — the docs warn that a call it determines is safe **runs before anyone sees it**, and its effects may be irreversible; worse, untrusted text you relay in a `user.message` is read as your intent and can talk the server into allowing a call. When a human *must* review a specific tool first, the only correct policy is `always_ask`, which pauses the session (`stop_reason.type: requires_action`) until an explicit `user.tool_confirmation`. Per-tool `configs` override the toolset default, so you get `auto`'s low-friction reads *and* a hard gate on deletion. (A) trusts `auto` to catch the deletion — exactly the "auto is a checkpoint" mistake, since an indeterminate or misjudged call could run unseen. (C) is a prompt, not a deterministic gate — the Chapter 3/9 lesson: a rule that matters is enforced by config, not prose. (D) confuses defaults: the *MCP* toolset defaults to `always_ask`, but the *agent* toolset defaults to `always_allow`, and neither default singles out the deletion tool.
 
 ---
 # Practical Exercises

@@ -9462,6 +9462,14 @@ sequenceDiagram
 
 > **陷阱:**把 SSE 串流當成耐久日誌。它是*即時*通道,不是紀錄。如果你需要每個動作的稽核軌跡,就在事件抵達時持久化它們(或靠 webhooks + 你自己的儲存)——別指望能在重連後的串流裡「往回捲」。
 
+**治理哪些伺服器端工具會執行——權限政策(permission policies)。** **agent toolset** 與 **MCP toolsets** 在 Anthropic 端執行,所以它們每一次呼叫*何時*觸發,是由每個 toolset 的**權限政策**治理(你自己執行的 custom tools 不在此列——那些你在自己的 `agent.custom_tool_use` 處理器裡把關)。共有三種政策,設在整個 toolset 的 `default_config.permission_policy`,或在 `configs` 項目裡逐工具設定:
+
+- **`always_allow`** —— 呼叫直接執行、不需確認。這是 agent toolset 的預設。
+- **`always_ask`** —— session 在呼叫前**暫停**:它發出 `agent.tool_use`/`agent.mcp_tool_use` 事件,以 `stop_reason.type: requires_action` 進入 idle(阻塞的事件 ID 放在 `stop_reason.event_ids`),並**無限期**等待,直到你送出 `user.tool_confirmation`(`result: "allow"` 或 `"deny"`,可附 `deny_message`)。這是 MCP toolset 的預設——所以受信任伺服器上新增的工具,絕不會未經審查就執行。
+- **`auto`**(2026-09 新增)—— **伺服器逐一評估**每次呼叫,依據工具、它的輸入,以及到目前為止的 session 內容,回傳三種結果之一:**執行**該呼叫(如 `always_allow`)、**拒絕**它(代理收到 `is_error` 結果 `Permission to use {tool} has been denied.`——你的客戶端*無法*覆寫)、或當它無法判定時,**暫停等你核准**、完全比照 `always_ask`。因為它是逐次在脈絡中判斷,*同一個*工具在安全輸入上可被允許、在危險輸入上被拒絕。
+
+現在每個 `agent.tool_use`/`agent.mcp_tool_use` 事件都帶有 `evaluated_permission`(`"allow"`/`"ask"`/`"deny"`)與一個指出產生該結果之政策的 `evaluation` 物件;在 `auto` 下還會記錄一個 `reason_code`(`high_risk`、`indeterminate`)——它是拿來*分支判斷並寫進稽核紀錄*的值,不是給終端使用者看的文字。**考試關鍵警語:`auto` 不是人工檢查點。** 它判為安全的呼叫會*在任何人看到之前*就執行,而其副作用可能不可逆——所以任何必須由人先審的工具(動錢、寫生產、破壞性操作),請設 `always_ask`、絕不用 `auto`。而且 `auto` 會把*你的* `user.message` 事件讀作意圖:若你在那裡轉述不受信任的終端使用者文字,那段文字就可能說服伺服器放行某次呼叫——這又是把真正敏感的工具留在 `always_ask` 的一個理由。這是第 3 章「hook 勝過提示」在平台層的翻版:`always_ask` 是確定性關卡;`auto` 是*削減核准量的風險過濾器*,不是關卡的替代品。
+
 ## 24.4 託管拓撲:完全託管 vs 自架沙箱
 
 在 Managed Agents 之內還有第二個、更細的決策:**代理的工具究竟在哪裡執行?**Anthropic 永遠跑*迴圈*;你選擇誰跑*沙箱*。
@@ -9637,6 +9645,7 @@ sequenceDiagram
 | 託管拓撲 | 完全託管(Anthropic 的容器,零維運)vs **自架沙箱**(`type: self_hosted`,你的基礎設施經對外輪詢 worker)。兩者迴圈都由 Anthropic 跑;只在落地/可達性/授權/稽核逼你時才選自架(§24.4)。 |
 | 生產功能 | **Vaults** 在 egress 注入祕密(沙箱內看不到);**memory stores** 跨 session 留存(有版本、可遮蔽);**scheduled deployments** 是給代理的 cron;可觀測性是**事件層**而非主機層(§24.5)。 |
 | 成本治理 | 每個 session 的**預算(budget)**以牌價封頂花費;達標的 session 以 **`budget_reached`** 停止原因暫停,調高/移除預算即恢復——scheduled deployment 把同一份上限套到每一次執行(§24.5)。 |
+| 治理工具呼叫 | 伺服器端工具帶有**權限政策**:`always_allow`(直接執行)、`always_ask`(暫停等 `user.tool_confirmation`),或 **`auto`**(伺服器逐次評估 → 執行 / 拒絕 / 暫停)。`auto` 是*風險過濾器,不是人工檢查點*——它判為安全的呼叫會無人過目即執行、且可能不可逆,所以動錢/生產/破壞性工具要留在 `always_ask`(§24.3)。 |
 | 資料落地 | 自架沙箱釘住*工具副作用*在哪裡跑;**`inference_geo`** 釘住*推論*在哪裡跑——兩道正交槓桿,受監理工作負載常成對使用(§24.4)。 |
 | 控制 vs 便利 | 託管 = 較少維運、較少控制;自架 harness = 對副作用發生地更多控制、更多維運負擔。這是法規/營運決策,**不是**成熟度階梯(§24.1、§24.4)。 |
 
@@ -16109,6 +16118,21 @@ Associate 考試認證的是另一種工作:勝任且負責任地使用 Claude *
 - D) 停用提示快取,改靠 Batch API 的 5 折折扣來吸收重複的前綴。
 
 **為何選 B:** 這個工作負載是*快取讀取主導*,所以真正重要的槓桿是快取讀取的倍率,而非基礎費率。Fable 5.1(及其受限的姊妹版 Mythos 5.1)是唯一以 **0.025×** 讀取快取的旗艦等級模型 —— 是其他各處 ~0.1× 的四分之一 —— 而牌價與 Fable 5 完全相同的 $10 / $50,因此它直接攻擊主導成本又保住旗艦能力(§28.1、§18.3)。(A)Sonnet 5 較低的*基礎*價仍以一般的 ~0.1× 讀取快取,而情境明訂需要旗艦能力 —— 降一個層級等於把你正在付錢買的品質換掉。(C)較長的 TTL 改變的是*跨閒置間隔的存活*,而非每次讀取的價格,且 1 小時的寫入為 2× —— 它並不會降低在此主導的讀取倍率。(D)Batch API 折的是非同步工作的*輸出/吞吐量*,與快取正交(且可疊加);為了追它而關掉快取,反而會讓那 180K 前綴在每一輪都以全額輸入價重新計費 —— 與目標背道而馳。
+
+---
+
+## 問題 308(情境:代理式 AI 工具)
+
+**情境:** 一個 Managed Agents 維運助理跑著 agent toolset 加上一個 GitHub MCP toolset。多數呼叫是你希望零摩擦執行的低風險讀取,但其中一個工具能*刪除生產分支*,而法遵要求每次刪除都必須由人在*事前*審查。一位同事提議把整個代理都設成新的 `auto` 權限政策,「讓伺服器自動擋掉危險的東西」。
+
+**你該如何設定權限,才能讓刪除永遠經人工審查、同時讓例行讀取保持零摩擦?**
+
+- A) 把每個 toolset 都設成 `auto`;伺服器會逐次評估、拒絕高風險的刪除、放行讀取 —— 不需要逐工具設定。
+- B) toolset 維持 `auto` 以獲得低摩擦讀取,但**把刪除分支的工具覆寫為 `always_ask`**,讓它以 `requires_action` 暫停、且只有在你送出 `user.tool_confirmation` 後才執行 —— 因為 `auto` 可能把一次刪除判為「安全」而在任何人看到之前就執行。 **[CORRECT]**
+- C) 把刪除工具設成 `always_allow`,再用一條系統提示規則(「未經人工簽核絕不刪除生產分支」)來落實審查。
+- D) 全部維持預設政策;MCP toolset 的預設已經保證每次 agent-toolset 呼叫都有人核准。
+
+**為何選 B:** `auto` 是*風險過濾器,不是人工檢查點* —— 文件明白警告:它判定為安全的呼叫會**在任何人看到之前就執行**,而副作用可能不可逆;更糟的是,你在 `user.message` 裡轉述的不受信任文字會被讀作你的意圖,足以說服伺服器放行某次呼叫。當某個工具*必須*先經人審,唯一正確的政策是 `always_ask`——它會讓 session 暫停(`stop_reason.type: requires_action`)直到一個明確的 `user.tool_confirmation`。逐工具的 `configs` 會覆寫 toolset 預設,所以你能同時得到 `auto` 的低摩擦讀取*與*對刪除的硬性關卡。(A)信賴 `auto` 去攔下刪除 —— 正是「auto 是檢查點」的錯誤,因為一次無法判定或誤判的呼叫可能無人過目就執行。(C)那是提示、不是確定性關卡 —— 第 3/9 章的教訓:重要的規則要靠設定落實,而非靠散文。(D)搞混了預設:*MCP* toolset 預設為 `always_ask`,但 *agent* toolset 預設為 `always_allow`,而且兩者的預設都不會特別挑出刪除工具。
 
 ---
 # 實作練習
