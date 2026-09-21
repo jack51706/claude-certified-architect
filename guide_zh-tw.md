@@ -1649,6 +1649,8 @@ flowchart TD
 
 **考試角度:** 區分每一層服務*誰*。個人風格 → user。團隊契約 → project(已提交)。在別處只會變成雜訊的子樹專屬慣例 → directory。
 
+**`AGENTS.md` —— 跨工具的指令檔。** `AGENTS.md` 是多個編碼代理共用、與廠商無關的專案指令慣例。Claude Code 現在會讀取它:在**沒有** `CLAUDE.md` 的專案中,Claude Code 會改為載入 `AGENTS.md`;兩者都存在時,你可在 `/config` 的 *Project instructions* 中選擇使用哪一個(或兩者都讀)。這對於已為其他代理附帶 `AGENTS.md` 的儲存庫很有意義 —— 你不必再維護第二個檔案,就能免費取得 Claude Code 的專案脈絡。`/import` 則是反方向:它把受支援代理設定的**一次性**副本(一份 `AGENTS.md`,加上 MCP 伺服器、指令、子代理與 skills)附加進對應的 `CLAUDE.md`,此後兩者各自分歧。注意:`AGENTS.md` 的讀取在 Bedrock、Vertex 或 Foundry 後端上尚不可用 —— 在那些後端,請把指令留在 `CLAUDE.md` 裡。**考試角度:**「在已有 AGENTS.md 的儲存庫採用 Claude Code」→ 會自動讀取(不需 `CLAUDE.md`);「把另一個代理的設定合併一次、之後於 Claude Code 中維護」→ `/import`。
+
 ## 5.2 `@path` 語法(檔案匯入)
 
 龐大的 CLAUDE.md 難以審查,還會讓內容在各套件間重複。CLAUDE.md 可以使用 `@path` 參照外部檔案,使設定模組化:
@@ -8377,6 +8379,8 @@ messages.append({"role": "assistant", "content": response.content})
 - **代價 —— 漸進式摘要遺失。** 每次 compaction 都會把精確的值(金額、ID、行號、檔案路徑)壓成散文(「使用者回報一個失敗的測試」)。數字會模糊。**這是核心陷阱:** 永遠不要讓承重事實*只*存在於可壓縮的歷程裡。把它們提升到每回合重新注入的 durable facts block(§11.2),或 —— 對長時程更好 —— 提升到 memory tool(§21.4),兩者都位於被摘要的歷程之外。
 
 **可用性:** beta,在 Fable 5、Opus 4.8 / 4.7 / 4.6 與 Sonnet 4.6 上。Beta header `compact-2026-01-12`;你必須呼叫 `client.beta.messages.*`。
+
+**按需 compaction —— 在對話之外請求摘要(`compact-2026-09-04`)。** 上述自動模式只會在*對話回合*接近上限時觸發,摘要也隨著該回合的 `response.content` 一起回來。改用較新的 `compact-2026-09-04` beta header,你可以**在與對話回合分離的請求中**、*按需*索取 compaction 區塊:傳入頂層的 `compaction` 參數,該呼叫只回傳一個**已簽章的** compaction 區塊 —— 沒有 assistant 回覆。因為它與即時回合解耦,你可以在背景(或依排程)執行它,等區塊回來後,在下一個真正的請求中把它換入、取代它所摘要的那些訊息 —— 使用者的下一回合就不必等待摘要延遲。有兩件事要分清楚:(1)該區塊是**已簽章的**,API 會信任它為所替代訊息的忠實替身 —— 不要手動編輯它;(2)這是*何時*而非*什麼* —— 它產生的仍是與自動 compaction 相同的有損摘要,所以 §11.2 的規則不變:承重事實應放在持久的 facts 區塊或 memory 工具裡,絕不可只存在被壓縮的歷程中。**考試角度:**「在背景摘要 / 不阻塞使用者下一回合」→ 按需 `compaction`(`compact-2026-09-04`);「隨視窗填滿而自動摘要」→ 自動 edit(`compact-2026-01-12`)。
 
 ## 21.3 Context Editing —— 清除過時工具結果,而非摘要
 
@@ -16151,6 +16155,36 @@ Associate 考試認證的是另一種工作:勝任且負責任地使用 Claude *
 - D) 把機群併成一個超大 agent,如此只有單一份定義要保持同步,從根本消除漂移。
 
 **為何選 A:** `ant apply`(ant CLI ≥ 1.30.0)是 Managed Agents 的基礎設施即程式碼:它*從檔案*建立與更新 agents、environments、skills、memory stores 與 deployments,而它寫出的 **`claude-lock.json`** lockfile 把那些檔案對應到真實資源 —— 簽入它,之後每一次執行就會**更新同一批資源、而非重複建立**,這正是「建立一次、以 ID 參照」的紀律(§24.2)在 git 裡變得可重現、可審查。漂移消失,因為 staging 與 prod 套用同一批經審查的檔案;「哪個版本在線上」由 lockfile 回答。(B)用手工重新發明對帳,又會與進行中的 session 競態 —— 先刪後建也會攪亂 agent ID。(C)手動試算表*就是*漂移本身,不是修法。(D)把一支良好切分的機群併成一個 agent,是拿工具選擇可靠性(領域 2)去換一個 IaC 早已解決的同步問題 —— 選錯了軸。
+
+---
+
+## 問題 310(情境:多代理研究系統)
+
+**情境:** 一個研究代理跑著數小時的調查,上下文穩定地填滿。當自動 compaction 在回合中途觸發時,面向使用者的協調者會卡住數秒——API 在能回答之前先摘要歷程。團隊想在不出現這個可見停頓的前提下,讓對話跨越視窗持續下去,而他們已經把訂單 ID 與發現提升到每回合重新注入的持久 facts 區塊裡。
+
+**要在仍然限住視窗的同時消除停頓,正確做法是什麼?**
+
+- A) 在一個背景請求中,用頂層 `compaction` 參數(beta `compact-2026-09-04`)在對話之外索取 compaction,再在下一個使用者回合之前,把回傳的已簽章區塊換入、取代它所摘要的訊息。 **[CORRECT]**
+- B) 把自動 compaction 門檻拉高到模型的完整視窗,讓它在一場工作階段中永不觸發。
+- C) 關掉 compaction,完全改靠 context editing(`clear_tool_uses`),讓任何東西都不會被摘要。
+- D) 只從每個回應取出 `block.text` 並重送那段字串,丟掉 `response.content` 的其餘部分,好讓請求保持精簡。
+
+**為何選 A:** 按需 compaction(`compact-2026-09-04`)把摘要與即時回合解耦——你在一個**分離的**請求裡索取 compaction 區塊,該請求只回傳一個已簽章的區塊,在背景執行它,並在使用者下一回合之前換入,協調者於是永不因摘要延遲而阻塞(§21.2)。它是*何時*而非*什麼*:摘要仍是有損的,這正是持久 facts 區塊依舊不可或缺的原因(§11.2)。(B)更大的視窗只會延後填滿並推高成本——停頓會回來,只是更晚、更大(§11.1)。(C)context editing 清除過時工具結果,但無法保留一場長調查的*敘事*;它與 compaction 互補,而非取代(§21.3)。(D)丟掉 `response.content` 其餘部分,等於扔掉 compaction 區塊本身——正是讓 compaction 悄悄失效的典型 bug(§21.2)。
+
+---
+
+## 問題 311(情境:使用 Claude Code 生成程式碼)
+
+**情境:** 一個團隊要在一個大型 monorepo 中採用 Claude Code,而該倉庫根目錄已附帶一份 `AGENTS.md`——是為另一個編碼代理而寫的——承載著專案的建置、測試與審查慣例。他們希望 Claude Code 立即接手這些慣例,又不想維護兩份會各自漂移的相同指令。這個倉庫在本機執行 Claude Code,而非在 Bedrock 或 Vertex 上。
+
+**他們該先做什麼?**
+
+- A) 直接倚賴 Claude Code 自動讀取既有的 `AGENTS.md`——在沒有 `CLAUDE.md` 時,它會載入 `AGENTS.md` 作為專案指令,因此沒有東西需要重複。 **[CORRECT]**
+- B) 手動把整份 `AGENTS.md` 複製進一個新的 `CLAUDE.md`,並在每次慣例變更時同時更新兩個檔案。
+- C) 把慣例貼進 `~/.claude/CLAUDE.md`,讓每位開發者都繼承它們。
+- D) 把慣例搬進 `.claude/rules/`,配上一個比對所有檔案的 glob,讓它們永遠載入。
+
+**為何選 A:** Claude Code 現在會把 `AGENTS.md` 當成與廠商無關的專案指令檔讀取——在**沒有** `CLAUDE.md` 時,它會改為載入 `AGENTS.md`(兩者都存在時,`/config` → *Project instructions* 讓你選擇),因此既有的 `AGENTS.md` 能以**零**重複把團隊的慣例交給 Claude Code(§5.1)。這在此可行,是因為他們用的是本機後端,而非 `AGENTS.md` 讀取尚不可用的 Bedrock/Vertex/Foundry。(B)手動複製正好造成他們想避免的兩檔漂移;若他們*確實*想要一次性合併,`/import` 會幫他們附加一份副本(§5.1)——但自動讀取既已生效,就沒什麼需要合併。(C)user-level 的 `CLAUDE.md` 從不提交,重新 clone 就看不到它——正是「`git clone` 看得到嗎?」的典型失敗(§5.1)。(D)一個比對所有檔案的 glob 規則會重新引入每回合都載入的巨石檔,破壞條件式載入(§5.3),又依然重複 `AGENTS.md` 已經承載的內容。
 
 ---
 # 實作練習

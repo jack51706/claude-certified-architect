@@ -1649,6 +1649,8 @@ flowchart TD
 
 **Exam angle:** distinguish *who* each level serves. Personal style → user. Team contract → project (committed). Subtree-only convention that would be noise elsewhere → directory.
 
+**`AGENTS.md` — the cross-tool instruction file.** `AGENTS.md` is the vendor-neutral convention several coding agents share for project instructions. Claude Code now reads it: in a project that has **no** `CLAUDE.md`, Claude Code loads `AGENTS.md` in its place, and where both exist you choose which to use (or to read both) under *Project instructions* in `/config`. This matters for a repo that already ships an `AGENTS.md` for another agent — you get Claude Code's project context for free, without maintaining a second file. `/import` goes the other way: it appends a **one-time** copy of a supported agent's config (an `AGENTS.md`, plus MCP servers, commands, subagents, and skills) into the matching `CLAUDE.md`, after which the two diverge. Caveat: `AGENTS.md` reading is not yet available on the Bedrock, Vertex, or Foundry backends — there, keep instructions in `CLAUDE.md`. **Exam angle:** "adopt Claude Code in a repo that already has an AGENTS.md" → it's read automatically (no `CLAUDE.md` needed); "merge another agent's setup once and then maintain it in Claude Code" → `/import`.
+
 ## 5.2 `@path` Syntax (File Imports)
 
 A large CLAUDE.md becomes hard to review and duplicates content across packages. CLAUDE.md can reference external files using `@path`, making configuration modular:
@@ -8377,6 +8379,8 @@ messages.append({"role": "assistant", "content": response.content})
 - **Cost — progressive summarization loss.** Each compaction compresses precise values (amounts, IDs, line numbers, file paths) into prose ("the user reported a failing test"). Numbers blur. **This is the central pitfall:** never let load-bearing facts live *only* in compactible history. Lift them into a durable facts block (§11.2) re-injected every turn, or — better for long horizons — into the memory tool (§21.4), both of which sit outside the summarized transcript.
 
 **Availability:** beta, on Fable 5, Opus 4.8 / 4.7 / 4.6, and Sonnet 4.6. Beta header `compact-2026-01-12`; you must call `client.beta.messages.*`.
+
+**On-demand compaction — request a summary out of band (`compact-2026-09-04`).** The automatic mode above only fires when a *conversation turn* nears the threshold, and the summary rides back inside that turn's `response.content`. With the newer `compact-2026-09-04` beta header you can instead ask for a compaction block *on demand*, in a request that is **separate from your conversation turns**: you pass a top-level `compaction` parameter, and the call returns **only** a signed compaction block — no assistant reply. Because it is decoupled from the live turn, you can run it in the background (or on a schedule) and, when the block arrives, swap it in for the messages it summarizes on your next real request — so the user's next turn never blocks on summarization latency. Two things to keep straight: (1) the block is **signed**, so the API trusts it as a faithful replacement of the messages it stands in for — don't hand-edit it; (2) this is a *when*, not a *what* — it produces the same lossy summary as auto-compaction, so the §11.2 rule stands unchanged: load-bearing facts belong in a durable facts block or the memory tool, never only in the compacted history. **Exam angle:** "summarize in the background / don't block the user's next turn" → on-demand `compaction` (`compact-2026-09-04`); "summarize automatically as the window fills" → the auto edit (`compact-2026-01-12`).
 
 ## 21.3 Context Editing — Clear Stale Tool Results, Don't Summarize
 
@@ -16158,6 +16162,36 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 - D) Collapse the fleet into one giant agent so there is only a single definition to keep in sync, eliminating drift by construction.
 
 **Why A:** `ant apply` (ant CLI ≥ 1.30.0) is infrastructure-as-code for Managed Agents: it creates and updates agents, environments, skills, memory stores, and deployments *from files*, and the **`claude-lock.json`** lockfile it writes maps those files to the real resources — commit it and every subsequent run **updates the same resources instead of duplicating them**, which is exactly the create-once, reference-by-ID discipline (§24.2) made reproducible and reviewable in git. Drift dies because staging and prod apply the same reviewed files, and "which version is live" is answered by the lockfile. (B) reinvents reconciliation by hand and races with in-flight sessions — delete-then-recreate also churns agent IDs. (C) a manual spreadsheet *is* the drift, not the fix. (D) collapsing a well-factored fleet into one agent trades tool-selection reliability (Domain 2) for a sync problem IaC already solves — the wrong axis.
+
+---
+
+## Question 310 (Scenario: Multi-agent Research System)
+
+**Situation:** A research agent runs multi-hour investigations, and its context fills steadily. When auto-compaction fires mid-turn, the user-facing coordinator stalls for several seconds while the API summarizes the history before it can answer. The team wants to keep the conversation alive across the window without that visible pause, and they already lift order IDs and findings into a durable facts block re-injected every turn.
+
+**What is the right way to remove the stall while still bounding the window?**
+
+- A) Request compaction out of band with the top-level `compaction` parameter (beta `compact-2026-09-04`) on a background request, then swap the returned signed block in for the messages it summarizes before the next user turn. **[CORRECT]**
+- B) Raise the auto-compaction threshold to the model's full window so it never triggers during a session.
+- C) Turn off compaction and rely solely on context editing (`clear_tool_uses`) so nothing is ever summarized.
+- D) Extract only `block.text` from each response and re-send that string, dropping the rest of `response.content` to keep requests small.
+
+**Why A:** on-demand compaction (`compact-2026-09-04`) decouples summarization from the live turn — you ask for a compaction block in a **separate** request that returns *only* a signed block, run it in the background, and swap it in before the user's next turn, so the coordinator never blocks on summarization latency (§21.2). It is a *when*, not a *what*: the summary is still lossy, which is why the durable facts block stays essential (§11.2). (B) a bigger window only delays the fill and inflates cost — the stall returns, later and larger (§11.1). (C) context editing clears stale tool results but doesn't preserve the *narrative* of a long investigation; it complements compaction, it doesn't replace it (§21.3). (D) dropping the rest of `response.content` throws away the compaction block itself — the classic bug that makes compaction silently no-op (§21.2).
+
+---
+
+## Question 311 (Scenario: Code Generation with Claude Code)
+
+**Situation:** A team is adopting Claude Code in a large monorepo that already ships an `AGENTS.md` at the root — written for a different coding agent — carrying the project's build, test, and review conventions. They want Claude Code to pick up those conventions immediately, and they don't want to maintain two copies of the same instructions that will drift apart. The repo runs Claude Code locally, not on Bedrock or Vertex.
+
+**What should they do first?**
+
+- A) Rely on Claude Code reading the existing `AGENTS.md` automatically — with no `CLAUDE.md` present it loads `AGENTS.md` as the project instructions, so there is nothing to duplicate. **[CORRECT]**
+- B) Copy the entire `AGENTS.md` into a new `CLAUDE.md` by hand and keep both files updated on every convention change.
+- C) Paste the conventions into `~/.claude/CLAUDE.md` so every developer inherits them.
+- D) Move the conventions into `.claude/rules/` with a glob that matches every file so they always load.
+
+**Why A:** Claude Code now reads `AGENTS.md` as a vendor-neutral project-instruction file — when there is **no** `CLAUDE.md` it loads `AGENTS.md` in its place (and `/config` → *Project instructions* lets you choose when both exist), so an existing `AGENTS.md` gives Claude Code the team's conventions with **zero** duplication (§5.1). It works here because they are on the local backend, not Bedrock/Vertex/Foundry where `AGENTS.md` reading isn't yet available. (B) hand-copying creates exactly the two-file drift they want to avoid; if they *did* want a one-time merge, `/import` appends a copy for them (§5.1) — but nothing needs merging when auto-read already works. (C) a user-level `CLAUDE.md` is never committed, so a fresh clone wouldn't see it — the standard "would `git clone` see this?" failure (§5.1). (D) a match-everything glob rule reintroduces a monolith loaded on every turn, defeating conditional loading (§5.3) while still duplicating what `AGENTS.md` already holds.
 
 ---
 # Practical Exercises

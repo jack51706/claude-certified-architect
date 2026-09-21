@@ -712,5 +712,19 @@
     "tag": "Agents",
     "def_en": "Infrastructure-as-code command in the ant CLI (≥ 1.30.0, 2026-09) for Managed Agents: it creates and updates agents, environments, skills, memory stores, and deployments from files checked into a repo, after you review the plan it prints. It writes a claude-lock.json lockfile mapping those files to the real resources — commit it so later runs, on a laptop or in CI, update the same resources instead of creating duplicates. Makes the create-once, reference-by-ID agent definition reproducible and reviewable in git, killing staging/prod drift. Related: ant beta:sessions connect attaches a terminal to a live session to follow events and allow/deny paused tool calls.",
     "def_zh": "ant CLI(≥ 1.30.0,2026-09)中給 Managed Agents 的基礎設施即程式碼命令:在你審核它印出的計畫後,從簽入倉庫的檔案建立與更新 agents、environments、skills、memory stores 與 deployments。它會寫出一個 claude-lock.json lockfile,把那些檔案對應到真實資源 —— 簽入它,之後在筆電或 CI 上的執行就會更新同一批資源、而非建出重複的。這讓「建立一次、以 ID 參照」的 agent 定義在 git 裡變得可重現、可審查,消除 staging/prod 漂移。相關:ant beta:sessions connect 會把終端機接上一個進行中的 session,以跟看事件並允許/拒絕暫停的工具呼叫。"
+  },
+  {
+    "term": "On-demand compaction",
+    "zh": "按需 compaction",
+    "tag": "Context",
+    "def_en": "Compaction requested out of band via the top-level compaction parameter (beta compact-2026-09-04): a request separate from conversation turns that returns only a signed compaction block, so it can run in the background and be swapped in later — vs. auto-compaction (compact-2026-01-12) that fires as the window fills. Still a lossy summary.",
+    "def_zh": "透過頂層 compaction 參數在對話之外索取的壓縮(beta compact-2026-09-04):與對話回合分離的請求,只回傳一個已簽章的 compaction 區塊,因此可在背景執行、稍後換入 —— 相對於隨視窗填滿而觸發的自動壓縮(compact-2026-01-12)。仍是有損摘要。"
+  },
+  {
+    "term": "AGENTS.md",
+    "zh": "AGENTS.md",
+    "tag": "Claude Code",
+    "def_en": "Vendor-neutral project-instruction file shared across coding agents. Claude Code reads it when no CLAUDE.md exists (choose which under /config Project instructions); /import appends a one-time copy into CLAUDE.md. Not yet available on Bedrock/Vertex/Foundry.",
+    "def_zh": "多個編碼代理共用、與廠商無關的專案指令檔。沒有 CLAUDE.md 時 Claude Code 會讀取它(在 /config 的 Project instructions 中選擇);/import 會把一次性副本附加進 CLAUDE.md。在 Bedrock/Vertex/Foundry 上尚不可用。"
   }
 ]
