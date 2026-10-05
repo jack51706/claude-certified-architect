@@ -637,6 +637,13 @@
     "def_zh": "Anthropic 的旗艦模型(claude-fable-5-1),於 2026-09-01 發布為新的預設 Fable,接替 Fable 5(仍可呼叫)。定價、上下文與最大輸出與 Fable 5 相同($10 / $50 每 MTok、1M token 上下文、128K 最大輸出),但有一項關鍵成本變更:快取讀取為基礎輸入價格的 0.025 倍($0.25/MTok)——是其他所有 Claude 模型 ~0.1 倍的四分之一——大幅降低了快取主導、長程代理的回本門檻。思考為自適應且恆常開啟(thinking:{type:'disabled'} 會回傳 400——請省略);原始推理鏈永不回傳(只有摘要或空區塊)。Fable 5.1 與其受限的姊妹版 Mythos 5.1(claude-mythos-5-1,Project Glasswing)都需要 30 天最短資料保留期、不支援零資料保留(ZDR),且輸出帶有文字浮水印(程式碼執行工具產生的媒體帶有 C2PA Content Credentials)。"
   },
   {
+    "term": "Mod (Claude Code)",
+    "zh": "Mod(Claude Code)",
+    "tag": "Claude Code",
+    "def_en": "A TypeScript function that customizes Claude Code's behavior by hooking the events it emits (calling a tool, asking for permission, rendering the screen) and running before, after, or instead of each — so a mod can rewrite prompts, add UI, or replace built-in features. Added 2026-10 in Claude Code 2.1.287. Mods ship inside plugins (installed with /plugin) and are active by default, no flag required. Critically, mods are NOT sandboxed: they run with the same access to the machine as Claude Code itself, so installing one is running untrusted code with your files and credentials in reach — only install from trusted, reviewed, pinned sources, as with any executed dependency. A built-in example is the 'You should know' mod, a side agent that flags things you or Claude might miss.",
+    "def_zh": "一個以 TypeScript 撰寫的函式,透過掛進 Claude Code 發出的事件(呼叫工具、請求權限、渲染畫面)來客製其行為,並在每個事件之前、之後或取而代之執行 —— 因此一個 mod 可以改寫提示、加入 UI 或替換內建功能。2026-10 於 Claude Code 2.1.287 新增。mod 封裝在 plugin 內(以 /plugin 安裝)且預設啟用,不需任何旗標。關鍵是:mod 沒有沙箱 —— 它以與 Claude Code 本身相同的機器存取權運行,所以安裝一個 mod 等於以你的檔案與憑證觸手可及的狀態執行不受信任的程式碼 —— 只從受信任、經審查、已釘選的來源安裝,如同任何會被執行的相依套件。一個內建範例是「You should know」mod,一個會標出你或 Claude 可能漏掉之事的側邊代理。"
+  },
+  {
     "term": "Claude Opus 5.5",
     "zh": "Claude Opus 5.5",
     "tag": "Platform",

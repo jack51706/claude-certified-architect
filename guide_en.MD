@@ -10114,6 +10114,8 @@ Three capabilities turn an individual setup into a distributable, context-effici
 
 **Plugins and marketplaces.** A *plugin* bundles Skills, subagent definitions, hooks, slash commands, and MCP server configs into **one installable package**, distributed through a **plugin marketplace**. This is how a security or platform team ships a standardized agent capability to the whole org: one install pulls the SAST skill, the policy hook, the approved MCP servers, and the review subagent together — versioned as a unit, instead of every engineer hand-copying snippets into their own `.claude/`. A plugin can be sourced from a **git repo**, an **npm package**, or (added 2026-08) an **`archive` source** — a plain **zip fetched over HTTPS**, no git or npm required, with **optional SHA-256 pinning**. That last option is the clean fit for a locked-down or air-gapped org: vendor the approved bundle at an internal URL and pin its hash, so the exact bytes an engineer installs can never change under them.
 
+**Mods — deep customization in TypeScript.** Where a plugin *bundles* existing pieces, a **mod** (added 2026-10 in Claude Code 2.1.287) changes Claude Code's *behavior*. Each time Claude Code does something — calls a tool, asks for permission, draws part of the screen — it emits an event; a mod is a small **TypeScript function that hooks one of those events and runs before it, after it, or instead of it**, so it can rewrite a prompt, add new UI, or replace a built-in feature. Mods ship **inside plugins** (install with `/plugin`) and are **active by default** — no flag needed. The security consequence is the one to remember for the exam: **mods are not sandboxed — they run with the same access to your machine as Claude Code itself**, so a mod is untrusted code with your files and credentials in reach. Install only from sources you trust, review it, and pin it (the `archive` source's SHA-256 pin is the clean fit), exactly as you would any dependency you execute. A built-in example is the **"You should know"** mod — a side agent that flags things you or Claude might miss.
+
 **Expanded hook events.** Chapter 3 used `PreToolUse`/`PostToolUse` for deterministic enforcement. Modern Claude Code adds lifecycle events that matter for *autonomous* runs:
 
 - **`SubagentStart` / `SubagentStop`** — inject context into, or audit, every spawned worker (essential when a workflow spawns hundreds).
@@ -16228,6 +16230,21 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 - D) The agent lost its tool definitions on the new model; re-send them with the `mid-conversation-tool-changes-2026-07-01` beta header to make narration reappear.
 
 **Why B:** Sonnet 5.5 changes the *response shape* for inter-tool text: narration that Sonnet 5 returned in `text` blocks now comes back in `thinking` blocks. The request doesn't fail and the final answer is unaffected, so this slips through a model-ID-only upgrade and surfaces only as a silent UI between tool calls. The documented fixes are to set a `display` value that returns that text, or to turn off up-front thinking with the `between_tools` setting (the new *lowest* thinking level on Sonnet 5.5, which replaces a full "disabled"). (A) is wrong — Sonnet 5.5 streams fine; only the block *type* carrying the text changed. (C) `effort` isn't changed by an upgrade, and `high` is the default on both; cranking to `max` just raises latency and cost without moving the text back into `text` blocks. (D) the tools are intact (requests succeed, answers are correct); that beta header governs adding/removing tools mid-conversation, not where narration is rendered.
+
+---
+
+## Question 314 (Scenario: Code Generation with Claude Code)
+
+**Situation:** A platform team wants every engineer's Claude Code to auto-rewrite prompts to inject house coding standards and to replace the default diff view. An engineer finds a third-party **mod** (a TypeScript plugin that hooks Claude Code's events) on a public repo that does exactly this, and proposes rolling it out org-wide. A security reviewer asks what the risk is.
+
+**Which assessment is correct?**
+
+- A) Mods run in a sandbox isolated from the machine, so any mod is safe to install org-wide; the only risk is a broken UI.
+- B) A mod runs with the **same access to the machine as Claude Code itself** — it is not sandboxed and can hook events like tool calls, permission prompts, and rendering to run before, after, or *instead of* them (rewriting prompts, replacing built-in features) — so it must be vetted and sourced from trust exactly like any dependency you execute; pin and review it, or build an internal one, before org-wide rollout. **[CORRECT]**
+- C) Mods can only change colors and keybindings, so no review is needed beyond style approval.
+- D) Mods are disabled by default and require turning off permission prompts to run, so the safe path is to enable it with permissions off for a smooth rollout.
+
+**Why B:** Mods are TypeScript functions, shipped inside plugins and installed with `/plugin`, that hook the events Claude Code emits (calling a tool, asking for permission, drawing the screen) and can run before, after, or instead of each — so a mod can rewrite prompts, replace built-in features, and add UI. Crucially they are **not sandboxed**: a mod has the same machine access as Claude Code, so installing one is running untrusted code with your credentials and files in reach. The correct posture is to treat it like any executed dependency — review the source, pin it (e.g. via an `archive` source with a SHA-256 pin, §26.5), and prefer an internally built/vendored mod for an org-wide rollout. (A) is backwards — mods are explicitly *not* sandboxed. (C) understates them: mods reach far past theming into prompts, tools, and built-in behavior. (D) is both false and dangerous — mods are active by default (since 2.1.287) and nothing requires disabling permission prompts; turning permissions off to deploy a prompt-rewriting mod org-wide is exactly the wrong move.
 
 ---
 # Practical Exercises
