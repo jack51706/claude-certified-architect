@@ -7200,7 +7200,7 @@ sequenceDiagram
 
 # 第四部分:Claude 平台完整參考(超出基礎考綱)
 
-> **範圍說明:** 第四部分是 **2026 年 Claude 平台完整功能** 的參考 —— API、工具、SDK、Managed Agents、MCP 與現代 Claude Code,供你**完整掌握 Claude**,而非只為通過考試。其中**大多超出官方 Foundations 考綱**(部分甚至在考試明列的範圍外清單上)。每章都附官方文件。引用的現役模型:旗艦 **Claude Fable 5.1**(`claude-fable-5-1`,2026-09-01 發布,接替 Fable 5);預設 Opus **Claude Opus 5.5**(`claude-opus-5-5`,2026-09-22 發布,接替 Opus 5);預設 Sonnet **Claude Sonnet 5.5**(`claude-sonnet-5-5`,2026-09-28 發布,接替 Sonnet 5);以及 **Haiku 4.5**。
+> **範圍說明:** 第四部分是 **2026 年 Claude 平台完整功能** 的參考 —— API、工具、SDK、Managed Agents、MCP 與現代 Claude Code,供你**完整掌握 Claude**,而非只為通過考試。其中**大多超出官方 Foundations 考綱**(部分甚至在考試明列的範圍外清單上)。每章都附官方文件。引用的現役模型:旗艦 **Claude Fable 5.1**(`claude-fable-5-1`,2026-09-01 發布,接替 Fable 5);預設 Opus **Claude Opus 5.5**(`claude-opus-5-5`,2026-09-22 發布,接替 Opus 5);預設 Sonnet **Claude Sonnet 5.5**(`claude-sonnet-5-5`,2026-09-28 發布,接替 Sonnet 5);以及預設 Haiku **Claude Haiku 5.5**(`claude-haiku-5-5`,2026-10-07 發布,接替 Haiku 4.5)。
 
 ---
 
@@ -10588,7 +10588,8 @@ sequenceDiagram
 | **Claude Opus 5** | `claude-opus-5` | 1M | 128K | $5 / $25 | 前一代 Opus(仍可以 `claude-opus-5` 呼叫) |
 | **Claude Sonnet 5.5** | `claude-sonnet-5-5` | 1M | 128K | $2 / $10 | **新的預設 Sonnet**(2026-09-28)——速度/智慧最佳平衡;在真實工作負載上比 Sonnet 5 更快、最多便宜約 30%;快取讀取 $0.20 |
 | **Claude Sonnet 5** | `claude-sonnet-5` | 1M | 128K | $2 / $10 | 前一代 Sonnet(仍可以 `claude-sonnet-5` 呼叫) |
-| **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | 快速、便宜、簡單/延遲關鍵任務 |
+| **Claude Haiku 5.5** | `claude-haiku-5-5` | 1M | 128K | $0.10 / $0.50 | **新的預設 Haiku**(2026-10-07)—— 最快的層級;首個具自適應思考的 Haiku(effort,預設 `medium`);1M 上下文(從 200K 提升);超過 100K token 時輸入/輸出分級($0.50 / $2.50);快取讀取 $0.01 |
+| **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | 前一代 Haiku(仍以 `claude-haiku-4-5` 可呼叫);無 effort/思考;由 Haiku 5.5 接替 |
 
 > **Sonnet 5 是前一代的平衡層級**(於 2026-09-28 由 Sonnet 5.5 接替,仍可呼叫),接替 Sonnet 4.6(現為舊版模型,仍可透過 `claude-sonnet-4-6` 呼叫)。Sonnet 5 上市時的 **$2 / $10 每 MTok** 定價已於 **2026-08-10 轉為永久價** —— 原本排定於 2026-09-01(導入期 2026-08-31 結束後)生效的標準 **$3 / $15** **不再適用**,因此 $2 / $10 是常態價,而非促銷。在 Claude Sonnet 5 上,`effort` 參數在 Claude API 與 Claude Code 預設為 `high`。來源:[模型總覽](https://platform.claude.com/docs/en/about-claude/models/overview)、[定價](https://platform.claude.com/docs/en/about-claude/pricing)。
 >
@@ -10601,12 +10602,14 @@ sequenceDiagram
 > **Claude Opus 5.5(2026-09-22 發布)是新的預設 Opus —— 更便宜、更快,且思考不再是選項。** `claude-opus-5-5` 維持 Opus 5 的 1M token 上下文與 128K 最大輸出,但**把價格降到每 MTok $4 / $20**(相對 Opus 5 的 $5 / $25),**快取讀取 $0.20、快取寫入 $5**。Anthropic 表示它在典型工作負載上**比 Opus 5 便宜約 40%、輸出速度快超過 30%**,因此複雜代理程式設計與企業工作現在應該從它——而非 Opus 5——起步;Opus 5 仍以前一代模型(`claude-opus-5`)可呼叫。三項會在遷移時咬人的 API 變更,全都比 Opus 5 更嚴:(1)**思考完全無法停用** —— `thinking: {type:"disabled"}` *與* `thinking: {type:"enabled", ...}` *都*回傳 **400**;自適應思考恆常開啟,你只能用 `effort`(low / medium(預設)/ high / xhigh / max)調節深度,這比 Opus 5(當時仍允許在 effort ≤ `high` 停用)更緊。(2)**`tool_choice` 的 `any` 與 `tool` 型別回傳 400**(與 Fable 5.1 相同)—— 請用 `auto` 搭配[嚴格工具使用](https://platform.claude.com/docs/en/build-with-claude/tool-use)來強制一個結構有效的呼叫。(3)在 Claude API 與 Google Cloud 上,**[電腦使用(computer use)](https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool)需要 `computer_toolset_20260801` 工具集** —— 較早的 `computer_20251124` 工具回傳 400。Opus 5.5 帶有**保留思考(preserved-thinking)的反蒸餾防護**(與 Fable 5.1 相同)與 Claude API 上的 **[fast mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode) 研究預覽**,並在 Claude API、Amazon Bedrock、AWS、Google Cloud(Vertex)與 Microsoft Foundry 上提供(包含零資料保留 ZDR)。來源:[Claude Opus 5.5 的新功能](https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5-5)、[平台發行說明 —— 2026 年 9 月 22 日](https://platform.claude.com/docs/en/release-notes/api)、[定價](https://platform.claude.com/docs/en/about-claude/pricing)。
 >
 > **Claude Sonnet 5.5(2026-09-28 發布)是新的預設 Sonnet —— 同價、更快,且相對 Sonnet 5 有五項破壞性變更。** `claude-sonnet-5-5` 維持 Sonnet 5 的 **$2 / $10 每 MTok**(快取讀取 **$0.20**,5m/1h 寫入 $2.50/$4)、1M token 上下文、128K 最大輸出、自適應思考與 `high` 預設 effort,但 Anthropic 表示它在真實工作負載上**比 Sonnet 5 更快、最多便宜約 30%** —— 因此平衡的生產預設現在是它,而非 Sonnet 5(Sonnet 5 仍以 `claude-sonnet-5` 作為前一代可呼叫)。五項會讓跑在 Sonnet 5 的程式碼失敗的變更:(1)**最低的思考設定現在是 `between_tools`**,它關閉*前置(up-front)*思考(可用於 effort `high` 或以下)—— 不再有完整的「disabled」。(2)**強制工具使用回傳 400** —— `tool_choice` 的 `any` 與 `tool` 型別被拒(與 Opus 5.5 / Fable 5.1 相同);請用 `auto` 搭配[嚴格工具使用](https://platform.claude.com/docs/en/build-with-claude/tool-use)。(3)**思考區塊綁定產生它的模型與對話** —— 你不能把另一個模型的思考區塊重播回 Sonnet 5.5 的請求。(4)在 Claude API 與 Google Cloud 上,較早的 **`computer_20251124` 電腦使用工具被拒** —— 請用 `computer_toolset_20260801`。(5)**advisor 工具拒絕 Opus 4.8、Opus 4.7 與 Sonnet 5 作為 advisor。** 另有一項不會讓請求失敗、但會咬到串流 UI 的變更:**工具呼叫之間的文字現在回到 `thinking` 區塊**,因此串流敘述的應用會在工具之間靜默,直到它設定會回傳該文字的 `display` 值(或以 `between_tools` 關閉前置思考)。非預設的 `temperature` / `top_p` / `top_k` 仍回傳 400。來源:[Claude Sonnet 5.5 的新功能](https://platform.claude.com/docs/en/models/sonnet-5-5/whats-new-sonnet-5-5)、[Claude Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview)。
+>
+> **Claude Haiku 5.5(2026-10-07 發布)是新的預設 Haiku —— 對便宜層級而言是世代級躍進,而非改名。** `claude-haiku-5-5` 是整個陣容中最快的模型,為高量、延遲敏感的工作而生(分類、抽取、路由、壓縮、便宜子代理),但它不再是*小範圍*的層級:它帶有 **1M token 上下文視窗與 128K 最大輸出**(從 Haiku 4.5 的 200K / 64K 提升;以 `output-300k-2026-03-24` 在 Batch API beta 達 300K 輸出),因此一個 Haiku 子代理現在能容納整份在 4.5 上會被截斷的大型文件。定價**依提示長度分級**:**提示 ≤ 100K token 時輸入 $0.10 / MTok、輸出 $0.50 / MTok**,超過 100K 升到 **$0.50 / $2.50**,**快取讀取 $0.01 / $0.05**、5m 快取寫入 $0.125 / $0.625。兩項首創與兩個陷阱:(1)它是**首個具自適應思考的 Haiku 級模型**,以 `effort` 調節(預設 **`medium`**,low→max)—— 便宜層級現在也能在較難的案例上*思考*;(2)它採用**與 Claude 4.7 及之後共用的較新 tokenizer,因此相同文字比在 Haiku 4.5 上多約 30% token** —— 請用 [token 計數 API](https://platform.claude.com/docs/en/build-with-claude/token-counting)(`model="claude-haiku-5-5"`)重新量測提示大小與成本,而非沿用 4.5 的估算;(3)非預設的 **`temperature` / `top_p` / `top_k` 回傳 400**(請省略);(4)思考區塊綁定產生它的帳號。輸入為文字＋影像、輸出為文字;知識截止 2026 年 6 月。Haiku 4.5 續以 `claude-haiku-4-5` 作為前一代可呼叫。於 Claude API、Amazon Bedrock(`anthropic.claude-haiku-5-5`)、Google Cloud(Vertex)、Microsoft Foundry 與 Claude Platform on AWS 提供。來源:[Claude Haiku 5.5 總覽](https://platform.claude.com/docs/en/models/haiku-5-5/overview)、[Claude Haiku 5.5 的新功能](https://platform.claude.com/docs/en/models/haiku-5-5/whats-new-haiku-5-5)。
 
 把它讀成一道階梯,而非一份菜單。每往上一階,價格大致翻倍以換取能力的提升,所以工程問題從來不是「哪個模型最好」—— 而是「哪個是**最便宜**、且能以充裕餘裕通過這項任務門檻的階梯」。
 
 **四個家族各一句話:**
 
-- **Haiku 4.5** —— 高量、規格明確、延遲敏感工作的主力:分類、抽取、路由、格式化,以及大型系統中的*便宜子代理*。注意較小的範圍 —— 200K 上下文、64K 輸出 —— 對這些工作綽綽有餘,但因此無法勝任整個程式庫的推理。
+- **Haiku 5.5** —— 高量、規格明確、延遲敏感工作的主力:分類、抽取、路由、格式化、壓縮,以及大型系統中的*便宜子代理*。自 2026-10-07 起它是新的預設 Haiku,範圍不再是限制 —— 它帶有旗艦級的 **1M 上下文 / 128K 輸出**,且是**首個具自適應思考的 Haiku**(`effort`,預設 `medium`),價格約為 Sonnet 的十分之一。真正的限制現在是*每 token 的能力*,而非視窗大小:任務簡單且你要速度或規模時用它,當 eval 顯示它在品質上留有餘地時再往上爬一階。(Haiku 4.5,`claude-haiku-4-5`,續以前一代可呼叫,維持舊的 200K / 64K 範圍且無思考。)
 - **Sonnet 5.5** —— 規模化生產的預設。它以旗艦的同等範圍(1M 上下文 / 128K 輸出)只收一小部分價格,這正是為何大多數面向使用者的代理與高吞吐管線都應該從這裡*起步*,而非從 Opus。在與 Sonnet 5 相同的 $2/$10,它在真實工作負載上更快、最多便宜約 30%,因此接替 Sonnet 5 成為平衡預設(Sonnet 5,`claude-sonnet-5`,仍以前一代可呼叫)。
 - **Opus 5.5** —— 旗艦 Opus,在任務確實複雜或具代理性時是正確的預設:多步規劃、困難程式碼、長程自主迴圈、細膩判斷。思考**恆常開啟且無法停用** —— 你只能用 `effort` 調節深度,所以從 `high` 起步再依路由調校。在 $4/$20,它比 Opus 5 更*便宜*,因此舊的「Opus 很貴,預設用 Sonnet」算式改變了:你在輸出上仍付約 Sonnet 的 2 倍,但以 Fable 5.1 的 40% 價格,買到在 Sonnet 只能*有時*答對的任務上的前沿可靠性。(Opus 5,`claude-opus-5`,仍以前一代可呼叫。)
 - **Fable 5.1** —— 絕對天花板,用於最難的推理與最長程的工作。在 $10/$50,其輸出是 Opus 的兩倍,所以只保留給 Opus 明顯做不好的那一小片任務;把它當預設用,是燒預算卻毫無收穫最常見的單一方式。它*勝過*較便宜層級的唯一地方是**快取讀取 0.025×**(其他每個模型費率的四分之一)—— 所以由快取主導的長程代理,在 Fable 5.1 上可能比牌價看起來更便宜。
@@ -10627,7 +10630,7 @@ sequenceDiagram
 flowchart TD
     A[進來的任務] --> B{複雜推理<br/>或長程代理?}
     B -->|否,規格明確| C{延遲關鍵<br/>或極高量?}
-    C -->|是| D[Haiku 4.5<br/>快又便宜]
+    C -->|是| D[Haiku 5.5<br/>快又便宜]
     C -->|否| E[Sonnet 5.5<br/>平衡預設]
     B -->|是| F{Sonnet 通過<br/>你的評測集嗎?}
     F -->|是| E
@@ -10644,7 +10647,7 @@ flowchart TD
 - **「為了保險」預設用旗艦。** 這是本章最昂貴的錯誤。如果 Haiku 在你的標註集上以 99.2% 通過工單分類,在那裡跑 Opus 只換來 0.3 分準確率,卻付出 5 倍輸入成本與 5 倍輸出成本 —— 在量上是純粹浪費。
 - **在需要判斷的任務上抓便宜模型。** 反向錯誤:用 Haiku 處理細膩的政策推理或多檔重構,它會無聲失敗,送出看似自信的錯誤答案。便宜只有在*正確*時才便宜。
 - **憑感覺而非評測來選。** 「感覺更聰明」不是選擇標準。對「為何選這個模型」站得住腳的答案永遠是個數字:在具代表性的評測集上的準確率/通過率,搭配實測的每任務成本(這是評測那一章的應用)。
-- **忘了範圍。** Haiku 的 200K 上下文 / 64K 輸出對分類綽綽有餘,但裝不下一個大型程式庫,也吐不出一份長文件 —— 這是再多提示也修不了的能力上限。比較價格前,先讓範圍對得上工作。
+- **忘了範圍 —— 以及 tokenizer。** 在 **Haiku 5.5** 上視窗不再是限制(1M 上下文 / 128K 輸出與旗艦看齊),便宜層級現在裝得下一份大型文件;限制轉移到*每 token 的能力* —— 把 Haiku 拿去做細膩判斷仍會悄無聲息地失敗。兩個數字仍會咬人:Haiku 5.5 的**較新 tokenizer 對相同文字比 Haiku 4.5 多約 30% token**,因此一個照舊估算「裝得下」的提示,成本可能超出你的預算(請用 token 計數 API 重新量測);而若你釘選 **Haiku 4.5** 這個前一代 ID,舊的 **200K / 64K** 範圍仍然適用。比較價格前,先讓能力*與* token 數都對得上工作。
 
 ## 28.3 跨層路由工作負載
 
@@ -10656,8 +10659,8 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    U[使用者請求] --> R[路由器<br/>Haiku 4.5 分類器]
-    R -->|簡單 FAQ| H[Haiku 4.5<br/>直接回答]
+    U[使用者請求] --> R[路由器<br/>Haiku 5.5 分類器]
+    R -->|簡單 FAQ| H[Haiku 5.5<br/>直接回答]
     R -->|標準任務| S[Sonnet 5<br/>端到端處理]
     R -->|複雜或高風險| O[Opus 5<br/>深度推理]
     H --> Z[回應]
@@ -10670,14 +10673,14 @@ flowchart TD
 
 ### 模式 B —— 分層多代理:強協調者、便宜子代理
 
-這直接建立在第 3 章的中心輻射式拓撲上,但為*每個角色指派一個模型*。協調者做困難、不可逆的推理 —— 分解、驗證、最終綜整 —— 所以它跑 **Opus 5**。子代理做範圍狹窄、規格明確的工作(抓一個頁面、抽取欄位、摘要一份文件),所以它們跑 **Haiku 4.5**。你把花費集中在判斷所在之處,在其他地方一律省。
+這直接建立在第 3 章的中心輻射式拓撲上,但為*每個角色指派一個模型*。協調者做困難、不可逆的推理 —— 分解、驗證、最終綜整 —— 所以它跑 **Opus 5**。子代理做範圍狹窄、規格明確的工作(抓一個頁面、抽取欄位、摘要一份文件),所以它們跑 **Haiku 5.5**。你把花費集中在判斷所在之處,在其他地方一律省。
 
 ```mermaid
 flowchart TD
     U[使用者請求] --> C[協調者<br/>Opus 5 — 規劃與驗證]
-    C -->|Task: 抓取| S1[子代理<br/>Haiku 4.5]
-    C -->|Task: 抽取| S2[子代理<br/>Haiku 4.5]
-    C -->|Task: 摘要| S3[子代理<br/>Haiku 4.5]
+    C -->|Task: 抓取| S1[子代理<br/>Haiku 5.5]
+    C -->|Task: 抽取| S2[子代理<br/>Haiku 5.5]
+    C -->|Task: 摘要| S3[子代理<br/>Haiku 5.5]
     S1 -. 結果 .-> C
     S2 -. 結果 .-> C
     S3 -. 結果 .-> C
@@ -10752,12 +10755,12 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    M[進站訊息流] --> T[分流<br/>Haiku 4.5 分類器]
-    T -->|簡單 FAQ| FA[Haiku 4.5<br/>直接回答]
+    M[進站訊息流] --> T[分流<br/>Haiku 5.5 分類器]
+    T -->|簡單 FAQ| FA[Haiku 5.5<br/>直接回答]
     T -->|標準請求| RS[Sonnet 5<br/>端到端解決]
     T -->|複雜或高風險| CO[協調者<br/>Opus 4.8]
-    CO -->|Task: 拉歷史| SA1[子代理<br/>Haiku 4.5]
-    CO -->|Task: 搜尋政策| SA2[子代理<br/>Haiku 4.5]
+    CO -->|Task: 拉歷史| SA1[子代理<br/>Haiku 5.5]
+    CO -->|Task: 搜尋政策| SA2[子代理<br/>Haiku 5.5]
     SA1 -. 結果 .-> CO
     SA2 -. 結果 .-> CO
     CO --> DR[草擬且驗證後的回覆]
@@ -10775,11 +10778,11 @@ flowchart TD
 
 ```python
 MODELS = {
-    "triage":      "claude-haiku-4-5",   # 便宜、快速的分類
-    "faq":         "claude-haiku-4-5",   # 簡單的直接回答
+    "triage":      "claude-haiku-5-5",   # 便宜、快速的分類
+    "faq":         "claude-haiku-5-5",   # 簡單的直接回答
     "standard":    "claude-sonnet-5",  # 大宗的平衡預設
     "coordinator": "claude-opus-4-8",    # 困難推理 + 驗證
-    "subagent":    "claude-haiku-4-5",   # 協調者底下的狹窄抓取/抽取
+    "subagent":    "claude-haiku-5-5",   # 協調者底下的狹窄抓取/抽取
     "nightly":     "claude-sonnet-5",  # 品質擴充,經由 Batch API 執行
 }
 ```
@@ -16240,6 +16243,21 @@ Associate 考試認證的是另一種工作:勝任且負責任地使用 Claude *
 **為何選 B:** mod 是 TypeScript 函式,封裝在 plugin 內並以 `/plugin` 安裝,掛進 Claude Code 發出的事件(呼叫工具、請求權限、繪製畫面),並能在每個事件之前、之後或取而代之執行 —— 因此一個 mod 可以改寫提示、替換內建功能並加入 UI。關鍵是它們**沒有沙箱**:mod 擁有與 Claude Code 相同的機器存取權,所以安裝一個 mod 等於以你的憑證與檔案觸手可及的狀態執行不受信任的程式碼。正確的姿態是把它當成任何會被執行的相依套件:審查原始碼、釘選它(例如用帶 SHA-256 釘選的 `archive` 來源,§26.5),並在全組織推行時優先採用內部自建/vendored 的 mod。(A)說反了 —— mod 明確*不*在沙箱內。(C)低估了它們:mod 的觸及遠超過佈景主題,深入提示、工具與內建行為。(D)既錯且危險 —— mod 自 2.1.287 起預設啟用,也沒有任何東西要求關閉權限提示;為了部署一個會改寫提示的 mod 而在全組織關掉權限,正是最糟的做法。
 
 ---
+
+## 問題 315(情境:多代理研究系統)
+
+**情境:** 一個研究系統的協調者跑在 Opus 5.5 上,把工作扇出給一群 `claude-haiku-4-5` 子代理,每個從一份長來源文件抽取欄位。有兩個子代理經常截斷輸入,因為單一文件超過 Haiku 4.5 的視窗,團隊也希望這個便宜層級能在較難的抽取上*稍微思考*一下。他們打算把子代理改到 `claude-haiku-5-5`,並問實際上會有什麼改變。
+
+**哪一項正確描述改用 Haiku 5.5 的影響?**
+
+- A) Haiku 5.5 維持 Haiku 4.5 的 200K 上下文與 64K 輸出,只是加了 `effort` 參數,所以截斷照舊,新的只有思考。
+- B) Haiku 5.5 把範圍拓寬到 **1M token 上下文與 128K 最大輸出**(所以長的單一文件現在裝得下),且是**首個以 `effort` 調節自適應思考的 Haiku 級模型**(預設 `medium`);它採用較新 tokenizer,因此相同文字比在 Haiku 4.5 上多約 30% token —— 須重新量測大小與成本 —— 而非預設的 `temperature`/`top_p`/`top_k` 現在會回傳 400。 **[CORRECT]**
+- C) Haiku 5.5 是即插即用的替代品,ID、上限、定價與 tokenizer 全都相同;只有名稱改了,所以程式碼或預算都不必重新檢視。
+- D) Haiku 5.5 把獨立的 Haiku 層級併入 Sonnet 5.5 而移除之,所以子代理應改指向 `claude-sonnet-5-5`。
+
+**為何選 B:** Haiku 5.5(`claude-haiku-5-5`,2026-10-07 發布)對便宜層級是世代級躍進,而非改名。它的範圍從 Haiku 4.5 的 200K / 64K 成長到旗艦級的 **1M 上下文 / 128K 輸出**(Batch API beta 達 300K 輸出),正是這點讓長的單一文件抽取不再被截斷。它是**首個支援自適應思考的 Haiku** —— 恆常開啟、以 `effort` 調節(預設 `medium`)—— 所以子代理現在能在困難案例上思考。兩個遷移事實會咬人:它採用**較新 tokenizer**(與 Claude 4.7+ 共用),因此相同文字比在 Haiku 4.5 上**多約 30% token** —— 請用 token 計數 API(`model="claude-haiku-5-5"`)重新計算,而非沿用 4.5 的估算 —— 而且和其他 5.x 模型一樣,它**拒絕非預設的 `temperature`/`top_p`/`top_k` 並回傳 400**。定價也是新的(依提示長度分級:≤ 100K token 時輸入/輸出每 MTok $0.10 / $0.50,超過為 $0.50 / $2.50),故須重新編列預算。(A)是舊的範圍 —— 重點正是視窗長到了 1M。(C)在上限、定價與 tokenizer 上都是錯的。(D)捏造了一個從未發生的整併:Haiku 仍是獨立、最便宜的層級。
+
+---
 # 實作練習
 
 十三個動手實驗,按證照分成四條軌道。閱讀只能建立辨識力;唯有動手建造,才能長出考試真正測的判斷力。每個實驗都標明**時間預算**、鍛鍊的**領域**、具體的**建造步驟**,以及讓它成為「實驗」而非「建議」的關鍵——**「完成標準(Done when)」**:每一條都成立之前,不要往下走。照順序做你目標證照的軌道;軌道 A 是其他一切的地基。所有實驗只需一把普通的 API key 或一套 Claude Code,不需要任何特殊基礎設施。每個實驗的參考解答就在下一章——先動手,再對照。
@@ -17135,7 +17153,8 @@ results = await asyncio.gather(*(call(client, r, "backfill") for r in reqs),
 | Claude Opus 4.6 | `claude-opus-4-6` | 1M | 128K | $5 | $25 | 較舊的 Opus；自適應思考、128K 輸出。 |
 | Claude Sonnet 5.5 | `claude-sonnet-5-5` | 1M | 128K | $2 | $10 | 預設 Sonnet(2026-09-28 發布)——速度／智慧最佳平衡；在真實工作負載上比 Sonnet 5 更快、最多便宜約 30%；自適應思考、high 預設 effort；快取讀取 $0.20。 |
 | Claude Sonnet 5 | `claude-sonnet-5` | 1M | 128K | $2 | $10 | 前一代 Sonnet(仍可呼叫);由 Sonnet 5.5 接替。$2 ／ $10 已於 2026-08-10 轉為永久價(原排定的 $3 ／ $15 不再適用)。 |
-| Claude Haiku 4.5 | `claude-haiku-4-5` | 200K | 64K | $1 | $5 | 最快、最便宜；適合簡單／低延遲任務與廉價子代理。 |
+| Claude Haiku 5.5 | `claude-haiku-5-5` | 1M | 128K | $0.10 | $0.50 | 預設 Haiku（2026-10-07 發布）—— 最快的層級；首個具自適應思考的 Haiku（`effort`,預設 `medium`）；1M 上下文、128K 輸出。輸入/輸出分級:≤100K token 為 $0.10/$0.50,超過則 $0.50/$2.50;快取讀取 $0.01/$0.05。較新 tokenizer（比 Haiku 4.5 多約 30% token）。 |
+| Claude Haiku 4.5 | `claude-haiku-4-5` | 200K | 64K | $1 | $5 | 前一代 Haiku（仍可呼叫）；由 Haiku 5.5 接替。無 effort/思考;200K/64K 範圍。 |
 
 - **使用精確 ID，切勿用帶日期後綴的變體**（例如 `claude-opus-4-8`，而非 `claude-opus-4-8-20xxxxxx`）。來源：[模型總覽](https://platform.claude.com/docs/en/about-claude/models/overview)、[定價](https://platform.claude.com/docs/en/pricing)。
 - **即時查詢：** Models API 回傳每個模型的上下文視窗（`max_input_tokens`）、輸出上限（`max_tokens`）與 `capabilities` 樹——`GET /v1/models/{id}`。
@@ -17145,6 +17164,7 @@ results = await asyncio.gather(*(call(client, r, "backfill") for r in reqs),
 - **Sonnet 5.5 須知(2026-09-28 發布):** 新的預設 Sonnet,與 Sonnet 5 同價 **$2 / $10**(快取讀取 **$0.20**)、1M 上下文、128K 輸出、自適應思考、`high` 預設 effort —— Anthropic 表示它在真實工作負載上**比 Sonnet 5 更快、最多便宜約 30%**。相對 Sonnet 5 的五項破壞性變更:最低思考設定為 **`between_tools`**(關閉前置思考;不再有完整的「disabled」);**`tool_choice` 的 `any`/`tool` 回傳 400**(請用 `auto` ＋ 嚴格工具使用);**思考區塊綁定產生它的模型與對話**;較舊的 **`computer_20251124`** 工具被拒(請用 `computer_toolset_20260801`);且 **advisor 工具拒絕 Opus 4.8 / 4.7 / Sonnet 5** 作為 advisor。另:工具呼叫之間的文字現在回到 **`thinking`** 區塊(請設定 `display` 值或用 `between_tools`,以免串流 UI 靜默);非預設的 `temperature`/`top_p`/`top_k` 仍回傳 400。來源:[Sonnet 5.5 的新功能](https://platform.claude.com/docs/en/models/sonnet-5-5/whats-new-sonnet-5-5)。
 - **Sonnet 5 遷移須知：** Sonnet 5 採用較新的 tokenizer（Opus 4.7+ / Fable 5 一系）——同樣文字產生的 token 比 4.7 之前的模型**多約 30%**，因此估算成本或判斷是否放得下前，請先用 `count_tokens` 重新量測。自適應思考預設開啟；非預設值的 `temperature` / `top_p` / `top_k` 與手動 `budget_tokens` 思考都會回傳 **400**；且 Sonnet 5 **不提供 Priority Tier**。來源：[平台發行說明 —— 2026-06-30](https://platform.claude.com/docs/en/release-notes/api)。
 - **Fable 5.1 / Mythos 5.1 須知(2026-09-01 發布):** 現為預設 Fable / Mythos,定價與 Fable 5 相同 **$10 / $50**,但**快取讀取為 0.025×($0.25/MTok)** —— 是其他每個模型 ~0.1× 的四分之一,這正是為快取主導的長程代理選它的首要理由。思考**自適應且恆常開啟**(`thinking:{type:"disabled"}` 回傳 **400** —— 請省略);原始推理鏈永不回傳。兩者都需要 **30 天最短資料保留期**、**不支援 ZDR**,並輸出**帶文字浮水印**的內容(程式碼執行工具產生的媒體帶有 C2PA Content Credentials)。Fable 5 / Mythos 5 續以前一代模型可呼叫。來源：[平台發行說明 —— 2026-09-01](https://platform.claude.com/docs/en/release-notes/api)。
+- **Haiku 5.5 須知(2026-10-07 發布):** 新的預設 Haiku,也是陣容中最快的模型。範圍躍升至 **1M 上下文 / 128K 輸出**(從 Haiku 4.5 的 200K / 64K;Batch API beta 達 300K 輸出)。**依提示長度分級定價:** 提示 ≤ 100K token 時輸入/輸出每 MTok **$0.10 / $0.50**,超過 100K 為 **$0.50 / $2.50**;快取讀取 **$0.01 / $0.05**、5m 寫入 **$0.125 / $0.625**。它是**首個具自適應思考的 Haiku 級模型**,以 `effort` 調節(預設 **`medium`**)。採用**較新 tokenizer(Claude 4.7+ 一系)** —— 相同文字比 Haiku 4.5 **多約 30% token**,故請用 `count_tokens` 重新量測;非預設的 `temperature`/`top_p`/`top_k` 回傳 **400**;思考區塊綁定產生它的帳號。輸入為文字＋影像、輸出為文字;知識截止 2026 年 6 月。於 Claude API、Bedrock(`anthropic.claude-haiku-5-5`)、Google Cloud(Vertex)、Microsoft Foundry 與 Claude Platform on AWS 提供。Haiku 4.5(`claude-haiku-4-5`)續以前一代可呼叫。來源：[Claude Haiku 5.5 總覽](https://platform.claude.com/docs/en/models/haiku-5-5/overview)。
 
 ---
 

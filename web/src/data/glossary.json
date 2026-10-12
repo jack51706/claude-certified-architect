@@ -651,6 +651,13 @@
     "def_zh": "Anthropic 的預設 Opus 模型(claude-opus-5-5),於 2026-09-22 發布,接替 Opus 5。維持 Opus 5 的 1M token 上下文與 128K 最大輸出,但把價格降到每 MTok $4 / $20(相對 $5 / $25),快取讀取 $0.20、寫入 $5;Anthropic 表示它在典型工作負載上比 Opus 5 便宜約 40%、輸出速度快超過 30%,因此複雜代理程式設計與知識工作現在應從它起步。三項 API 行為比 Opus 5 更嚴:(1)思考恆常開啟且完全無法停用——thinking:{type:'disabled'} 與 thinking:{type:'enabled',...} 都回傳 400;只用 effort(low/medium/high/xhigh/max)調節深度。(2)tool_choice 的 'any' 與 'tool' 型別回傳 400(與 Fable 5.1 相同)——請用 'auto' 搭配嚴格工具使用。(3)電腦使用需要 computer_toolset_20260801 工具集(較早的 computer_20251124 回傳 400)。帶保留思考反蒸餾防護與 fast mode 研究預覽;於 Claude API、Bedrock、AWS、Google Cloud(Vertex)與 Microsoft Foundry 提供,含零資料保留(ZDR)。Opus 5 續以前一代模型可呼叫。"
   },
   {
+    "term": "Claude Haiku 5.5",
+    "zh": "Claude Haiku 5.5",
+    "tag": "Platform",
+    "def_en": "Anthropic's default Haiku model (claude-haiku-5-5), launched 2026-10-07 as the successor to Haiku 4.5 (still callable, previous-gen). The fastest model in the lineup, built for high-volume, latency-sensitive work (classification, extraction, routing, compaction, cheap subagents), but no longer the small-envelope tier: it carries a 1M-token context window and 128K max output (up from Haiku 4.5's 200K / 64K; 300K output on the Batch API beta). Pricing is tiered by prompt length: $0.10 / $0.50 per MTok input/output for prompts up to 100K tokens, $0.50 / $2.50 above 100K; cache reads $0.01 / $0.05. It is the first Haiku-class model with adaptive thinking, steered by the effort parameter (default medium). Two migration gotchas: it uses the newer tokenizer shared with Claude 4.7+, so the same text counts ~30% more tokens than on Haiku 4.5 (re-measure with the token-counting API), and non-default temperature/top_p/top_k return 400. Thinking blocks are bound to the producing account. Text + images in, text out; knowledge cutoff June 2026. Available on the Claude API, Amazon Bedrock (anthropic.claude-haiku-5-5), Google Cloud (Vertex), Microsoft Foundry, and Claude Platform on AWS.",
+    "def_zh": "Anthropic 的預設 Haiku 模型(claude-haiku-5-5),於 2026-10-07 發布,接替 Haiku 4.5(仍可呼叫,前一代)。陣容中最快的模型,為高量、延遲敏感的工作而生(分類、抽取、路由、壓縮、便宜子代理),但不再是小範圍的層級:它帶有 1M token 上下文視窗與 128K 最大輸出(從 Haiku 4.5 的 200K / 64K 提升;Batch API beta 達 300K 輸出)。定價依提示長度分級:提示 ≤ 100K token 時輸入/輸出每 MTok $0.10 / $0.50,超過 100K 為 $0.50 / $2.50;快取讀取 $0.01 / $0.05。它是首個具自適應思考的 Haiku 級模型,以 effort 參數調節(預設 medium)。兩個遷移陷阱:它採用與 Claude 4.7+ 共用的較新 tokenizer,因此相同文字比在 Haiku 4.5 上多約 30% token(請用 token 計數 API 重新量測),而非預設的 temperature/top_p/top_k 回傳 400。思考區塊綁定產生它的帳號。輸入為文字＋影像、輸出為文字;知識截止 2026 年 6 月。於 Claude API、Amazon Bedrock(anthropic.claude-haiku-5-5)、Google Cloud(Vertex)、Microsoft Foundry 與 Claude Platform on AWS 提供。"
+  },
+  {
     "term": "Claude Opus 5",
     "zh": "Claude Opus 5",
     "tag": "Platform",

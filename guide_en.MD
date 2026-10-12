@@ -7200,7 +7200,7 @@ The crash costs **one file of rework at most** (file 42, which had not been chec
 
 # PART IV: Complete Claude Platform Reference (Beyond the Foundations Exam)
 
-> **Scope note:** PART IV is a reference to the **full current Claude platform** (2026) for comprehensive mastery — the API, tools, SDKs, Managed Agents, MCP, and modern Claude Code. Most of it is **beyond the official Foundations syllabus** (some is even on the exam's explicit out-of-scope list); it is here so you can *learn all of Claude*, not only pass the exam. Each chapter cites official docs. Current models referenced: flagship **Claude Fable 5.1** (`claude-fable-5-1`, launched 2026-09-01, superseding Fable 5); default Opus **Claude Opus 5.5** (`claude-opus-5-5`, launched 2026-09-22, superseding Opus 5); default Sonnet **Claude Sonnet 5.5** (`claude-sonnet-5-5`, launched 2026-09-28, superseding Sonnet 5); plus **Haiku 4.5**.
+> **Scope note:** PART IV is a reference to the **full current Claude platform** (2026) for comprehensive mastery — the API, tools, SDKs, Managed Agents, MCP, and modern Claude Code. Most of it is **beyond the official Foundations syllabus** (some is even on the exam's explicit out-of-scope list); it is here so you can *learn all of Claude*, not only pass the exam. Each chapter cites official docs. Current models referenced: flagship **Claude Fable 5.1** (`claude-fable-5-1`, launched 2026-09-01, superseding Fable 5); default Opus **Claude Opus 5.5** (`claude-opus-5-5`, launched 2026-09-22, superseding Opus 5); default Sonnet **Claude Sonnet 5.5** (`claude-sonnet-5-5`, launched 2026-09-28, superseding Sonnet 5); and default Haiku **Claude Haiku 5.5** (`claude-haiku-5-5`, launched 2026-10-07, superseding Haiku 4.5).
 
 ---
 
@@ -10588,7 +10588,8 @@ Four model families are in active service. They differ on three axes that matter
 | **Claude Opus 5** | `claude-opus-5` | 1M | 128K | $5 / $25 | Previous-gen Opus (still callable as `claude-opus-5`) |
 | **Claude Sonnet 5.5** | `claude-sonnet-5-5` | 1M | 128K | $2 / $10 | **New default Sonnet** (2026-09-28) — best speed/intelligence balance; faster & up to ~30% cheaper than Sonnet 5 on real workloads; cache reads $0.20 |
 | **Claude Sonnet 5** | `claude-sonnet-5` | 1M | 128K | $2 / $10 | Previous-gen Sonnet (still callable as `claude-sonnet-5`) |
-| **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | Fast, cheap, simple/latency-critical tasks |
+| **Claude Haiku 5.5** | `claude-haiku-5-5` | 1M | 128K | $0.10 / $0.50 | **New default Haiku** (2026-10-07) — fastest tier; first Haiku with adaptive thinking (effort, default `medium`); 1M context (up from 200K); input/output tiered above 100K tokens ($0.50 / $2.50); cache reads $0.01 |
+| **Claude Haiku 4.5** | `claude-haiku-4-5` | 200K | 64K | $1 / $5 | Previous-gen Haiku (still callable as `claude-haiku-4-5`); no effort/thinking; superseded by Haiku 5.5 |
 
 > **Sonnet 5 is the previous-generation balanced tier** (superseded 2026-09-28 by Sonnet 5.5, still callable), succeeding Sonnet 4.6 (now a legacy model that is still callable via `claude-sonnet-4-6`). Sonnet 5's launch **$2 / $10 per MTok** pricing **was made permanent on 2026-08-10** — the standard **$3 / $15** rate that had been scheduled to take effect 2026-09-01 (after the 2026-08-31 introductory window) **no longer applies**, so $2 / $10 is the ongoing price, not a promo. On Claude Sonnet 5 the `effort` parameter defaults to `high` on the Claude API and Claude Code. Source: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview), [Pricing](https://platform.claude.com/docs/en/about-claude/pricing).
 >
@@ -10601,12 +10602,14 @@ Four model families are in active service. They differ on three axes that matter
 > **Claude Opus 5.5 (launched 2026-09-22) is the new default Opus — cheaper, faster, and thinking is no longer optional.** `claude-opus-5-5` keeps the 1M-token context and 128K max output of Opus 5 but **cuts price to $4 / $20 per MTok** (from Opus 5's $5 / $25), with **cache reads at $0.20 and cache writes at $5** per MTok. Anthropic reports it runs **~40% cheaper than Opus 5 on typical workloads and generates output more than 30% faster**, so it — not Opus 5 — is now where complex agentic coding and enterprise work should start; Opus 5 remains callable (`claude-opus-5`) as a previous-gen model. Three migration-biting API changes, all stricter than Opus 5: (1) **thinking cannot be disabled at all** — *both* `thinking: {type:"disabled"}` *and* `thinking: {type:"enabled", ...}` return a **400**; adaptive thinking is always on and you steer depth only with `effort` (low / medium (default) / high / xhigh / max), a tightening from Opus 5 where disable was still allowed at effort ≤ `high`. (2) **`tool_choice` types `any` and `tool` return a 400** (as on Fable 5.1) — use `auto` with [strict tool use](https://platform.claude.com/docs/en/build-with-claude/tool-use) to force a schema-valid call. (3) On the Claude API and Google Cloud, **[computer use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool) requires the `computer_toolset_20260801` toolset** — the earlier `computer_20251124` tool returns a 400. Opus 5.5 ships the **preserved-thinking anti-distillation safeguard** (as Fable 5.1) and a **[fast mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode) research preview** on the Claude API, and is available on the Claude API, Amazon Bedrock, AWS, Google Cloud (Vertex), and Microsoft Foundry (including under zero-data-retention). Source: [What's new in Claude Opus 5.5](https://platform.claude.com/docs/en/about-claude/models/whats-new-opus-5-5), [Platform release notes — Sept 22, 2026](https://platform.claude.com/docs/en/release-notes/api), [Pricing](https://platform.claude.com/docs/en/about-claude/pricing).
 >
 > **Claude Sonnet 5.5 (launched 2026-09-28) is the new default Sonnet — same price, faster, with five breaking changes from Sonnet 5.** `claude-sonnet-5-5` keeps Sonnet 5's **$2 / $10 per MTok** (cache reads **$0.20**, 5m/1h writes $2.50/$4), 1M-token context, 128K max output, adaptive thinking, and `high` default effort, but Anthropic reports it is **faster and up to ~30% cheaper on real workloads** than Sonnet 5 — so it, not Sonnet 5, is now the balanced production default (Sonnet 5 stays callable as `claude-sonnet-5`, previous-gen). Five changes break code running on Sonnet 5: (1) the **lowest thinking setting is now `between_tools`**, which turns off *up-front* thinking (it works at effort `high` or below) — there is no full "disabled". (2) **Forced tool use returns a 400** — `tool_choice` types `any` and `tool` are rejected (as on Opus 5.5 / Fable 5.1); use `auto` with [strict tool use](https://platform.claude.com/docs/en/build-with-claude/tool-use). (3) **Thinking blocks are tied to the model and the conversation** that produced them — you cannot replay another model's thinking blocks into a Sonnet 5.5 request. (4) On the Claude API and Google Cloud the earlier **`computer_20251124` computer-use tool is rejected** — use `computer_toolset_20260801`. (5) The **advisor tool rejects Opus 4.8, Opus 4.7, and Sonnet 5 as advisors**. One non-failing change bites streaming UIs: **text between tool calls now comes back in `thinking` blocks**, so an app that streams narration goes silent between tools until it sets a `display` value that returns that text (or turns off up-front thinking with `between_tools`). Non-default `temperature` / `top_p` / `top_k` still return 400. Source: [What's new in Claude Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/whats-new-sonnet-5-5), [Claude Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview).
+>
+> **Claude Haiku 5.5 (launched 2026-10-07) is the new default Haiku — a generational jump for the cheap tier, not a rename.** `claude-haiku-5-5` is the fastest model in the lineup, built for high-volume, latency-sensitive work (classification, extraction, routing, compaction, cheap subagents), but it is no longer the *small-envelope* tier: it carries a **1M-token context window and 128K max output** (up from Haiku 4.5's 200K / 64K; 300K output on the Batch API beta with `output-300k-2026-03-24`), so a Haiku subagent can now hold a whole large document that would have truncated on 4.5. Pricing is **tiered by prompt length**: **$0.10 / MTok input and $0.50 / MTok output for prompts ≤ 100K tokens**, rising to **$0.50 / $2.50 above 100K**, with **cache reads at $0.01 / $0.05** and 5m cache writes at $0.125 / $0.625. Two firsts and two gotchas: (1) it is the **first Haiku-class model with adaptive thinking**, steered by `effort` (default **`medium`**, low→max) — so the cheap tier can now *think* on the harder cases; (2) it uses the **newer tokenizer shared with Claude 4.7 and later, so the same text counts ~30% more tokens than on Haiku 4.5** — re-measure prompt size and cost with the [token-counting API](https://platform.claude.com/docs/en/build-with-claude/token-counting) (`model="claude-haiku-5-5"`) rather than reusing 4.5 estimates; (3) non-default **`temperature` / `top_p` / `top_k` return a 400** (omit them); and (4) thinking blocks are bound to the account that produced them. Text + images in, text out; knowledge cutoff June 2026. Haiku 4.5 remains callable (`claude-haiku-4-5`) as previous-gen. Available on the Claude API, Amazon Bedrock (`anthropic.claude-haiku-5-5`), Google Cloud (Vertex), Microsoft Foundry, and Claude Platform on AWS. Source: [Claude Haiku 5.5 overview](https://platform.claude.com/docs/en/models/haiku-5-5/overview), [What's new in Claude Haiku 5.5](https://platform.claude.com/docs/en/models/haiku-5-5/whats-new-haiku-5-5).
 
 Read this as a ladder, not a menu. Each rung roughly doubles price for a step up in capability, so the engineering question is never "what is the best model" — it is "what is the **cheapest** rung that clears this task's bar with margin to spare."
 
 **The four families in one line each:**
 
-- **Haiku 4.5** — the workhorse for high-volume, well-specified, latency-sensitive work: classification, extraction, routing, formatting, and *cheap subagents* in a larger system. Note the smaller envelope — 200K context, 64K output — which is plenty for these jobs but rules it out for whole-repository reasoning.
+- **Haiku 5.5** — the workhorse for high-volume, well-specified, latency-sensitive work: classification, extraction, routing, formatting, compaction, and *cheap subagents* in a larger system. As of 2026-10-07 it is the new default Haiku and the envelope is no longer the limiter — it carries the flagships' **1M context / 128K output** and is the **first Haiku with adaptive thinking** (`effort`, default `medium`), at roughly a tenth of Sonnet's price. The real constraint is now *capability per token*, not window size: reach for it when the task is simple and you want speed or scale, and climb a rung when an eval shows it leaves quality on the table. (Haiku 4.5, `claude-haiku-4-5`, remains callable as previous-gen with the old 200K / 64K envelope and no thinking.)
 - **Sonnet 5.5** — the default for production at scale. It carries the same 1M-context / 128K-output envelope as the flagships at a fraction of the price, which is why most user-facing agents and high-throughput pipelines should *start* here, not at Opus. At the same $2/$10 as Sonnet 5 it is faster and up to ~30% cheaper on real workloads, so it supersedes Sonnet 5 as the balanced default (Sonnet 5, `claude-sonnet-5`, remains callable as previous-gen).
 - **Opus 5.5** — the flagship Opus, and the right default when the task is genuinely complex or agentic: multi-step planning, hard code, long-horizon autonomous loops, nuanced judgment. Thinking is **always on and cannot be disabled** — you steer depth only with `effort`, so start at `high` and tune per route. At $4/$20 it is *cheaper* than Opus 5 was, so the old "Opus is expensive, default to Sonnet" math shifts: you still pay ~2× Sonnet on output, but you buy frontier reliability at 40% of Fable 5.1's price on tasks Sonnet would only *sometimes* get right. (Opus 5, `claude-opus-5`, remains callable as previous-gen.)
 - **Fable 5.1** — the absolute ceiling, for the hardest reasoning and longest-horizon work. At $10/$50 it is twice Opus on output, so reserve it for the small slice of tasks where Opus measurably under-delivers; using it as a default is the single most common way to burn budget for no gain. The one place it *undercuts* the cheaper tiers is **cache reads at 0.025×** (a quarter of every other model's rate) — so a cache-dominated long-horizon agent can be cheaper on Fable 5.1 than the sticker price suggests.
@@ -10627,7 +10630,7 @@ The procedure: **start at the lowest plausible rung, measure against an eval set
 flowchart TD
     A[Incoming task] --> B{Complex reasoning<br/>or long-horizon agentic?}
     B -->|no, well specified| C{Latency critical<br/>or very high volume?}
-    C -->|yes| D[Haiku 4.5<br/>fast and cheap]
+    C -->|yes| D[Haiku 5.5<br/>fast and cheap]
     C -->|no| E[Sonnet 5.5<br/>balanced default]
     B -->|yes| F{Does Sonnet pass<br/>your eval set?}
     F -->|yes| E
@@ -10644,7 +10647,7 @@ flowchart TD
 - **Defaulting to the flagship "to be safe."** This is the most expensive mistake in the chapter. If Haiku passes ticket-classification at 99.2% against your labeled set, running Opus there buys 0.3 points of accuracy for 5× the input cost and 5× the output cost — pure waste at volume.
 - **Reaching for a cheaper model on a task that needs judgment.** The inverse error: using Haiku for nuanced policy reasoning or multi-file refactoring, where it fails silently and ships wrong answers that look confident. Cheap is only cheap if it's *correct*.
 - **Choosing by vibes instead of an eval.** "It felt smarter" is not a selection criterion. The defensible answer to "why this model" is always a number: accuracy/pass-rate on a representative eval set at a measured cost-per-task (this is the Chapter on evals, applied).
-- **Forgetting the envelope.** Haiku's 200K context / 64K output is ample for classification but cannot hold a large repository or emit a long document — a capability limit no amount of prompting fixes. Match the envelope to the job before you compare price.
+- **Forgetting the envelope — and the tokenizer.** On **Haiku 5.5** the window is no longer the constraint (1M context / 128K output matches the flagships), so the cheap tier can now hold a large document; the limiter shifts to *capability per token* — reaching for Haiku on nuanced judgment still fails silently. Two numbers still bite: Haiku 5.5's **newer tokenizer counts ~30% more tokens for the same text than Haiku 4.5**, so a prompt that "fit" the old estimate may cost more than you budgeted (re-measure with the token-counting API), and **Haiku 4.5's** old **200K / 64K** envelope still applies if you pin that previous-gen ID. Match capability *and* token math to the job before you compare price.
 
 ## 28.3 Routing a Workload Across Tiers
 
@@ -10656,8 +10659,8 @@ A small, fast model triages each request and dispatches it to the right tier. Th
 
 ```mermaid
 flowchart TD
-    U[User request] --> R[Router<br/>Haiku 4.5 classifier]
-    R -->|simple FAQ| H[Haiku 4.5<br/>answer directly]
+    U[User request] --> R[Router<br/>Haiku 5.5 classifier]
+    R -->|simple FAQ| H[Haiku 5.5<br/>answer directly]
     R -->|standard task| S[Sonnet 5<br/>handle end to end]
     R -->|complex or high stakes| O[Opus 5<br/>deep reasoning]
     H --> Z[Response]
@@ -10670,14 +10673,14 @@ The router's job is *classification, not solving* — so it must be cheap and fa
 
 ### Pattern B — Tiered multi-agent: strong coordinator, cheap subagents
 
-This builds directly on the hub-and-spoke topology from Chapter 3, but assigns a *model per role*. The coordinator does the hard, irreversible reasoning — decomposition, validation, final synthesis — so it runs **Opus 5**. The subagents do narrow, well-specified work (fetch a page, extract fields, summarize one document), so they run **Haiku 4.5**. You concentrate spend where judgment lives and economize everywhere else.
+This builds directly on the hub-and-spoke topology from Chapter 3, but assigns a *model per role*. The coordinator does the hard, irreversible reasoning — decomposition, validation, final synthesis — so it runs **Opus 5**. The subagents do narrow, well-specified work (fetch a page, extract fields, summarize one document), so they run **Haiku 5.5**. You concentrate spend where judgment lives and economize everywhere else.
 
 ```mermaid
 flowchart TD
     U[User request] --> C[Coordinator<br/>Opus 5 — plan and validate]
-    C -->|Task: fetch| S1[Subagent<br/>Haiku 4.5]
-    C -->|Task: extract| S2[Subagent<br/>Haiku 4.5]
-    C -->|Task: summarize| S3[Subagent<br/>Haiku 4.5]
+    C -->|Task: fetch| S1[Subagent<br/>Haiku 5.5]
+    C -->|Task: extract| S2[Subagent<br/>Haiku 5.5]
+    C -->|Task: summarize| S3[Subagent<br/>Haiku 5.5]
     S1 -. result .-> C
     S2 -. result .-> C
     S3 -. result .-> C
@@ -10752,12 +10755,12 @@ The patterns above only matter when they fit together under a real budget. Here 
 
 ```mermaid
 flowchart TD
-    M[Inbound message stream] --> T[Triage<br/>Haiku 4.5 classifier]
-    T -->|simple FAQ| FA[Haiku 4.5<br/>direct answer]
+    M[Inbound message stream] --> T[Triage<br/>Haiku 5.5 classifier]
+    T -->|simple FAQ| FA[Haiku 5.5<br/>direct answer]
     T -->|standard request| RS[Sonnet 5<br/>resolve end to end]
     T -->|complex or high stakes| CO[Coordinator<br/>Opus 4.8]
-    CO -->|Task: pull history| SA1[Subagent<br/>Haiku 4.5]
-    CO -->|Task: search policy| SA2[Subagent<br/>Haiku 4.5]
+    CO -->|Task: pull history| SA1[Subagent<br/>Haiku 5.5]
+    CO -->|Task: search policy| SA2[Subagent<br/>Haiku 5.5]
     SA1 -. result .-> CO
     SA2 -. result .-> CO
     CO --> DR[Drafted, validated reply]
@@ -10775,11 +10778,11 @@ Pin every model in one config block, so a tier change is a one-line edit and nev
 
 ```python
 MODELS = {
-    "triage":      "claude-haiku-4-5",   # cheap, fast classification
-    "faq":         "claude-haiku-4-5",   # simple direct answers
+    "triage":      "claude-haiku-5-5",   # cheap, fast classification
+    "faq":         "claude-haiku-5-5",   # simple direct answers
     "standard":    "claude-sonnet-5",  # balanced default for the bulk
     "coordinator": "claude-opus-4-8",    # hard reasoning + validation
-    "subagent":    "claude-haiku-4-5",   # narrow fetch/extract under the coordinator
+    "subagent":    "claude-haiku-5-5",   # narrow fetch/extract under the coordinator
     "nightly":     "claude-sonnet-5",  # quality enrichment, run via Batch API
 }
 ```
@@ -16247,6 +16250,21 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 **Why B:** Mods are TypeScript functions, shipped inside plugins and installed with `/plugin`, that hook the events Claude Code emits (calling a tool, asking for permission, drawing the screen) and can run before, after, or instead of each — so a mod can rewrite prompts, replace built-in features, and add UI. Crucially they are **not sandboxed**: a mod has the same machine access as Claude Code, so installing one is running untrusted code with your credentials and files in reach. The correct posture is to treat it like any executed dependency — review the source, pin it (e.g. via an `archive` source with a SHA-256 pin, §26.5), and prefer an internally built/vendored mod for an org-wide rollout. (A) is backwards — mods are explicitly *not* sandboxed. (C) understates them: mods reach far past theming into prompts, tools, and built-in behavior. (D) is both false and dangerous — mods are active by default (since 2.1.287) and nothing requires disabling permission prompts; turning permissions off to deploy a prompt-rewriting mod org-wide is exactly the wrong move.
 
 ---
+
+## Question 315 (Scenario: Multi-agent Research System)
+
+**Situation:** A research system runs a coordinator on Opus 5.5 that fans work out to a swarm of `claude-haiku-4-5` subagents, each extracting fields from one long source document. Two subagents routinely truncate their inputs because a single document exceeds Haiku 4.5's window, and the team wishes the cheap tier could *think* a little on the harder extractions. They plan to move the subagents to `claude-haiku-5-5` and ask what actually changes.
+
+**Which statement correctly describes the move to Haiku 5.5?**
+
+- A) Haiku 5.5 keeps Haiku 4.5's 200K context and 64K output but adds the `effort` parameter, so the truncation stays and only the thinking is new.
+- B) Haiku 5.5 widens the envelope to a **1M-token context and 128K max output** (so the long single documents now fit) and is the **first Haiku-class model with adaptive thinking steered by `effort`** (default `medium`); it uses the newer tokenizer, so the same text counts ~30% more tokens than on Haiku 4.5 — re-measure size and cost — and non-default `temperature`/`top_p`/`top_k` now return a 400. **[CORRECT]**
+- C) Haiku 5.5 is a drop-in replacement with identical IDs, limits, pricing, and tokenizer; only the name changed, so no code or budgeting needs revisiting.
+- D) Haiku 5.5 removes the separate Haiku tier by folding it into Sonnet 5.5, so the subagents should be pointed at `claude-sonnet-5-5` instead.
+
+**Why B:** Haiku 5.5 (`claude-haiku-5-5`, launched 2026-10-07) is a generational jump for the cheap tier, not a rename. Its envelope grows from Haiku 4.5's 200K / 64K to the flagships' **1M context / 128K output** (300K output on the Batch API beta), which is exactly what un-truncates the long single-document extractions. It is the **first Haiku to support adaptive thinking** — always-on, steered by `effort` (default `medium`) — so the subagents can now think on the hard cases. Two migration facts bite: it adopts the **newer tokenizer** (shared with Claude 4.7+), so identical text is **~30% more tokens** than on Haiku 4.5 — re-count with the token-counting API (`model="claude-haiku-5-5"`) rather than reusing 4.5 estimates — and, like the other 5.x models, it **rejects non-default `temperature`/`top_p`/`top_k` with a 400**. Pricing is new too (tiered by prompt length: $0.10 / $0.50 per MTok input/output ≤ 100K tokens, $0.50 / $2.50 above), so re-budget. (A) is the old envelope — the whole point is the window grew to 1M. (C) is false on limits, pricing, and tokenizer. (D) invents a consolidation that never happened: Haiku remains a distinct, cheapest tier.
+
+---
 # Practical Exercises
 
 Thirteen hands-on labs, organized as one track per certification. Reading builds recognition; only building builds the judgment the exams test. Each lab states its **time budget**, the **domains** it exercises, concrete **build steps**, and — the part that makes it a lab rather than a suggestion — **"Done when" acceptance criteria**: don't move on until every box holds. Do your target certification's track in order; Track A is the foundation for everything else. All labs run on an ordinary API key or Claude Code install; none needs special infrastructure. Reference solutions for every lab live in the next section — attempt first, then compare.
@@ -17143,7 +17161,8 @@ All current models share a 1M-token context window except Haiku. Prices are USD 
 | Claude Opus 4.6 | `claude-opus-4-6` | 1M | 128K | $5 | $25 | Older Opus; adaptive thinking, 128K output. |
 | Claude Sonnet 5.5 | `claude-sonnet-5-5` | 1M | 128K | $2 | $10 | Default Sonnet (launched 2026-09-28) — best speed/intelligence balance; faster & up to ~30% cheaper than Sonnet 5 on real workloads; adaptive thinking, high default effort; cache reads $0.20. |
 | Claude Sonnet 5 | `claude-sonnet-5` | 1M | 128K | $2 | $10 | Previous-gen Sonnet (still callable); superseded by Sonnet 5.5. $2 / $10 made permanent 2026-08-10 (the scheduled $3 / $15 no longer applies). |
-| Claude Haiku 4.5 | `claude-haiku-4-5` | 200K | 64K | $1 | $5 | Fastest, cheapest; simple/latency-sensitive tasks and cheap subagents. |
+| Claude Haiku 5.5 | `claude-haiku-5-5` | 1M | 128K | $0.10 | $0.50 | Default Haiku (launched 2026-10-07) — fastest tier; first Haiku with adaptive thinking (`effort`, default `medium`); 1M context, 128K output. Input/output tiered: $0.10/$0.50 ≤100K tokens, $0.50/$2.50 above; cache reads $0.01/$0.05. Newer tokenizer (~30% more tokens than Haiku 4.5). |
+| Claude Haiku 4.5 | `claude-haiku-4-5` | 200K | 64K | $1 | $5 | Previous-gen Haiku (still callable); superseded by Haiku 5.5. No effort/thinking; 200K/64K envelope. |
 
 - **Use exact IDs, never date-suffixed variants** (e.g. `claude-opus-4-8`, not `claude-opus-4-8-20xxxxxx`). Source: [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview), [Pricing](https://platform.claude.com/docs/en/pricing).
 - **Live discovery:** the Models API returns context window (`max_input_tokens`), output cap (`max_tokens`), and a `capabilities` tree per model — `GET /v1/models/{id}`.
@@ -17153,6 +17172,7 @@ All current models share a 1M-token context window except Haiku. Prices are USD 
 - **Sonnet 5.5 specifics (launched 2026-09-28):** the new default Sonnet at the same **$2 / $10** as Sonnet 5 (cache reads **$0.20**), 1M context, 128K output, adaptive thinking, `high` default effort — Anthropic reports it is **faster and up to ~30% cheaper on real workloads** than Sonnet 5. Five breaking changes from Sonnet 5: the lowest thinking setting is **`between_tools`** (turns off up-front thinking; no full "disabled"); **`tool_choice` `any`/`tool` return 400** (use `auto` + strict tool use); **thinking blocks are tied to the model + conversation** that made them; the older **`computer_20251124`** tool is rejected (use `computer_toolset_20260801`); and the **advisor tool rejects Opus 4.8 / 4.7 / Sonnet 5** as advisors. Also: text between tool calls now returns in **`thinking`** blocks (set a `display` value or use `between_tools` so a streaming UI doesn't go silent); non-default `temperature`/`top_p`/`top_k` still 400. Source: [What's new in Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/whats-new-sonnet-5-5).
 - **Sonnet 5 migration specifics:** Sonnet 5 ships on the newer tokenizer (Opus 4.7+ / Fable 5 lineage) — the same text yields **~30% more tokens** than pre-4.7 models, so re-measure with `count_tokens` before estimating cost or fit. Adaptive thinking is on by default; non-default `temperature` / `top_p` / `top_k` and manual `budget_tokens` thinking both return **400**; and **Priority Tier** is not offered on Sonnet 5. Source: [Platform release notes — June 30, 2026](https://platform.claude.com/docs/en/release-notes/api).
 - **Fable 5.1 / Mythos 5.1 specifics (launched 2026-09-01):** now the default Fable / Mythos, at the same **$10 / $50** as Fable 5 but with **cache reads at 0.025× ($0.25/MTok)** — a quarter of the ~0.1× charged on every other model, which is the headline reason to pick them for cache-dominated long-horizon agents. Thinking is **adaptive and always on** (`thinking:{type:"disabled"}` returns **400** — omit it); the raw chain is never returned. Both require a **30-day minimum data-retention window**, are **not available under ZDR**, and emit **text-watermarked** output (code-execution media carries C2PA Content Credentials). Fable 5 / Mythos 5 remain callable as previous-gen. Source: [Platform release notes — Sept 1, 2026](https://platform.claude.com/docs/en/release-notes/api).
+- **Haiku 5.5 specifics (launched 2026-10-07):** the new default Haiku and the fastest model in the lineup. Envelope jumps to **1M context / 128K output** (from Haiku 4.5's 200K / 64K; 300K output on the Batch API beta). **Tiered pricing by prompt length:** **$0.10 / $0.50** per MTok input/output for prompts ≤ 100K tokens, **$0.50 / $2.50** above 100K; cache reads **$0.01 / $0.05**, 5m writes **$0.125 / $0.625**. It is the **first Haiku-class model with adaptive thinking** steered by `effort` (default **`medium`**). Uses the **newer tokenizer (Claude 4.7+ lineage)** — the same text is **~30% more tokens** than on Haiku 4.5, so re-measure with `count_tokens`; non-default `temperature`/`top_p`/`top_k` return **400**; thinking blocks are bound to the producing account. Text + images in, text out; knowledge cutoff June 2026. Available on the Claude API, Bedrock (`anthropic.claude-haiku-5-5`), Google Cloud (Vertex), Microsoft Foundry, and Claude Platform on AWS. Haiku 4.5 (`claude-haiku-4-5`) stays callable as previous-gen. Source: [Claude Haiku 5.5 overview](https://platform.claude.com/docs/en/models/haiku-5-5/overview).
 
 ---
 
