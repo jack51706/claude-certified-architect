@@ -7607,7 +7607,7 @@ flowchart TD
     P[Cached prefix<br/>system plus tools] --> Q{What does the agent<br/>need to change mid-session?}
     Q -->|inject an operator instruction| R[Append a role system message<br/>to messages, do not edit top-level system]
     Q -->|run a cheaper model for a subtask| S[Spawn a subagent on that model<br/>keep the main loop on one model]
-    Q -->|discover new tools| T[Use tool search<br/>schemas are appended, not swapped]
+    Q -->|add or change a tool| T[Tool search or inline tools<br/>schemas ride after the prefix, not swapped in]
     R --> U[Cached prefix stays intact]
     S --> U
     T --> U
@@ -7615,7 +7615,7 @@ flowchart TD
 
 - **Mid-session operator instructions.** Editing the top-level `system` prompt changes the prefix ahead of the *entire* conversation history — every cached turn re-processes uncached. Instead, on supporting models (Claude Opus 4.8) append a `{"role": "system", ...}` message to `messages[]`: it sits *after* the cached history, leaves the prefix intact, and carries non-spoofable operator authority (the prompt-injection-safe alternative to embedding instructions in a user turn).
 - **Switching models mid-session.** Caches are model-scoped. If a sub-task wants a cheaper model, don't switch the main loop — spawn a **subagent** on that model and keep the primary conversation on one model (this is how Claude Code's Explore subagents use Haiku).
-- **Adding tools mid-session.** Adding or removing a tool invalidates everything. If you need on-demand tools, use **tool search** — it *appends* discovered schemas rather than swapping the tool list, preserving the existing prefix.
+- **Adding or changing tools mid-session.** The `tools` array sits at the very front of the prefix, so editing it — adding, removing, or redefining a single tool — invalidates *everything* downstream. Two 2026 mechanisms change the toolset without paying that bill, both by keeping the new schemas *after* the cached prefix instead of rewriting it. **Tool search** is for *discovery*: the model lazily pulls in only the tools a task needs from a large catalog, appending their schemas rather than front-loading the whole list. **Inline tools** (beta `inline-tools-2026-09-15`) is for *injection*: you add or redefine a specific tool mid-conversation with a `tool_addition` block in the message stream, and the cached prefix survives intact. The anti-pattern both replace is the reflex to mutate the top-level `tools` array — the tool-list equivalent of interpolating the date into the system prompt.
 
 **Two timing facts for fan-out.** A cache entry becomes readable only after the first response *begins streaming* — so N parallel requests with the same prefix all pay full write price (none can read what the others are still writing). Send one request, await its first streamed token, *then* fire the remaining N−1. And to kill cold-start latency on the very first real request, **pre-warm** with a `max_tokens: 0` request at startup: the API runs prefill, writes the cache at your breakpoint, and returns immediately with empty content — re-warm just under the TTL if traffic has gaps.
 
@@ -16263,6 +16263,20 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 - D) Haiku 5.5 removes the separate Haiku tier by folding it into Sonnet 5.5, so the subagents should be pointed at `claude-sonnet-5-5` instead.
 
 **Why B:** Haiku 5.5 (`claude-haiku-5-5`, launched 2026-10-07) is a generational jump for the cheap tier, not a rename. Its envelope grows from Haiku 4.5's 200K / 64K to the flagships' **1M context / 128K output** (300K output on the Batch API beta), which is exactly what un-truncates the long single-document extractions. It is the **first Haiku to support adaptive thinking** — always-on, steered by `effort` (default `medium`) — so the subagents can now think on the hard cases. Two migration facts bite: it adopts the **newer tokenizer** (shared with Claude 4.7+), so identical text is **~30% more tokens** than on Haiku 4.5 — re-count with the token-counting API (`model="claude-haiku-5-5"`) rather than reusing 4.5 estimates — and, like the other 5.x models, it **rejects non-default `temperature`/`top_p`/`top_k` with a 400**. Pricing is new too (tiered by prompt length: $0.10 / $0.50 per MTok input/output ≤ 100K tokens, $0.50 / $2.50 above), so re-budget. (A) is the old envelope — the whole point is the window grew to 1M. (C) is false on limits, pricing, and tokenizer. (D) invents a consolidation that never happened: Haiku remains a distinct, cheapest tier.
+
+---
+## Question 316 (Scenario: Agentic AI Tools)
+
+**Situation:** A long-running support agent runs on a large cached prefix — a 30K-token system prompt plus a fixed catalog of a dozen tools, cached with one breakpoint so every turn reads the prefix cheaply. Mid-conversation, a customer's request needs a tool the agent didn't start with (a `schedule_callback` tool). An engineer proposes appending the new tool to the top-level `tools` array and continuing. Costs spike on the very next turn.
+
+**Why did costs spike, and what is the right fix?**
+
+- A) The spike is unavoidable; any agent that gains a tool mid-session must re-pay the full prefix, so the team should just accept it or pre-declare every conceivable tool up front.
+- B) The `tools` array sits at the **front of the cached prefix**, so editing it invalidated the whole cache and forced an uncached re-prefill. Add the tool with an **inline-tools `tool_addition` block** (beta `inline-tools-2026-09-15`) in the message stream — the new schema rides *after* the cached prefix, so the cache stays intact. **[CORRECT]**
+- C) The spike came from the system prompt; move the tool catalog out of the prefix entirely and send all tool schemas in each user turn instead.
+- D) Switch the main loop to a cheaper model for the turn that adds the tool, which restores the cache hit.
+
+**Why B:** Prompt caching is a prefix match, and tool definitions are serialized at the very front of that prefix — ahead of the entire conversation. Mutating the top-level `tools` array (adding, removing, or redefining even one tool) changes those leading bytes, so every cached turn downstream must re-process uncached: that is the cost spike. The 2026 fix is **inline tools** (`inline-tools-2026-09-15`): you introduce or redefine a tool mid-conversation with a `tool_addition` block carried in `messages`, which places the new schema *after* the already-cached prefix, leaving the cached bytes — and the hits accrued on them — untouched. (A) is the pre-inline-tools resignation the feature exists to end; pre-declaring "every conceivable tool" also bloats the context and degrades selection. (C) throws away caching entirely and re-sends every schema each turn — strictly worse. (D) confuses two different invalidators: caches are model-scoped, so switching models is itself a cache miss, and it does nothing about the edited tool list.
 
 ---
 # Practical Exercises

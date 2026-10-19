@@ -754,5 +754,12 @@
     "tag": "Claude Code",
     "def_en": "Vendor-neutral project-instruction file shared across coding agents. Claude Code reads it when no CLAUDE.md exists (choose which under /config Project instructions); /import appends a one-time copy into CLAUDE.md. Not yet available on Bedrock/Vertex/Foundry.",
     "def_zh": "多個編碼代理共用、與廠商無關的專案指令檔。沒有 CLAUDE.md 時 Claude Code 會讀取它(在 /config 的 Project instructions 中選擇);/import 會把一次性副本附加進 CLAUDE.md。在 Bedrock/Vertex/Foundry 上尚不可用。"
+  },
+  {
+    "term": "Inline tools",
+    "zh": "行內工具 (inline tools)",
+    "tag": "Tools",
+    "def_en": "Beta (inline-tools-2026-09-15) that adds or redefines a tool mid-conversation via a tool_addition block in the message stream, without invalidating the prompt cache. The tools array sits at the front of the cached prefix, so editing it normally busts the whole cache; inline tools keep the new schema after the prefix instead. Complements tool search (lazy discovery from a large catalog): inline tools is injection, tool search is discovery.",
+    "def_zh": "beta(inline-tools-2026-09-15):透過訊息串中的 tool_addition 區塊在對話途中新增或重新定義工具,而不使 prompt 快取失效。tools 陣列位於快取前綴最前端,直接編輯它通常會讓整個快取失效;行內工具改為把新 schema 放在前綴之後。與 tool search(從大型目錄延遲發現工具)互補:行內工具是注入,tool search 是發現。"
   }
 ]
