@@ -761,5 +761,12 @@
     "tag": "Tools",
     "def_en": "Beta (inline-tools-2026-09-15) that adds or redefines a tool mid-conversation via a tool_addition block in the message stream, without invalidating the prompt cache. The tools array sits at the front of the cached prefix, so editing it normally busts the whole cache; inline tools keep the new schema after the prefix instead. Complements tool search (lazy discovery from a large catalog): inline tools is injection, tool search is discovery.",
     "def_zh": "beta(inline-tools-2026-09-15):透過訊息串中的 tool_addition 區塊在對話途中新增或重新定義工具,而不使 prompt 快取失效。tools 陣列位於快取前綴最前端,直接編輯它通常會讓整個快取失效;行內工具改為把新 schema 放在前綴之後。與 tool search(從大型目錄延遲發現工具)互補:行內工具是注入,tool search 是發現。"
+  },
+  {
+    "term": "Idle compaction",
+    "zh": "閒置 compaction",
+    "tag": "Claude Code",
+    "def_en": "Claude Code terminal feature (2026-10) that compacts a large conversation (200K+ tokens by default) left idle ~54 minutes, before its ~1-hour prompt-cache TTL expires — summarizing while the cache is still warm rather than forcing a cold full-window re-read on your return. Configure with CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS or the /config Idle compaction row; disable with idleCompaction:false. Lossy like all compaction, so load-bearing facts belong in CLAUDE.md or on disk.",
+    "def_zh": "Claude Code 終端機功能(2026-10):把閒置約 54 分鐘的大型對話(預設 200K+ token)在其約 1 小時的 prompt 快取 TTL 到期前先行壓縮 —— 趁快取仍溫熱時摘要,而非在你回來時被迫對整個視窗做冷讀。以 CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS 或 /config 的 Idle compaction 列設定;以 idleCompaction:false 停用。與所有 compaction 一樣有損,故關鍵事實應放進 CLAUDE.md 或寫到磁碟。"
   }
 ]
