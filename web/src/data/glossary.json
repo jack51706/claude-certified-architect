@@ -553,6 +553,13 @@
     "def_zh": "以自有身分供應商(AWS、GCP、Entra ID、GitHub Actions、Kubernetes、SPIFFE、Okta)簽發的短期 OIDC token 驗證 Claude API,取代靜態 API key。該 token 在 POST /v1/oauth/token 換取一個以服務帳號身分運作、受範圍限制的 Anthropic token——沒有需要輪替或可能外洩的長期密鑰。"
   },
   {
+    "term": "Claude Models on Google Cloud (Anthropic managed)",
+    "zh": "Claude Models on Google Cloud(Anthropic 託管)",
+    "tag": "Platform",
+    "def_en": "Deployment surface launched 2026-10-22: the Claude API operated by Anthropic but reached through your own Google Cloud project — Google Cloud IAM controls access and GCP Marketplace handles billing. Carries first-party feature parity (Batches, Files API, code execution, web fetch, Managed Agents), making it the GCP analog of Claude Platform on AWS and the full-surface option for a GCP-committed org. Distinct from Google-managed Vertex AI, which is Google-operated and the inference + tool-use subset only.",
+    "def_zh": "2026-10-22 發布的部署平台:由 Anthropic 營運、但透過你自己的 Google Cloud 專案存取的 Claude API —— 由 Google Cloud IAM 控管存取、GCP Marketplace 處理計費。具備與第一方同等的功能(Batches、Files API、程式執行、網頁擷取、Managed Agents),是 Claude Platform on AWS 的 GCP 對應版本,也是 GCP 陣營組織的完整介面選項。有別於由 Google 營運、僅為推理＋工具使用子集的 Google 託管 Vertex AI。"
+  },
+  {
     "term": "Claude Science",
     "zh": "Claude Science",
     "tag": "Platform",

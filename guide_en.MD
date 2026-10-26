@@ -10887,15 +10887,18 @@ flowchart TD
     B -->|yes| C{Billing / procurement?}
     C -->|Anthropic direct| D[First-party API]
     C -->|AWS Marketplace + IAM| E[Claude Platform on AWS<br/>same-day full parity, SigV4]
+    C -->|GCP Marketplace + IAM| J[Claude Models on Google Cloud<br/>Anthropic-managed, first-party parity]
     B -->|no — inference + tool use is enough| F{Compliance or cloud commitment?}
     F -->|FedRAMP High / DoD IL4-5| G[Amazon Bedrock]
-    F -->|GCP estate| H[Google Vertex AI]
+    F -->|GCP estate, Google-operated inference required| H[Google Vertex AI<br/>Google-managed]
     F -->|Azure estate| I[Microsoft Foundry<br/>most features beta]
 ```
 
 The load-bearing fact: **the first-party API and Claude Platform on AWS are full-surface; Bedrock and Vertex are model-inference + tool-use.** No Batches, no Files API, no code execution, no web fetch, no Managed Agents on Bedrock/Vertex — you bring your own loop and your own infrastructure around a bare model. That is a fine trade when FedRAMP High or a cloud commitment requires it, but it must be made *before* you architect, not after.
 
 **The classic failure** is designing on first-party features — a Batches-based nightly pipeline, Files-API document reuse, a Managed Agents fleet — and then discovering during "the Bedrock migration" that none of those surfaces exist there. Porting is then a re-architecture. Check the [availability table](https://platform.claude.com/docs) first, and treat "which surface" as a requirements decision with a named owner, exactly like a database choice.
+
+**New for the GCP estate — full parity is no longer AWS-only.** **Claude Models on Google Cloud (Anthropic managed)** (launched 2026-10-22) is the Claude API *operated by Anthropic* but reached through your own Google Cloud project: Google Cloud IAM controls access and Google Cloud Marketplace handles billing — exactly the model Claude Platform on AWS provides for AWS. It is the **full-surface** option for a GCP-committed org, so "GCP estate" is now a *two-way* decision: pick **Anthropic-managed** when you need Batches, the Files API, code execution, web fetch, or Managed Agents on GCP procurement; reach for **Google-managed Vertex AI** (the inference + tool-use subset) only when Google *operating* the inference is itself the hard requirement (a Vertex-native MLOps estate, a Google data-residency or contractual mandate). Don't default to Vertex out of habit and then rediscover the missing surfaces mid-build — the §29.1 failure, now with a GCP escape hatch.
 
 ## 29.2 Workload Identity: Retiring the Static API Key
 
@@ -17296,11 +17299,12 @@ Everything runs through one endpoint: **`POST /v1/messages`**. Tools and output 
 | Provider | Model IDs | Notes |
 |---|---|---|
 | **[Claude Platform on AWS](https://docs.aws.amazon.com/claude-platform/latest/userguide/welcome.html)** | bare (`claude-opus-4-8`) | Anthropic-operated; **same-day first-party parity**, AWS IAM + Marketplace billing, SigV4. |
+| **[Claude Models on Google Cloud (Anthropic managed)](https://platform.claude.com/docs/en/build-with-claude/claude-models-on-google-cloud/anthropic-managed)** | bare (`claude-opus-5-5`) | Anthropic-operated, reached through *your* GCP project (launched 2026-10-22); **first-party parity**, Google Cloud IAM for access, GCP Marketplace billing — the GCP analog of Claude Platform on AWS. Distinct from Google-managed Vertex below. |
 | **[Amazon Bedrock](https://aws.amazon.com/bedrock/anthropic/)** | `anthropic.`-prefixed | AWS-operated; feature subset; FedRAMP High / DoD IL4-5. No batches, web fetch, code execution, Managed Agents, Files API. |
-| **[Google Vertex AI](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude)** | bare ID (`@`-versioned snapshots) | GCP IAM/billing. Web search basic-only; no web fetch/code execution/batches/Files/Managed Agents. |
+| **[Google Vertex AI (Google-managed)](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude)** | bare ID (`@`-versioned snapshots) | GCP IAM/billing, **Google-operated**. Web search basic-only; no web fetch/code execution/batches/Files/Managed Agents. For full surface on GCP use *Anthropic-managed* above. |
 | **[Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/how-to/use-foundry-models-claude)** | bare | Most features in **beta**; usable as Foundry Agent Service reasoning core with MCP. |
 
-> **Parity rule of thumb:** First-party API and Claude Platform on AWS are full-surface. Bedrock/Vertex are model-inference + tool-use (build agents with your own loop). Foundry mirrors much of the surface in beta. The single source of truth is the [platform availability table](https://platform.claude.com/docs).
+> **Parity rule of thumb:** First-party API, Claude Platform on AWS, and Claude Models on Google Cloud (Anthropic managed) are full-surface. Bedrock and Google-managed Vertex are model-inference + tool-use (build agents with your own loop). Foundry mirrors much of the surface in beta. The single source of truth is the [platform availability table](https://platform.claude.com/docs).
 
 ---
 

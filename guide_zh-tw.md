@@ -10887,15 +10887,18 @@ flowchart TD
     B -->|需要| C{計費/採購方式?}
     C -->|Anthropic 直接| D[第一方 API]
     C -->|AWS Marketplace + IAM| E[Claude Platform on AWS<br/>同日完整對等,SigV4]
+    C -->|GCP Marketplace + IAM| J[Claude Models on Google Cloud<br/>Anthropic 託管,第一方對等]
     B -->|不需要 —— 推理+工具使用即可| F{法遵或雲端承諾?}
     F -->|FedRAMP High / DoD IL4-5| G[Amazon Bedrock]
-    F -->|GCP 陣營| H[Google Vertex AI]
+    F -->|GCP 陣營、必須 Google 營運推理| H[Google Vertex AI<br/>Google 託管]
     F -->|Azure 陣營| I[Microsoft Foundry<br/>多數功能 beta]
 ```
 
 承重的事實是:**第一方 API 與 Claude Platform on AWS 是完整介面;Bedrock 與 Vertex 是模型推理+工具使用。** Bedrock/Vertex 上沒有 Batches、沒有 Files API、沒有程式執行、沒有 web fetch、沒有 Managed Agents —— 你得自帶迴圈,並在一個裸模型周圍自建基礎設施。當 FedRAMP High 或雲端承諾有此要求時,這是划算的交換,但必須在*設計架構之前*做,而不是之後。
 
 **經典的失敗**是先按第一方功能設計 —— 一條以 Batches 為基礎的夜間管線、Files API 的文件重用、一支 Managed Agents 艦隊 —— 然後在「Bedrock 遷移」期間才發現那些介面在那裡都不存在。這時的移植等於重新設計架構。先查[可用性表格](https://platform.claude.com/docs),並把「用哪個平台」當作一個有指定負責人的需求決策,就像選資料庫一樣。
+
+**GCP 陣營的新選項 —— 完整介面不再是 AWS 專屬。** **Claude Models on Google Cloud(Anthropic 託管)**(2026-10-22 發布)是由 **Anthropic 營運**、但透過你自己的 Google Cloud 專案存取的 Claude API:由 Google Cloud IAM 控管存取、Google Cloud Marketplace 處理計費 —— 正是 Claude Platform on AWS 為 AWS 提供的模式。它是 GCP 陣營組織的**完整介面**選項,因此「GCP 陣營」現在是一個*雙向*決策:當你在 GCP 採購下需要 Batches、Files API、程式執行、web fetch 或 Managed Agents 時,選 **Anthropic 託管**;只有當「由 Google 營運推理」本身就是硬性要求時(Vertex 原生的 MLOps 環境、Google 的資料落地或合約命令),才選 **Google 託管的 Vertex AI**(推理+工具使用子集)。別出於慣性預設 Vertex,然後在建置途中才重新發現缺少的介面 —— 這正是 §29.1 的失敗,只是現在 GCP 多了一條逃生口。
 
 ## 29.2 工作負載身分:讓靜態 API key 退役
 
@@ -17288,11 +17291,12 @@ Anthropic 的代理式編碼工具——可在終端機、IDE 與雲端執行；
 | 供應商 | 模型 ID | 說明 |
 |---|---|---|
 | **[Claude Platform on AWS](https://docs.aws.amazon.com/claude-platform/latest/userguide/welcome.html)** | 裸 ID（`claude-opus-4-8`） | 由 Anthropic 營運；**與第一方同日對等**，AWS IAM ＋ Marketplace 計費，SigV4。 |
+| **[Claude Models on Google Cloud（Anthropic 託管）](https://platform.claude.com/docs/en/build-with-claude/claude-models-on-google-cloud/anthropic-managed)** | 裸 ID（`claude-opus-5-5`） | 由 Anthropic 營運、透過*你自己的* GCP 專案存取（2026-10-22 發布）；**第一方對等**,以 Google Cloud IAM 控管存取、GCP Marketplace 計費 —— Claude Platform on AWS 的 GCP 對應版本。有別於下方 Google 託管的 Vertex。 |
 | **[Amazon Bedrock](https://aws.amazon.com/bedrock/anthropic/)** | 帶 `anthropic.` 前綴 | 由 AWS 營運；功能為子集；FedRAMP High / DoD IL4-5。無批次、網頁擷取、程式執行、Managed Agents、Files API。 |
-| **[Google Vertex AI](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude)** | 裸 ID（快照用 `@` 版本） | GCP IAM/計費。網頁搜尋僅基本版；無網頁擷取/程式執行/批次/Files/Managed Agents。 |
+| **[Google Vertex AI（Google 託管）](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude)** | 裸 ID（快照用 `@` 版本） | GCP IAM/計費,**由 Google 營運**。網頁搜尋僅基本版；無網頁擷取/程式執行/批次/Files/Managed Agents。GCP 上要完整介面請用上方的 *Anthropic 託管*。 |
 | **[Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/how-to/use-foundry-models-claude)** | 裸 ID | 多數功能為 **beta**；可作為 Foundry Agent Service 的推理核心並支援 MCP。 |
 
-> **對等性概念法則：** 第一方 API 與 Claude Platform on AWS 為完整介面。Bedrock/Vertex 為模型推理＋工具使用（以你自己的迴圈建構代理）。Foundry 以 beta 鏡像了大部分介面。唯一真實來源是[平台可用性表](https://platform.claude.com/docs)。
+> **對等性概念法則：** 第一方 API、Claude Platform on AWS 與 Claude Models on Google Cloud（Anthropic 託管）為完整介面。Bedrock 與 Google 託管的 Vertex 為模型推理＋工具使用（以你自己的迴圈建構代理）。Foundry 以 beta 鏡像了大部分介面。唯一真實來源是[平台可用性表](https://platform.claude.com/docs)。
 
 ---
 
