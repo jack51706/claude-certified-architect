@@ -1794,6 +1794,8 @@ Output a report on dependencies and architectural patterns.
 
 **Exam angle:** "isolate a verbose skill's output from the main session" → `context: fork`. "Stop a skill from deleting files" → `allowed-tools`. "Run a task only when asked" → skill, not CLAUDE.md.
 
+**Beyond Claude Code — `SKILL.md` is now a vendor-neutral open standard.** Skills are not Claude-only. Anthropic published **Agent Skills** as an open standard in December 2025 and, on **2026-10-22, donated it to the Agentic AI Foundation (AAIF)** — the Linux Foundation body that already governs **MCP** (§4, §25). The name, logo, GitHub organization, and `agentskills.io` domain now sit under neutral, community governance, co-maintained by engineers from Anthropic, Google, and OpenAI. The architect's takeaway: **a skill you author is portable** — 70+ agent platforms (ChatGPT, Cursor, GitHub Copilot, and VS Code among them) already read the format, so the same `SKILL.md` that governs a Claude Code workflow travels to other agents without a rewrite. It is the "write once, run on any compatible client" promise MCP makes for *tools*, now applied to *procedural knowledge*. This changes governance and portability — not the on-disk format or the frontmatter above.
+
 ## 5.6 Settings, Permissions, and Hooks
 
 Instructions tell the model what to *do*; **`settings.json` and permissions control what it is *allowed* to do**, and **hooks make some rules deterministic**. This is where Claude Code stops being a polite assistant and becomes a governed tool — the exam treats it as the safety layer.
@@ -16293,6 +16295,20 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 - D) It is purely a cost feature with no downside and no configuration; it never changes what the model can recall and cannot be turned off.
 
 **Why B:** Claude Code's prompt cache has roughly a one-hour TTL. A large conversation left idle past it would force the next prompt to re-prefill the entire window from cold — exactly the slow, costly resume the engineer fears. **Idle compaction** (added 2026-10) pre-empts that: a terminal session above a size threshold (200K+ tokens by default) idle for ~54 minutes is compacted *just before* the cache TTL lapses, so the summarization runs against a still-warm cache and you return to a compact, cached context. The caveat is intrinsic to compaction: it is a **lossy** summary (§21.2), so precise values left only in the transcript can blur — load-bearing facts belong in `CLAUDE.md` or written to disk. It is configurable, not immutable: `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` sets the threshold, the `/config` **Idle compaction** row toggles it, and `{ "idleCompaction": false }` disables it — so (D) is wrong on both "no downside" and "cannot be turned off." (A) misunderstands the cache: the TTL is not pausable, which is the whole reason idle compaction fires before it. (C) describes a git safeguard, not what idle compaction is — checkpoints and Git, not compaction, protect uncommitted edits.
+
+---
+## Question 318 (Scenario: Agentic AI Tools)
+
+**Situation:** Your platform team maintains a library of authored `SKILL.md` capabilities — a PR-review skill, a release-checklist skill, a data-redaction skill — that today only your Claude Code fleet uses. Leadership now wants the same procedural knowledge available inside two other agent products the company runs (one built on a competitor's coding agent, one an internal ChatGPT-based assistant), without maintaining three divergent copies. A junior engineer proposes rewriting each skill into each product's native plugin format.
+
+**What is the most durable architecture, and why?**
+
+- A) Rewrite each skill into every product's proprietary plugin format, and add a sync job that regenerates all three copies whenever the source changes.
+- B) Keep the skills as Agent Skills (`SKILL.md`): it is a vendor-neutral open standard — donated in 2026 to the Agentic AI Foundation, the same Linux Foundation body that governs MCP — so the 70+ platforms that already read the format (including the ChatGPT-based assistant and major coding agents) consume the *same* files without a rewrite. **[CORRECT]**
+- C) Move the procedural knowledge into each product's `CLAUDE.md`-equivalent always-on instructions, so every session loads it regardless of task.
+- D) Expose each skill as an MCP server tool instead, since MCP is the only cross-vendor standard and skills are Claude-only.
+
+**Why B:** Agent Skills is an *open standard*, not a Claude Code feature: the `SKILL.md` folder format was published openly in December 2025 and donated on 2026-10-22 to the Agentic AI Foundation (AAIF) under the Linux Foundation — the same neutral home as MCP — with engineers from Anthropic, Google, and OpenAI co-maintaining it. Because more than 70 agent platforms (ChatGPT, Cursor, GitHub Copilot, and VS Code among them) already read the format, one authored skill is portable to all three products as-is, giving a single source of truth and no divergence. (A) is the exact anti-pattern the open standard exists to eliminate — three formats and a brittle sync job. (C) abandons progressive disclosure, taxing every session's context with knowledge most turns don't need (§5.5). (D) is wrong on its premise: skills are *not* Claude-only, and MCP carries *tools and data*, not the procedural knowledge a skill encodes — the two standards are complementary, and both are now governed by the AAIF.
 
 ---
 # Practical Exercises

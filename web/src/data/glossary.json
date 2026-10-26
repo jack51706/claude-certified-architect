@@ -192,8 +192,15 @@
     "term": "Agent Skill / SKILL.md",
     "zh": "Agent Skill / SKILL.md",
     "tag": "Claude Code",
-    "def_en": "A folder with a SKILL.md whose short description stays in context; the full instructions load on demand when relevant.",
-    "def_zh": "含 SKILL.md 的資料夾,其簡短描述常駐上下文;完整指令在相關時才按需載入。"
+    "def_en": "A folder with a SKILL.md whose short description stays in context; the full instructions load on demand when relevant (progressive disclosure). Not Claude-only: Agent Skills is a vendor-neutral open standard, published December 2025 and donated 2026-10-22 to the Agentic AI Foundation (the Linux Foundation body that also governs MCP). 70+ agent platforms (ChatGPT, Cursor, GitHub Copilot, VS Code) read the format, so an authored skill is portable across agents without a rewrite.",
+    "def_zh": "含 SKILL.md 的資料夾,其簡短描述常駐上下文;完整指令在相關時才按需載入(漸進式揭露)。並非 Claude 專屬:Agent Skills 是與廠商無關的開放標準,2025 年 12 月發佈,並於 2026-10-22 捐給 Agentic AI Foundation(也治理 MCP 的那個 Linux Foundation 機構)。已有 70 多個代理平台(ChatGPT、Cursor、GitHub Copilot、VS Code)讀取此格式,因此撰寫好的技能可跨代理攜帶而無需改寫。"
+  },
+  {
+    "term": "Agentic AI Foundation (AAIF)",
+    "zh": "Agentic AI Foundation(AAIF)",
+    "tag": "MCP",
+    "def_en": "A neutral, vendor-independent home under the Linux Foundation for open agent standards, co-founded by Anthropic with Block and OpenAI. It governs the Model Context Protocol (MCP) and, since 2026-10-22, Agent Skills (name, logo, GitHub org, and agentskills.io domain donated). Standards are co-maintained by engineers from multiple companies as individuals, prioritizing community input and transparent decision-making — the reason a Claude-originated format like SKILL.md is portable across 70+ agent platforms.",
+    "def_zh": "Linux Foundation 旗下、與廠商無關的中立機構,收容開放的代理標準,由 Anthropic 與 Block、OpenAI 共同創立。它治理 Model Context Protocol(MCP),並自 2026-10-22 起治理 Agent Skills(名稱、標誌、GitHub 組織與 agentskills.io 網域已捐出)。標準由多家公司的工程師以個人身分共同維護,優先考量社群意見與透明決策 —— 這正是像 SKILL.md 這種源自 Claude 的格式能在 70 多個代理平台間攜帶的原因。"
   },
   {
     "term": "context: fork",

@@ -1794,6 +1794,8 @@ argument-hint: "要分析的目錄路徑"
 
 **考試角度:**「把冗長技能的輸出與主工作階段隔離」→ `context: fork`。「阻止技能刪除檔案」→ `allowed-tools`。「只在被要求時才跑某任務」→ 技能,而非 CLAUDE.md。
 
+**超越 Claude Code —— `SKILL.md` 現在是與廠商無關的開放標準。** 技能並非 Claude 專屬。Anthropic 在 2025 年 12 月把 **Agent Skills** 發佈為開放標準,並於 **2026-10-22 將其捐給 Agentic AI Foundation(AAIF)** —— 也就是已經治理 **MCP**(§4、§25)的那個 Linux Foundation 機構。名稱、標誌、GitHub 組織與 `agentskills.io` 網域如今置於中立、社群治理之下,由來自 Anthropic、Google、OpenAI 的工程師共同維護。對架構師的要點是:**你撰寫的技能是可攜的** —— 已有 70 多個代理平台(包括 ChatGPT、Cursor、GitHub Copilot 與 VS Code)讀取此格式,因此同一份治理 Claude Code 工作流程的 `SKILL.md`,無需改寫就能帶到其他代理上。這正是 MCP 為*工具*所做的「寫一次、在任何相容用戶端上執行」承諾,如今套用到*程序性知識*上。它改變的是治理與可攜性 —— 而非磁碟上的格式或上方的 frontmatter。
+
 ## 5.6 設定、權限與 Hooks
 
 指令告訴模型要*做*什麼;**`settings.json` 與權限控制它*被允許*做什麼**,而 **hooks 讓某些規則具備確定性**。這就是 Claude Code 不再只是個有禮貌的助理、轉而成為受治理工具之處——考試把它視為安全層。
@@ -16286,6 +16288,20 @@ Associate 考試認證的是另一種工作:勝任且負責任地使用 Claude *
 - D) 它純粹是成本功能,沒有缺點、不需設定;它永遠不會改變模型能回憶的內容,也無法關閉。
 
 **為何選 B:** Claude Code 的 prompt 快取大約有一小時的 TTL。一個閒置超過它的大型對話會迫使下一個提示從冷狀態重新 prefill 整個視窗 —— 正是這位工程師所擔心、緩慢又昂貴的恢復。**閒置 compaction**(2026-10 加入)先行化解:一個超過大小門檻(預設 200K+ token)、閒置約 54 分鐘的終端機 session 會*恰在*快取 TTL 到期前被壓縮,因此摘要是對仍溫熱的快取執行,而你回來時面對的是精簡、已快取的上下文。注意事項是 compaction 本質上的:它是**有損**摘要(§21.2),只存在於轉錄中的精確數值可能變模糊 —— 關鍵事實應放進 `CLAUDE.md` 或寫到磁碟。它是可設定的,而非不可改:`CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` 設定門檻、`/config` 的 **Idle compaction** 列可切換、`{ "idleCompaction": false }` 可停用 —— 所以(D)在「沒有缺點」與「無法關閉」兩點上都錯。(A)誤解了快取:TTL 無法暫停,這正是閒置 compaction 要在它到期前觸發的原因。(C)描述的是 git 防護,而非閒置 compaction 的本質 —— 保護未提交編輯的是 checkpoints 與 Git,不是 compaction。
+
+---
+## 問題 318(情境:代理式 AI 工具)
+
+**情境:** 你的平台團隊維護一組撰寫好的 `SKILL.md` 能力 —— 一個 PR 審查技能、一個發佈檢查清單技能、一個資料遮罩技能 —— 目前只有你們的 Claude Code 艦隊在用。領導層現在希望同一套程序性知識也能在公司另外運作的兩個代理產品中使用(一個建在競品的編碼代理上,一個是內部以 ChatGPT 為基礎的助理),而且不要維護三份彼此分歧的副本。一位資淺工程師提議把每個技能改寫成各產品的原生外掛格式。
+
+**最耐久的架構是什麼,為什麼?**
+
+- A) 把每個技能改寫成各產品的專有外掛格式,並加一個同步作業,在來源變更時重新產生全部三份副本。
+- B) 把這些技能維持為 Agent Skills(`SKILL.md`):它是與廠商無關的開放標準 —— 2026 年捐給 Agentic AI Foundation,也就是治理 MCP 的同一個 Linux Foundation 機構 —— 因此已讀取此格式的 70 多個平台(包括那個以 ChatGPT 為基礎的助理與主要編碼代理)能消費*同一份*檔案而無需改寫。 **[CORRECT]**
+- C) 把程序性知識搬進各產品的 `CLAUDE.md` 等價常載指令,讓每個 session 無論任務為何都載入它。
+- D) 改把每個技能以 MCP 伺服器工具暴露,因為 MCP 才是唯一的跨廠商標準,而技能是 Claude 專屬的。
+
+**為何選 B:** Agent Skills 是*開放標準*,而非 Claude Code 的功能:`SKILL.md` 資料夾格式於 2025 年 12 月公開發佈,並於 2026-10-22 捐給 Linux Foundation 旗下的 Agentic AI Foundation(AAIF)—— 與 MCP 同一個中立機構 —— 由來自 Anthropic、Google、OpenAI 的工程師共同維護。由於已有超過 70 個代理平台(包括 ChatGPT、Cursor、GitHub Copilot 與 VS Code)讀取此格式,一份撰寫好的技能可原封不動地帶到全部三個產品,因此有單一真實來源、不會分歧。(A)正是開放標準要消除的反模式 —— 三種格式加一個脆弱的同步作業。(C)放棄了漸進式揭露,讓每個 session 的上下文都被多數回合用不到的知識課稅(§5.5)。(D)前提就錯了:技能*並非* Claude 專屬,而 MCP 承載的是*工具與資料*,不是技能所編碼的程序性知識 —— 這兩個標準互補,且如今都由 AAIF 治理。
 
 ---
 # 實作練習
