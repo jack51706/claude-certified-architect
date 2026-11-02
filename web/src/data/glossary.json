@@ -789,5 +789,12 @@
     "tag": "API",
     "def_en": "The maximum size of a single API request body. On the first-party Claude API it is 128 MB for the Messages API and the Token Counting API (raised from 32 MB on 2026-10-28); Amazon Bedrock and Google Vertex AI stay at 32 MB. Large inline (base64) images/documents count against it on every turn, so reuse the Files API for assets sent across turns rather than relying on the headroom.",
     "def_zh": "單一 API 請求主體的最大大小。在第一方 Claude API 上,Messages API 與 Token Counting API 為 128 MB(2026-10-28 由 32 MB 調升);Amazon Bedrock 與 Google Vertex AI 維持 32 MB。大型內嵌(base64)影像/文件在每一輪都計入此上限,故跨多輪傳送的產物應改用 Files API,而非倚賴這份餘裕。"
+  },
+  {
+    "term": "Usage and Cost Analytics API",
+    "zh": "用量與成本分析 API",
+    "tag": "Platform",
+    "def_en": "Admin API (beta, header analytics-usage-cost-2026-08-24, launched 2026-10-29) that reports token usage (/v1/organizations/analytics/usage) and spend (/v1/organizations/analytics/cost) for Claude Console and Enterprise orgs, filterable and groupable by model, workspace, API key, and the user or service account behind each request. Supersedes the now-legacy Usage and Cost API (and the Enterprise Analytics report endpoints). Org-level reporting — pull on a schedule, not per request.",
+    "def_zh": "管理用 API(beta,標頭 analytics-usage-cost-2026-08-24,2026-10-29 推出),回報 Claude Console 與 Enterprise 組織的 token 用量(/v1/organizations/analytics/usage)與花費(/v1/organizations/analytics/cost),可依模型、工作區、API key,以及每則請求背後的使用者或服務帳號篩選與分組。取代現已成為舊版(legacy)的 Usage and Cost API(與 Enterprise Analytics 報表端點)。屬組織層級報表 —— 應排程拉取,而非逐請求呼叫。"
   }
 ]

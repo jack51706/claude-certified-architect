@@ -11061,6 +11061,18 @@ Three properties make it operable rather than a single point of failure:
 
 > **Pitfall:** treating a fail-open configuration as "governed." Fail-open means that when your security server is unreachable, prompts flow *unchecked* — acceptable for availability-first workloads, but a true compliance boundary must fail **closed** and engineer the security server for the availability that demands. Decide, document, and test the failure mode before you rely on the hook as a control.
 
+## 29.9 Usage & Cost Analytics: Metering Spend at Org Scale
+
+§29.7 governed *who* your human members are; this section governs *what they spend*. At enterprise scale the first cost question is never "what did we pay" — the invoice answers that — but **"which model, which workspace, which API key, and which person or service account drove it?"** Without that breakdown you cannot attribute spend to a team, catch a runaway agent, or justify a chargeback.
+
+The **Usage and Cost Analytics API** (beta, header `analytics-usage-cost-2026-08-24`) answers exactly that. Two endpoints — `GET /v1/organizations/analytics/usage` (token usage) and `GET /v1/organizations/analytics/cost` (spend) — report across **Claude Console and Claude Enterprise** organizations, and both let you **filter and group by model, workspace, API key, and the user or service account behind each request**. That grouping is the whole point: it turns one opaque monthly bill into a per-dimension ledger an architect can wire into FinOps dashboards, budget alerts, and per-tenant chargeback.
+
+**It supersedes, without breaking, the older reports.** As of 2026-10-29 the previous **Usage and Cost API** — and the `usage_report`, `cost_report`, `user_usage_report`, and `user_cost_report` endpoints of the Claude Enterprise Analytics API — are now **legacy**. They keep working, so nothing breaks today, but new integrations should target the Analytics API, and Anthropic ships migration guides for moving an existing pipeline over.
+
+**Where it fits.** This is the observability half of the cost discipline in §28.4: §28.4 drives cost *down* by routing and caching; the Analytics API makes that spend *visible* along the very dimensions you optimize — so you can prove a downgrade actually moved the needle on a given workspace rather than trusting the aggregate. Call it with an Admin API key (§29.7), pull it on a schedule into your observability store, and treat its output as production telemetry.
+
+> **Pitfall:** reaching for the Analytics API from inside an application's request path. It is an **organization-level admin/reporting** API keyed on an Admin key, not a per-request hook — scheduled pulls into a dashboard, never a synchronous call per user request.
+
 > **Beyond the foundations exam.** The exam stops at the agent's edge; production starts there. Choose the surface by parity, make every workload prove who it is, govern MCP through identity, and keep secrets out of the model's world entirely — and the same agent you built in Parts I–III becomes something an enterprise can actually run.
 
 # PART V: Claude Certified Architect — Professional (CCAR-P)
