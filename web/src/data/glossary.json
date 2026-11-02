@@ -782,5 +782,12 @@
     "tag": "Claude Code",
     "def_en": "Claude Code terminal feature (2026-10) that compacts a large conversation (200K+ tokens by default) left idle ~54 minutes, before its ~1-hour prompt-cache TTL expires — summarizing while the cache is still warm rather than forcing a cold full-window re-read on your return. Configure with CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS or the /config Idle compaction row; disable with idleCompaction:false. Lossy like all compaction, so load-bearing facts belong in CLAUDE.md or on disk.",
     "def_zh": "Claude Code 終端機功能(2026-10):把閒置約 54 分鐘的大型對話(預設 200K+ token)在其約 1 小時的 prompt 快取 TTL 到期前先行壓縮 —— 趁快取仍溫熱時摘要,而非在你回來時被迫對整個視窗做冷讀。以 CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS 或 /config 的 Idle compaction 列設定;以 idleCompaction:false 停用。與所有 compaction 一樣有損,故關鍵事實應放進 CLAUDE.md 或寫到磁碟。"
+  },
+  {
+    "term": "Request size limit",
+    "zh": "請求大小上限",
+    "tag": "API",
+    "def_en": "The maximum size of a single API request body. On the first-party Claude API it is 128 MB for the Messages API and the Token Counting API (raised from 32 MB on 2026-10-28); Amazon Bedrock and Google Vertex AI stay at 32 MB. Large inline (base64) images/documents count against it on every turn, so reuse the Files API for assets sent across turns rather than relying on the headroom.",
+    "def_zh": "單一 API 請求主體的最大大小。在第一方 Claude API 上,Messages API 與 Token Counting API 為 128 MB(2026-10-28 由 32 MB 調升);Amazon Bedrock 與 Google Vertex AI 維持 32 MB。大型內嵌(base64)影像/文件在每一輪都計入此上限,故跨多輪傳送的產物應改用 Files API,而非倚賴這份餘裕。"
   }
 ]
