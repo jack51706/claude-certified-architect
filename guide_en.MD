@@ -16368,6 +16368,36 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 **Why B:** The 2026-10-28 raise took the **first-party** Claude API's request-size ceiling from 32 MB to 128 MB for the Messages API and the Token Counting API — so a single-shot per-contract request up to 128 MB is now accepted there, and dropping the 32 MB split is correct on that surface. But the raise is first-party only: **Amazon Bedrock and Google Vertex AI remain at 32 MB and offer base64 only** (no Files API, no `url` source — §22.2), so a pipeline that moves to Bedrock must reinstate the ≤32 MB splitting or it will fail every oversized request. (A) is wrong on both counts — the limit is not platform-wide, and a bigger single request is not "always cheaper": a bundle re-sent across turns is the base64 trap, which is also why the single-shot shape (one request per contract, no follow-ups) is right here. (C) confuses the request-size limit — which governs the whole request body, base64 bytes included — with the Files API. (D) invents a coupling that does not exist: request-size and page limits are independent, and an over-limit request is rejected outright, not silently truncated.
 
 ---
+
+## Question 320 (Scenario: Conversational AI Architecture Patterns)
+
+**Situation:** A customer-facing assistant holds long multi-turn sessions — some transcripts reach 400K tokens before a conversation ends. Time to first token on long sessions has crept up as transcripts grow, and the bill is dominated by input tokens. An engineer enables **message threads** (`anthropic-beta: message-threads-2026-08-12`) so each turn sends only the new user message, and reports that first-token latency on long sessions dropped sharply. They now propose retiring the prompt-cache configuration *and* the end-of-session write to the memory tool, arguing the thread "already keeps the conversation on the server."
+
+**Which response is correct?**
+
+- A) Keep both. Message threads cut the **bytes you re-upload** and the TTFT, but the model still reads the full conversation, so neither the input-token bill nor context rot changes — prompt caching (which avoids *re-processing* the prefix) and the memory tool (which *persists* state across sessions) solve different problems. **[CORRECT]**
+- B) Drop both: a server-side thread makes prompt caching and durable memory redundant, since the conversation now lives on the server between turns.
+- C) Drop prompt caching only: threads supersede caching, but keep the memory write because threads are encrypted at rest.
+- D) Drop the memory write only: a thread is durable cross-session storage, so re-reading it next week is cheaper than calling the memory tool.
+
+**Why A:** Message threads are a *transport* optimization — the server retains the conversation under a handle so each request carries only the new turn, which is why **request size and time-to-first-token drop**, most on long transcripts. But the model still processes the entire conversation every turn, so the **input-token budget, per-turn billing, and context rot are unchanged** — threads never touch the window. Prompt caching attacks a *different* axis: it keeps the server from re-*processing* the stable `tools`+`system` prefix (cutting compute cost and latency), so the two are complementary, not substitutes — run both. And a thread is **ephemeral**: it expires 5 minutes after its last request and is deleted within an hour, so it is a live-session accelerator, never cross-session storage — anything that must outlive the session still belongs in the memory tool. (B), (C), and (D) each mistake a short-lived plumbing handle for either a cache or durable memory.
+
+---
+
+## Question 321 (Scenario: Agentic AI Tools)
+
+**Situation:** Your agentic back-end calls the first-party Claude API from a fixed set of egress IPs (a NAT gateway and two CI runners). Security wants to guarantee that even if a production API key leaks, it cannot be used from an attacker's laptop. A platform engineer proposes enabling the org's new **IP allowlisting** (beta) with the NAT and runner addresses, and asks whether this lets you retire your workload-identity (WIF/EMA) rollout and your per-key workspace scoping.
+
+**Which assessment is correct?**
+
+- A) IP allowlisting makes workload identity unnecessary: pinning the source IPs is a complete substitute for rotating or short-lived credentials.
+- B) It is a per-API-key setting, so you must list every runner's address on each key individually; there is no organization-level list.
+- C) IP allowlisting restricts API access to the IPv4/IPv6 addresses or CIDR ranges you list (up to 1,000 per org), so a leaked key is refused from any unlisted address — a strong **network** control that **complements**, but does not replace, short-lived credentials and least-privilege key scoping. **[CORRECT]**
+- D) It governs only the Console sign-in UI, not Messages API traffic, so it cannot protect a leaked programmatic key.
+
+**Why C:** IP allowlisting (beta) lets an organization restrict API access to specific **IPv4/IPv6 addresses or CIDR ranges — up to 1,000 per organization** — and requests from any unlisted address are refused, which directly bounds *where* a leaked key can be used. But it is a **network-layer** control: it does nothing about a key stolen *and* used from an allowed network (a compromised runner behind your NAT), so it stacks with — rather than replaces — **workload identity** (short-lived, per-workload credentials; §29.2) and least-privilege **workspace/key scoping**. Defense in depth: allowlist the egress, *and* rotate to short-lived credentials, *and* scope the key. (A) treats one layer as the whole stack. (B) is wrong on mechanism — it is an **org-level** allowlist, not a per-key field. (D) is wrong on scope — it governs API access, exactly the programmatic path a leaked key would take.
+
+---
 # Practical Exercises
 
 Thirteen hands-on labs, organized as one track per certification. Reading builds recognition; only building builds the judgment the exams test. Each lab states its **time budget**, the **domains** it exercises, concrete **build steps**, and — the part that makes it a lab rather than a suggestion — **"Done when" acceptance criteria**: don't move on until every box holds. Do your target certification's track in order; Track A is the foundation for everything else. All labs run on an ordinary API key or Claude Code install; none needs special infrastructure. Reference solutions for every lab live in the next section — attempt first, then compare.

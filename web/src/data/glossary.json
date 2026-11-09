@@ -796,5 +796,26 @@
     "tag": "Platform",
     "def_en": "Admin API (beta, header analytics-usage-cost-2026-08-24, launched 2026-10-29) that reports token usage (/v1/organizations/analytics/usage) and spend (/v1/organizations/analytics/cost) for Claude Console and Enterprise orgs, filterable and groupable by model, workspace, API key, and the user or service account behind each request. Supersedes the now-legacy Usage and Cost API (and the Enterprise Analytics report endpoints). Org-level reporting — pull on a schedule, not per request.",
     "def_zh": "管理用 API(beta,標頭 analytics-usage-cost-2026-08-24,2026-10-29 推出),回報 Claude Console 與 Enterprise 組織的 token 用量(/v1/organizations/analytics/usage)與花費(/v1/organizations/analytics/cost),可依模型、工作區、API key,以及每則請求背後的使用者或服務帳號篩選與分組。取代現已成為舊版(legacy)的 Usage and Cost API(與 Enterprise Analytics 報表端點)。屬組織層級報表 —— 應排程拉取,而非逐請求呼叫。"
+  },
+  {
+    "term": "Message threads",
+    "zh": "訊息執行緒",
+    "tag": "Context",
+    "def_en": "Messages API feature (beta, header message-threads-2026-08-12, launched 2026-11-02): the server retains a conversation under a thread handle, so each follow-up request sends only the new messages instead of resending the whole transcript. Cuts request size (upload bytes) and time-to-first-token on long conversations and agent loops — but the model still reads the full conversation, so the input-token budget and context rot are unchanged; it is a transport optimization, not a context-window one. Ephemeral: a thread expires 5 minutes after its last request and is deleted within an hour of last use, so it is not a substitute for the memory tool. Complementary to prompt caching (which avoids re-processing the prefix). Available on the Claude API, AWS, Google Cloud (Anthropic managed), and Microsoft Foundry.",
+    "def_zh": "Messages API 功能(beta,標頭 message-threads-2026-08-12,2026-11-02 推出):伺服器把對話保存在一個執行緒把柄底下,因此每個後續請求只送出新增訊息,而非重送整份歷程。壓低請求大小(上傳位元組)與長對話及代理迴圈的首 token 時間 —— 但模型仍讀整段對話,故輸入 token 預算與 context rot 不變;它是傳輸層優化,而非上下文視窗優化。短暫:執行緒在最後一次請求後 5 分鐘過期,並在最後使用後一小時內刪除,因此不是 memory tool 的替代品。與 prompt caching(避免重新處理前綴)互補。可用於 Claude API、AWS、Google Cloud(Anthropic managed)與 Microsoft Foundry。"
+  },
+  {
+    "term": "IP allowlisting",
+    "zh": "IP 允許清單",
+    "tag": "Platform",
+    "def_en": "Enterprise API security control (beta, launched 2026-11-05) that restricts an organization's Claude API access to specific IPv4/IPv6 addresses or CIDR ranges — up to 1,000 per organization. Requests from any unlisted address are refused, bounding where a leaked API key can be used. A network-layer perimeter that complements, not replaces, workload identity (short-lived credentials) and least-privilege key/workspace scoping — defense in depth. Pin it to fixed egress (NAT gateway, CI runners, VPN). Paired human-side control: the sign-members-out-everywhere admin action (also beta, 2026-11-05) that revokes a member's live sessions on all devices.",
+    "def_zh": "企業 API 安全控制(beta,2026-11-05 推出),把組織的 Claude API 存取限制在特定 IPv4/IPv6 位址或 CIDR 範圍 —— 每個組織最多 1,000 筆。任何來自清單外位址的請求都會被拒,框住一把外洩 API key 能從何處被使用。它是網路層邊界,互補而非取代工作負載身分(短命憑證)與最小權限的 key／工作區範圍切分 —— 縱深防禦。把它釘在固定出口(NAT 閘道、CI runner、VPN)。人這一側的搭配控制:將成員於所有裝置登出(sign members out everywhere)的管理動作(同為 beta,2026-11-05),撤銷一位成員在所有裝置上的活動工作階段。"
+  },
+  {
+    "term": "Background MCP tasks",
+    "zh": "背景 MCP 任務",
+    "tag": "Claude Code",
+    "def_en": "Claude Code behavior (2.1.319, 2026-11-06): when an MCP server runs a tool call as a task (a long-running operation), Claude Code moves it to the background and reports the result to Claude when it finishes, instead of blocking the turn while the call runs — keeping the session responsive, the same async pattern as background Bash. Set CLAUDE_CODE_DISABLE_MCP_TASK_BACKGROUND to force synchronous waiting inside the tool call.",
+    "def_zh": "Claude Code 行為(2.1.319,2026-11-06):當一個 MCP server 把工具呼叫當成任務(task,長時間運行的作業)來跑時,Claude Code 會把它移到背景,並在它完成時把結果回報給 Claude,而非讓該回合卡在呼叫上等待 —— 讓工作階段保持回應,與背景 Bash 相同的非同步模式。設定 CLAUDE_CODE_DISABLE_MCP_TASK_BACKGROUND 可強制在工具呼叫內同步等待。"
   }
 ]
