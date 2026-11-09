@@ -8326,7 +8326,7 @@ The window is finite even at a million tokens, and the three mechanisms attack t
 - **Context editing** (§21.3) — *clears* (does not summarize) stale tool results and thinking blocks from the transcript before the model sees them. Lossless structure, removes dead weight, in-session.
 - **The memory tool** (§21.4) — Claude reads and writes files *outside* the window, so state survives compaction, context resets, and whole sessions. Cross-session persistence.
 
-§21.1 frames the budget and the 200K-vs-1M decision; §21.5 covers the interactions that bite in production (prompt caching, what to keep vs drop); §21.6 builds a complete **multi-day codebase-migration agent** end-to-end; §21.7 distills the decision rules.
+§21.1 frames the budget and the 200K-vs-1M decision; §21.5 covers the interactions that bite in production (prompt caching, what to keep vs drop); §21.6 builds a complete **multi-day codebase-migration agent** end-to-end; §21.7 adds **message threads** (server-side conversation state); §21.8 distills the decision rules.
 
 ## 21.1 The Budget, and Why 1M Does Not Make This Go Away
 
@@ -8572,7 +8572,19 @@ Notice the division of labor: **memory holds the facts that must survive**, **co
 - Confusing the two beta headers / `edits` types — `compact_20260112` is summarization, `clear_*` is clearing; they are not interchangeable (§21.3).
 - A shared `/memories` directory across users — one tenant's decisions leak into another's run (§21.4).
 
-## 21.7 Key Takeaways
+## 21.7 Message Threads — Server-Side Conversation State
+
+Every mechanism so far reshapes *what the model reads*. **Message threads reshape *what you upload*.** Recall the second trap in §21.1 — "the API is stateless: every turn you resend the entire history." Message threads (beta, `anthropic-beta: message-threads-2026-08-12`, launched 2026-11-02) make that statelessness optional at the **transport** layer: the server retains the conversation under a thread handle, so each follow-up request carries **only the new messages** instead of the full transcript.
+
+**What it changes — and, crucially, what it does not.** It cuts the **request size** (bytes you upload) and the **time to first token** on long conversations and agent loops — and the win *grows* with transcript length, exactly where re-uploading a 400K-token history hurt most. It does **not** shrink the context the model processes: the model still reads the whole conversation, so the **token budget, per-turn input billing, and context rot all behave as before**. Message threads are a *plumbing* optimization, not a context-window one — never reach for them to "fix" recall at 600K tokens; that is still compaction, context editing, and memory (§21.2–§21.4).
+
+**They are ephemeral, not durable.** A thread **expires 5 minutes after its last request** and is deleted no more than 1 hour after last use. That makes it a live-session accelerator, not storage: if a thread expires mid-task you simply fall back to sending full history, and anything that must outlive the session still belongs in the **memory tool** (§21.4). Treating a thread as cross-session memory is the headline pitfall.
+
+**Caching vs threads — complementary, not rivals.** Prompt caching (Ch 18) keeps the server from *re-processing* the stable `tools`+`system` prefix (cutting compute cost and latency on tokens the model would otherwise re-read); message threads keep you from *re-uploading* prior turns (cutting upload bytes and TTFT). Run both: a cached prefix **and** a thread that elides the resent history. The interaction to watch is the usual one — changing `tools` or the system prefix still busts the cache (§21.5), and the thread handle does not rescue a broken prefix.
+
+**Where it runs.** First-party Claude API, Claude Platform on AWS (Bedrock), Claude Models on Google Cloud (Anthropic managed), and Claude in Microsoft Foundry — unlike the Files API / 128 MB asymmetry in §22.2, this one is available across every surface.
+
+## 21.8 Key Takeaways
 
 | Concept | What to remember |
 |---|---|
@@ -8581,6 +8593,7 @@ Notice the division of labor: **memory holds the facts that must survive**, **co
 | Context editing | Beta `context-management-2025-06-27`; `clear_tool_uses_20250919` (+`clear_tool_inputs`) and `clear_thinking_20251015`. Different header/types from compaction (§21.3). |
 | Memory tool | `memory_20250818`, client-side, `/memories`; survives sessions. **No secrets; scope per user; don't let it bloat** (§21.4). |
 | 1M does not repeal context rot | Bigger windows delay failure; recall still degrades and you still pay to resend. The cheap/subagent tier is 200K (§21.1). |
+| Message threads | Beta `message-threads-2026-08-12`; the server keeps the conversation so you resend only new messages — cuts request size + TTFT, **not** the token budget or context rot. Ephemeral (5-min expiry), not a memory-tool replacement; complementary to prompt caching (§21.7). |
 | Caching interaction | Editing history moves the cached prefix; keep the main loop on one model + stable tools, push cheap work to a Haiku subagent (§21.5). |
 | Keep vs drop | Keep IDs/amounts/decisions in memory + facts block; drop raw tool dumps via context editing; summarize the narrative last; reference huge artifacts instead of inlining (§21.5). |
 
