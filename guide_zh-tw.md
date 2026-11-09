@@ -10143,6 +10143,8 @@ flowchart TD
 
 **MCP tool search 與 managed MCP。** 當你連接許多 MCP servers 時,一開始就載入*每一個*工具定義會在任何工作開始前就淹沒上下文視窗。**MCP tool search 會延遲載入工具** —— 模型只搜尋並拉入某任務所需的工具,讓視窗撐得住。**Managed MCP** 讓組織透過 `managed-mcp.json` 釘住一組核可的 server,並由 `claude mcp login` 從 shell 處理驗證。與第 4 章 MCP resources 及 §26.2 workflows 一脈相承的紀律相同:**上下文是一筆預算;只在任務需要時、載入它需要的東西。**
 
+**背景 MCP 任務。** 有些 MCP 工具呼叫很慢 —— 一個 server 啟動一次建置、一條長查詢,或一個遠端作業。自 Claude Code 2.1.319(2026-11-06)起,當一個 MCP server 把一個工具呼叫**當成任務(task)**來跑時,Claude Code 會**把它移到背景,並在它完成時把結果回報給 Claude**,而非讓該回合卡在呼叫上等待。這個好處與背景 Bash(§26.1)如出一轍:工作階段保持回應,Claude 能在那個慢工具運行時繼續工作,待結果落地再接手 —— 正是你對任何長時程代理都想要的非同步模式。若某個下游步驟在任務回傳前確實無法推進,設定 `CLAUDE_CODE_DISABLE_MCP_TASK_BACKGROUND` 可強制回到舊行為(在工具呼叫內同步等待)。
+
 ## 26.6 Headless、SDK 與權限模式
 
 無人值守執行,正是正式環境與互動式使用分歧最大的地方。

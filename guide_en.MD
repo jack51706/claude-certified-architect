@@ -10143,6 +10143,8 @@ These are where you attach **observability and policy at fleet scale** — a `Su
 
 **MCP tool search and managed MCP.** When you connect many MCP servers, loading *every* tool definition up front floods the context window before any work begins. **MCP tool search lazily loads tools** — the model searches for and pulls in only the tools a task needs, keeping the window solvent. **Managed MCP** lets an org pin an approved server set via `managed-mcp.json`, and `claude mcp login` handles auth from the shell. The throughline with Chapter 4's MCP resources and §26.2's workflows is the same discipline: **context is a budget; load only what the task needs, when it needs it.**
 
+**Background MCP tasks.** Some MCP tool calls are slow — a server kicks off a build, a long query, or a remote job. As of Claude Code 2.1.319 (2026-11-06), when an MCP server runs a tool call **as a task**, Claude Code **moves it to the background and reports the result to Claude when it finishes**, instead of blocking the turn while the call runs. The win mirrors background Bash (§26.1): the session stays responsive and Claude can keep working while the slow tool runs, then picks up the result when it lands — the same async pattern you want for any long-horizon agent. Set `CLAUDE_CODE_DISABLE_MCP_TASK_BACKGROUND` to force the old behavior (wait synchronously inside the tool call) when a downstream step genuinely cannot proceed until the task returns.
+
 ## 26.6 Headless, the SDK, and Permission Modes
 
 Unattended execution is where production diverges hardest from interactive use.
