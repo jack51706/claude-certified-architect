@@ -11087,6 +11087,16 @@ The **Usage and Cost Analytics API** (beta, header `analytics-usage-cost-2026-08
 
 > **Pitfall:** reaching for the Analytics API from inside an application's request path. It is an **organization-level admin/reporting** API keyed on an Admin key, not a per-request hook — scheduled pulls into a dashboard, never a synchronous call per user request.
 
+## 29.10 IP Allowlisting: Bounding Where a Key Can Be Used
+
+Every control so far governs *who* calls and *what* they spend. **IP allowlisting** (beta, launched 2026-11-05) governs *from where*. An organization can restrict its Claude API access to a set of **IPv4/IPv6 addresses or CIDR ranges — up to 1,000 per organization** — and any request from an address outside the list is refused. The threat it closes is concrete: a leaked production key is worthless from an attacker's laptop if that laptop's IP is not on the list.
+
+**It is a network-layer control — stack it, don't substitute it.** Allowlisting bounds *where* a key works; it does nothing about a key stolen *and* used from inside an allowed network (a compromised CI runner behind your NAT). So it composes with, rather than replaces, the controls earlier in this chapter: **workload identity** (§29.2) removes the long-lived key entirely and issues short-lived, per-workload credentials; least-privilege **workspace/key scoping** bounds the blast radius of any one key. Defense in depth is: allowlist the egress **and** rotate to short-lived credentials **and** scope the key — each layer catches what the others miss.
+
+**Where it fits the reference architecture (§29.5).** Pin the allowlist to your fixed egress — a NAT gateway, a set of CI runners, a VPN concentrator — so the API only ever answers calls from infrastructure you own. Pair it with the **sign-members-out-everywhere** admin action (also beta, 2026-11-05) for the human side: allowlisting bounds *programmatic* access by network, while forcing a sign-out revokes a compromised *member's* live sessions across every device at once. Together they close the two ways access leaks — a stolen key and a stolen session.
+
+> **Pitfall:** treating IP allowlisting as a complete substitute for credential hygiene. It is a perimeter, not an identity — it cannot tell an attacker on an allowed IP from your own service. Keep short-lived credentials and scoped keys underneath it.
+
 > **Beyond the foundations exam.** The exam stops at the agent's edge; production starts there. Choose the surface by parity, make every workload prove who it is, govern MCP through identity, and keep secrets out of the model's world entirely — and the same agent you built in Parts I–III becomes something an enterprise can actually run.
 
 # PART V: Claude Certified Architect — Professional (CCAR-P)
