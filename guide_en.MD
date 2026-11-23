@@ -11104,6 +11104,20 @@ Every control so far governs *who* calls and *what* they spend. **IP allowlistin
 
 > **Pitfall:** treating IP allowlisting as a complete substitute for credential hygiene. It is a perimeter, not an identity — it cannot tell an attacker on an allowed IP from your own service. Keep short-lived credentials and scoped keys underneath it.
 
+## 29.11 Linked Billing: Charging Usage to the Customer's Own Org
+
+Every section so far governs *your* organization's access and spend. **Linked billing** (beta, launched 2026-11-17, header `user-profiles-billing-2026-10-01`) governs a different axis entirely: **who pays** when your application resells Claude to its own customers. If you ship a product built on the Claude API — a coding agent, a conversational assistant, an analytics copilot — the default is that *you* pay Anthropic for every token your customers consume, then bill them back through your own metering. Linked billing removes that middle layer: a customer links their **own Claude organization** to your app, and their usage is billed **directly to them** by Anthropic.
+
+**How it works.** The customer links through an **Anthropic-hosted OAuth approval flow** — they never paste an API key into your app, and you never hold their credentials. Once linked, you set **`billing_policy`** on each `/v1/messages` (or `/v1/chat/completions`) request to choose the payer: route it to the linked customer, or omit it to keep yourself as payer. The required beta header is `user-profiles-billing-2026-10-01`. The customer stays in control from the **Claude Console**: they can set a **spend cap** on what your app may charge them, and **unlink** your app at any time.
+
+**What it does *not* change: execution still runs in your account.** Choosing the customer as payer is a *billing* decision, not an *execution* one — the request still runs through your integration, your rate limits, your model routing. Linked billing redirects the invoice, nothing else. This is the distinction exam items probe: it is **not** "run the workload in the customer's account," and it is **not** pass-through key reselling (holding customer API keys — exactly the credential-custody risk workload identity, §29.2, exists to avoid).
+
+**Eligibility and limits.** Linked billing only works for customers whose **organization pays Anthropic directly** for API usage — a customer on a consumer subscription plan cannot be a payer. And it does **not** cover the **Batch API** — batch jobs bill to you regardless of policy. So it is a lever for *interactive, per-customer* API traffic, not for your own back-office batch pipelines.
+
+**Where it fits.** Pair it with the metering discipline of §29.9: even when the customer pays Anthropic directly, you still pull the **Usage & Cost Analytics API** to attribute and display their consumption inside your product. Linked billing answers *who Anthropic invoices*; the Analytics API answers *what each customer drove* — a FinOps-grade product needs both.
+
+> **Pitfall:** reaching for linked billing to dodge building any usage visibility. It redirects the Anthropic invoice, but your customers still expect an in-product view of their own spend, and you still need per-tenant attribution (§29.9) to honor spend caps and support chargebacks. Billing redirection is not metering.
+
 > **Beyond the foundations exam.** The exam stops at the agent's edge; production starts there. Choose the surface by parity, make every workload prove who it is, govern MCP through identity, and keep secrets out of the model's world entirely — and the same agent you built in Parts I–III becomes something an enterprise can actually run.
 
 # PART V: Claude Certified Architect — Professional (CCAR-P)
@@ -16431,6 +16445,20 @@ What transfers from this guide: the **Claude Application Map appendix** (§2a �
 - D) Set `inference_geo` to an in-region geo; that pins where session history is stored and fully resolves the mandate.
 
 **Why B:** The self-hosted *sandbox* (`config: {type: "self_hosted"}`) relocates **tool side effects** to your infrastructure, but Anthropic still runs the agent loop and stores the control-plane data — agents, sessions, and **session history** — on its own infrastructure, so a "no session data on Anthropic infra" mandate is **not** met by the sandbox alone. The **self-hosted Claude Managed Agents service** (launched 2026-11-12) closes the gap: you run the entire service on your own infrastructure, storing agents, sessions, and history there, while the server forwards model requests to a provider you choose (Anthropic by default, or Bedrock / Vertex / Foundry). Access is gated — you request it through your Anthropic account team. (A) misreads the sandbox's scope — it moves tools, not the loop or the storage. (C) is unnecessarily extreme: the self-hosted service keeps the managed programming model while satisfying residency, so hand-rolling a harness trades away the platform for nothing. (D) `inference_geo` governs *where inference runs*, not where session history is stored — a different residency lever that does not address this mandate.
+
+---
+## Question 324 (Scenario: Conversational AI Architecture Patterns)
+
+**Situation:** You run a SaaS conversational-analytics product built on the Claude API. Today *you* pay Anthropic for all customer token usage and bill it back through your own metering — which enterprise customers increasingly resist. They want their Claude spend on **their own** Anthropic invoice, under **their own** org's controls, and they explicitly **refuse to hand you an API key**. You must redesign billing without moving execution out of your integration.
+
+**Which approach meets the requirement?**
+
+- A) Have each enterprise customer generate a Claude API key in their org and paste it into your app; call the API with their key so usage lands on their invoice.
+- B) Adopt **linked billing** (beta, header `user-profiles-billing-2026-10-01`): the customer links their own Claude org via Anthropic's hosted OAuth flow, and you set `billing_policy` per request to bill that customer directly. Execution still runs in your account; the customer sets a spend cap and can unlink in the Console. **[CORRECT]**
+- C) Migrate each customer onto Anthropic's self-hosted Managed Agents service so their usage is stored and billed on their own infrastructure.
+- D) Move those customers' traffic to the Batch API and set `billing_policy` so each batch bills to the customer's org.
+
+**Why B:** Linked billing (launched 2026-11-17) is built for exactly this — reselling the Claude API to customers who should pay Anthropic directly. The customer links their **own** organization through an **Anthropic-hosted OAuth flow**, so there is **no API-key paste** (satisfying their hard constraint and keeping you out of credential custody, §29.2), and you select the payer per request with **`billing_policy`** plus the `user-profiles-billing-2026-10-01` beta header. Crucially, it redirects only the **invoice** — execution stays in **your** account, integration, and rate limits — which is precisely the requirement. The customer self-serves a **spend cap** and **unlink** from the Claude Console. (A) is pass-through key reselling: it makes you hold customer API keys — the exact credential-custody risk workload identity exists to eliminate — and the customer refused to share a key anyway. (C) self-hosted Managed Agents governs *data residency and execution location*, not who Anthropic invoices; it is a heavy, access-gated infra move that does not address billing. (D) linked billing explicitly **does not cover the Batch API** (batch always bills to you), and batch is the wrong surface for interactive conversational traffic regardless.
 
 ---
 # Practical Exercises

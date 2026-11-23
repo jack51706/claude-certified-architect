@@ -831,5 +831,12 @@
     "tag": "Claude Code",
     "def_en": "Claude Code behavior (2.1.319, 2026-11-06): when an MCP server runs a tool call as a task (a long-running operation), Claude Code moves it to the background and reports the result to Claude when it finishes, instead of blocking the turn while the call runs — keeping the session responsive, the same async pattern as background Bash. Set CLAUDE_CODE_DISABLE_MCP_TASK_BACKGROUND to force synchronous waiting inside the tool call.",
     "def_zh": "Claude Code 行為(2.1.319,2026-11-06):當一個 MCP server 把工具呼叫當成任務(task,長時間運行的作業)來跑時,Claude Code 會把它移到背景,並在它完成時把結果回報給 Claude,而非讓該回合卡在呼叫上等待 —— 讓工作階段保持回應,與背景 Bash 相同的非同步模式。設定 CLAUDE_CODE_DISABLE_MCP_TASK_BACKGROUND 可強制在工具呼叫內同步等待。"
+  },
+  {
+    "term": "Linked billing",
+    "zh": "連結計費",
+    "tag": "Platform",
+    "def_en": "Claude API capability (beta, launched 2026-11-17, header user-profiles-billing-2026-10-01) that lets an application charge a customer's Claude API usage to that customer's own Claude organization instead of to the developer. The customer links via an Anthropic-hosted OAuth flow (no API-key paste); the developer sets billing_policy per /v1/messages or /v1/chat/completions request to pick the payer (omit it to stay the payer). Execution still runs in the developer's account — only the invoice is redirected, not the workload. The customer can set a spend cap or unlink the app in the Claude Console. Works only for customers whose organization pays Anthropic directly for API usage (not consumer subscriptions); does not cover the Batch API. Pairs with the Usage & Cost Analytics API for per-tenant attribution.",
+    "def_zh": "Claude API 能力(beta,2026-11-17 發布,header user-profiles-billing-2026-10-01),讓一個應用把客戶的 Claude API 用量計到該客戶自己的 Claude 組織,而非計到開發者頭上。客戶透過 Anthropic 託管的 OAuth 流程連結(不需貼 API key);開發者在每個 /v1/messages 或 /v1/chat/completions 請求上設定 billing_policy 來選擇付費方(省略則維持由開發者付費)。執行仍跑在開發者的帳號裡 —— 只重導發票,不搬動工作負載。客戶可在 Claude Console 設支出上限或解除連結該應用。只對組織直接向 Anthropic 付費使用 API 的客戶有效(非消費者訂閱);不涵蓋 Batch API。與 Usage & Cost Analytics API 搭配可做逐租戶歸因。"
   }
 ]
